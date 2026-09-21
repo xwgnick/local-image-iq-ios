@@ -85,16 +85,27 @@ final class SQLitePhotoStoreTests: XCTestCase {
         XCTAssertEqual(kept?.photo.modificationTime, 123)
     }
 
-    func testCacheIsProtectedAndExcludedFromBackup() async throws {
+    func testCacheIsExcludedFromBackup() async throws {
         let (store, directory) = try makeStore()
         try await store.save(TestFixtures.photo())
         for url in [directory, directory.appendingPathComponent("index.sqlite3")] {
             let resourceValues = try url.resourceValues(forKeys: [.isExcludedFromBackupKey])
             XCTAssertEqual(resourceValues.isExcludedFromBackup, true)
+        }
+    }
+
+    func testCacheFileProtectionOnPhysicalDevice() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Simulator filesystem does not expose iOS data-protection attributes. Run on a physical iPhone; production protection settings remain enabled.")
+        #else
+        let (store, directory) = try makeStore()
+        try await store.save(TestFixtures.photo())
+        for url in [directory, directory.appendingPathComponent("index.sqlite3")] {
             let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
             let protection = (attributes[.protectionKey] as? FileProtectionType)?.rawValue ?? (attributes[.protectionKey] as? String)
             XCTAssertEqual(protection, FileProtectionType.completeUntilFirstUserAuthentication.rawValue)
         }
+        #endif
     }
 
     func testClearRemovesPhotosAndPlaceVectors() async throws {
