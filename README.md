@@ -6,16 +6,18 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
 这是恢复后的**第一版原生工程**，不是已经签名、可安装到 iPhone 的成品。
 Windows 无 Swift/Xcode；现已通过用户提供的私有仓库运行 macOS 构建。
-79 个 Swift 核心测试及 42 个 iOS App 测试已通过，6 项模型／真机专属测试明确
-跳过。模拟器 App 已生成；模型转换与真机测试尚未执行。见
-[构建记录](docs/BUILD_STATUS.md)，不能把无模型构建当作搜索已可用。
+最新**带真实模型**的模拟器构建已通过：79 个 Swift 核心测试、47 个 iOS App
+测试通过，仅 1 项真机文件保护测试明确跳过。两个 Core ML 模型、Swift 分词、
+图像预处理及 CPU／自动计算单元推理均已执行数值测试。见
+[构建记录与下载](docs/BUILD_STATUS.md)。真机安装、检索质量与性能尚未验证。
 
 - 照片全部／有限授权、选择更多照片、前台增量索引与取消。
 - Core ML 成对图像／多语言文本编码，512 维，SQLite 本机缓存。
 - 语义搜索、结果预览与分享；不上传照片或坐标。
 - 默认地点权重 0.6，支持 0...1；无离线地点包时明确显示无覆盖，不在线反查。
 - iCloud 原图下载默认关闭，用户主动开启后才通过 PhotoKit 下载。
-- 缺模型时只展示真实的资源缺失状态，**不伪造检索结果**。
+- 无模型构建只展示真实的资源缺失状态，**不伪造检索结果**；带模型的构建才包含
+   经过转换和对齐验证的真实编码器。
 - 当前没有 OCR、Agentic Search、Speedbird 生产模型接入或后台无限索引。
 
 ## 在 Windows 开发，使用私有仓库的 macOS 构建
@@ -55,8 +57,9 @@ Windows 无 Swift/Xcode；现已通过用户提供的私有仓库运行 macOS �
 
 保留桌面已用的 cased WordPiece + DistilBERT masked mean + 512D 投影，不能只
 导出图像模型然后任意替换文本模型。原生 CGContext 插值与 Pillow 并非已证明
-一致：生成测试会单独衡量 preprocessing 与 embedding 误差。FP32 是本轮
-对齐基线，不是手机内存、耗电和速度已经优化的声明。
+一致：生成测试已单独衡量 preprocessing 与 embedding 误差，合成样本满足当前
+验收标准。FP32 是本轮对齐基线，模拟器包约 715 MB，并非手机内存、耗电和速度
+已经优化的声明。
 
 目前不附带地理数据。可选 `Places.geojson` 为 WGS84 FeatureCollection，
 每个 Polygon/MultiPolygon 的 properties 必须含 `label`、`level`（如 ADM2）。
@@ -64,8 +67,9 @@ Windows 无 Swift/Xcode；现已通过用户提供的私有仓库运行 macOS �
 
 ## 发布前仍需完成
 
-macOS 编译／测试通过 → 固定模型转换与原生 parity → 真机照片权限、iCloud、
-耗时／内存／发热验证 → App 图标、正式 Bundle ID、模型许可审查、签名和 TestFlight。
+macOS 编译／测试和固定模型转换／原生 parity 已通过。下一步：真机照片权限、
+iCloud、耗时／内存／发热验证，以及 App 图标、正式 Bundle ID、模型许可审查、
+签名和 TestFlight。
 当前 `com.example.localimageiq` 仅为开发占位标识；未提交到任何商店。
 
 文件备份排除可在模拟器测试；iOS 文件数据保护属性必须在真机验证。对应测试在

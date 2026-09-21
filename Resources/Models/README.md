@@ -1,10 +1,11 @@
 # Pinned paired Core ML models — explicit conversion only
 
-No weights, model packages or generated fixtures are checked in by this change.
-No conversion, download, dependency install, Python/Node test, Swift compile or
-native numerical test has been run. The implementation is based on the shared
-[implementation contract](../../docs/IMPLEMENTATION_CONTRACT.md) and read-only
-inspection of the pinned cached JSON configurations, not weight inspection.
+No weights, model packages or generated fixtures are checked into Git. Models are
+generated only by the explicitly requested macOS workflow and included in its
+private build artifact. See [current build evidence](../../docs/BUILD_STATUS.md)
+for conversion and native-test outcomes; source availability alone is not a pass.
+The paired model interface is specified in the
+[implementation contract](../../docs/IMPLEMENTATION_CONTRACT.md).
 
 ## Exact contract
 
@@ -28,7 +29,8 @@ to 224, center crop 224×224, `/255`, normalize NCHW with mean
 `[0.48145466,0.4578275,0.40821073]` and standard deviation
 `[0.26862954,0.26130258,0.27577711]`. The other resized dimension and center-crop
 offsets use floor. No resize/normalization is embedded in the Core ML graph.
-Pillow is the Python reference; native interpolation equivalence is **unproven**.
+Pillow is the Python reference. Native interpolation is not assumed bit-identical;
+the generated native tests separately measure tensor and embedding differences.
 
 Text uses cased WordPiece, Chinese-character splitting, no lowercasing or accent
 stripping, CLS + right-truncated tokens + SEP, right padding to 128. Public inputs
@@ -52,8 +54,8 @@ provide this environment for Intel macOS; do not run the interpreter under Roset
 Core ML predictions cannot be validated on Windows/Linux. The requested toolchain
 is pinned to CoreMLTools 8.3.0, Torch 2.5.1, Transformers 4.48.3,
 SentenceTransformers 3.4.1, NumPy 1.26.4 and Pillow 11.1.0, plus pinned HF hub,
-tokenizers and safetensors versions. These are intended compatible pins, **not a
-claim of tested conversion**. Exact installed versions are checked before loading.
+tokenizers and safetensors versions. Exact installed versions are checked before
+loading; actual validation outcomes are recorded in the build evidence above.
 
 From the `local_image_iq_ios` directory, an explicitly invoked macOS workflow can
 use the following steps. They are instructions only, not executed by this change:
@@ -74,12 +76,11 @@ manual job/environment for downloading. Public package/model network access is
 only part of that later manual workflow. No photos, GPS, private database, browser
 session, secret or training job is accepted or needed.
 
-The parent workflow must be `workflow_dispatch` only, in the intended private
-repository, with an actual Apple Silicon runner. This change creates no workflow,
-does not publish a repository and provides no signing/TestFlight path. A clean
-venv avoids accidental torchvision or other unrelated environment interference.
+The workflow is `workflow_dispatch` only, in the intended private repository with
+an Apple Silicon runner. It provides no signing/TestFlight path. A clean venv
+avoids accidental torchvision or other unrelated environment interference.
 
-After the other agent's App and Package files exist, static checks can be invoked:
+The static source/resource checks can be invoked separately:
 
 ```sh
 node scripts/check_project.mjs --self-test

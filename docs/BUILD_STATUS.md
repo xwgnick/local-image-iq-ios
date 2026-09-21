@@ -1,5 +1,70 @@
 # Cloud build status — 2026-09-22
 
+## Latest: model-enabled validation passed
+
+[Run 35634483200](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35634483200)
+at source `b7983083e86b231a4d27ea8a548ce3382c2cf27b`: **SUCCESS**, with
+`include_models=true` and `all_compute_units=true`. Only pinned public models and
+synthetic inputs were used; no personal photos, GPS, database or videos uploaded.
+
+- Both real encoders exported on Apple Silicon macOS using the pinned FP32 toolchain,
+  compiled into the iOS App, loaded and exercised in the iOS 18.5 simulator.
+- **79 core tests passed; 48 App tests total: 47 passed, 1 explicitly skipped,
+  zero failures.** The skipped test needs physical-device file protection.
+- All six generated/native parity tests ran. Cased WordPiece IDs/masks matched
+  12 reference texts, including Chinese, accents, special tokens and truncation.
+- Four generated image patterns cover RGB, non-square resizing, EXIF rotation
+  and mirroring. Same-tensor inference and native preprocessing were checked
+  separately; the latter passed its embedding-cosine acceptance criterion, not a
+  claim that CGContext interpolation is pixel-identical to Pillow.
+- CPU-only and `.all` inference tests passed on the simulator. This does not prove
+  that a physical iPhone Neural Engine was used or establish real-device performance.
+
+### Measured Python/Core ML conversion
+
+16 image/text cases, four comparison stages per case:
+
+| Metric | Measured |
+| --- | --- |
+| Minimum embedding cosine across conversion comparisons | 0.9999999999972214 |
+| Maximum raw component difference | 0.00000858306884765625 |
+| Maximum paired text/image cosine difference | 0.00000019307484327990565 |
+
+Model version: `clip-pair-v1-8c7add0507b558a30b86c170c5d86767515f27e9f2944574eabee0dde8e4a09e`.
+The Python parity JSON records native stages as `not-run` because it is emitted
+before Xcode tests; the later XCTest result is the evidence for native parity.
+These synthetic comparisons establish numerical compatibility, not search quality
+on a user's real collection.
+
+### Download and remaining boundary
+
+[Private build artifact](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35634483200/artifacts/10655548861):
+715,390,511 bytes; embedded `LocalImageIQ-Simulator.zip`: 715,482,546 bytes.
+Includes compiled encoders, simulator App, XCTest results and conversion reports.
+The report was inspected using 96,764 bytes of ranged reads; the large artifact
+was not loaded into this workspace/editor.
+
+This is an **FP32 simulator build, not a signed iPhone IPA**. Model memory, speed,
+heat, real PhotoKit permission flows and locked-device protection still need a
+physical iPhone. Optional geography data is not bundled, so no offline location
+coverage or reproduction of location-enhanced desktop demo rankings is claimed.
+TestFlight / App Store submission has not happened. Text-model card declares
+Apache-2.0; the pinned image-model card has no license declaration in its header.
+Model redistribution review remains incomplete; do not treat the numerical report
+as legal approval to distribute the package publicly.
+
+Next: choose the authorized Apple signing / device-installation route, then validate
+on device. No Apple credentials, certificates or billing settings have been requested
+or changed by this workflow.
+
+The user selected **no paid Apple membership; prefer a free route**. Apple's official
+free-device-testing route uses an Apple Account / Personal Team signed in locally
+to Xcode on a Mac connected to the device. Profiles expire after seven days and
+need reprovisioning. The current simulator ZIP cannot be installed by renaming it
+to IPA. GitHub's cloud build does not provide that physical-device connection or
+replace personal signing. A Mac to use for installation has not been confirmed.
+See [Apple account / Personal Team documentation](https://developer.apple.com/support/compare-memberships/).
+
 ## Active personal repository
 
 The user supplied `xwgnick/local-image-iq-ios` and confirmed the separate personal
@@ -23,10 +88,11 @@ GitHub's hosted Apple Silicon Mac now starts successfully. Verified milestones:
   backup exclusion remains tested there, while the separate data-protection test
   explicitly skips on simulator and still asserts the original policy on iPhone.
   The production protection settings were not relaxed.
-- All dispatched runs use `include_models=false` and `all_compute_units=false`.
-  No models have been downloaded, converted, signed or submitted to TestFlight.
+- The initial runs below used `include_models=false` and `all_compute_units=false`.
+  The subsequent successful model-enabled run is documented above. No signing or
+  TestFlight submission has been performed.
 
-Latest validation: [run 35630122554](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35630122554),
+Earlier model-free validation: [run 35630122554](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35630122554),
 source commit `d5cff5a90cdc15d4f67ba1328007b3a55daa9bdd`: **SUCCESS**.
 
 - macOS package: **79 tests passed**, zero failures.
@@ -41,8 +107,8 @@ source commit `d5cff5a90cdc15d4f67ba1328007b3a55daa9bdd`: **SUCCESS**.
   permission interaction, TestFlight distribution or physical-device performance
   has been validated by this model-free test run.
 
-Next: explicit model-enabled conversion and parity run, then device validation and
-signing. No model-enabled workflow has yet been dispatched.
+This earlier artifact is kept as the model-free baseline; use the newer artifact
+above when a model-enabled simulator App is needed.
 
 ## Historical enterprise-account attempt
 
