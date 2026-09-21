@@ -4,9 +4,11 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
 ## 当前进度
 
-这是恢复后的**第一版原生源码**，不是已经签名、可安装的成品。
-当前 Windows 无 Swift/Xcode，尚未运行 iOS 编译或模型转换；不要把静态检查
-或测试文件的存在当成原生测试通过。
+这是恢复后的**第一版原生工程**，不是已经签名、可安装到 iPhone 的成品。
+Windows 无 Swift/Xcode；现已通过用户提供的私有仓库运行 macOS 构建。
+79 个 Swift 核心测试及 42 个 iOS App 测试已通过，6 项模型／真机专属测试明确
+跳过。模拟器 App 已生成；模型转换与真机测试尚未执行。见
+[构建记录](docs/BUILD_STATUS.md)，不能把无模型构建当作搜索已可用。
 
 - 照片全部／有限授权、选择更多照片、前台增量索引与取消。
 - Core ML 成对图像／多语言文本编码，512 维，SQLite 本机缓存。
@@ -20,10 +22,10 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
 只把 **local_image_iq_ios 这个目录的内容** 作为一个私有仓库根目录。
 不要上传整个 BeatQwen3：其中有私人照片、演示录像、数据库和桌面缓存。
-独立工程已上传至私有仓库 `wengxie_microsoft/local-image-iq-ios`。首轮 workflow
-在执行任何步骤前被阻止：该仓库禁用 GitHub-hosted runners，尚未编译 Swift。
-企业托管用户的个人仓库不支持托管 runner；需要有相应权限的组织私有仓库。
-详见 [当前构建状态](docs/BUILD_STATUS.md)。
+当前构建仓库为用户提供的私有 `xwgnick/local-image-iq-ios`，已能启动 macOS runner。
+原企业托管用户仓库 `wengxie_microsoft/local-image-iq-ios` 保留不动；它的个人
+命名空间不支持托管 runner。普通个人账号与企业托管用户的限制不同，代码放置
+仍须遵守相应政策。详见 [当前构建状态](docs/BUILD_STATUS.md)。
 
 工作流：[.github/workflows/ios.yml](.github/workflows/ios.yml)，仅手动触发：
 
@@ -42,7 +44,9 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
 ## 工程与模型
 
-- [project.yml](project.yml)：XcodeGen 规范，iOS 17+，Swift 5.9，app + 测试 target。
+- [project.yml](project.yml)：XcodeGen 规范，iOS 17+，Swift 5 语言模式，Swift 5.9+
+   工具链，app + 测试 target。
+- [project.models.yml](project.models.yml)：转换完成后的模型测试资源增量配置。
 - [App](App)：UI、PhotoKit、Core ML、SQLite、可选离线边界。
 - [Packages/ImageIQCore](Packages/ImageIQCore)：无第三方依赖的数学、检索、分词。
 - [Resources/Models/README.md](Resources/Models/README.md)：模型导出入口与生成资源。
@@ -63,6 +67,9 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 macOS 编译／测试通过 → 固定模型转换与原生 parity → 真机照片权限、iCloud、
 耗时／内存／发热验证 → App 图标、正式 Bundle ID、模型许可审查、签名和 TestFlight。
 当前 `com.example.localimageiq` 仅为开发占位标识；未提交到任何商店。
+
+文件备份排除可在模拟器测试；iOS 文件数据保护属性必须在真机验证。对应测试在
+模拟器明确跳过，但生产代码仍设置 `completeUntilFirstUserAuthentication`。
 
 参考：[GitHub macOS runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 · [Apple membership comparison](https://developer.apple.com/support/compare-memberships/)

@@ -6,8 +6,9 @@
 
 - Owner：选你有权使用的个人或组织账号。公司相关内容须符合团队代码托管政策。
 - **企业托管用户例外**：企业托管用户个人名下的仓库不能使用 GitHub-hosted
-  runners，即使 Actions 已启用。此项目需要放在获准使用 macOS runner 的
-  企业组织私有仓库；不要为绕过限制迁移到个人外部账号或公开仓库。
+  runners，即使 Actions 已启用。可以选择获准使用 macOS runner 的组织私有仓库；
+  普通个人 GitHub 账号的私有仓库则通常支持托管 runner，前提是允许将源码放在
+  该账号下。不要为绕过限制公开代码或擅自转移公司内容。
 - Repository name：建议 `local-image-iq-ios`。
 - Visibility：**Private**，不要为了免费额度选择 Public。
 - 不初始化 README、.gitignore 或 License，本地已经有工程说明和忽略规则。
@@ -60,6 +61,9 @@
 
 Actions 产物包含 Simulator App ZIP 与 XCTest 的 xcresult；
 **不能直接装到 iPhone，也不是 TestFlight 邀请**。
+
+当前用户指定的普通个人私有仓库是 `xwgnick/local-image-iq-ios`，Mac 已正常启动；
+原企业仓库保留不动。以 [构建状态](BUILD_STATUS.md) 中的实际测试结果为准。
 
 下一阶段才处理正式 Bundle ID、图标、模型再分发许可、真机性能和 Apple 签名。
 不需要为了当前模拟器验证先把 Apple 账户或付费开发者信息交给任何脚本。
