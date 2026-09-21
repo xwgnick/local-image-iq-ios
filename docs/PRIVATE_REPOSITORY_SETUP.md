@@ -5,6 +5,9 @@
 打开 [GitHub 创建仓库](https://github.com/new)：
 
 - Owner：选你有权使用的个人或组织账号。公司相关内容须符合团队代码托管政策。
+- **企业托管用户例外**：企业托管用户个人名下的仓库不能使用 GitHub-hosted
+  runners，即使 Actions 已启用。此项目需要放在获准使用 macOS runner 的
+  企业组织私有仓库；不要为绕过限制迁移到个人外部账号或公开仓库。
 - Repository name：建议 `local-image-iq-ios`。
 - Visibility：**Private**，不要为了免费额度选择 Public。
 - 不初始化 README、.gitignore 或 License，本地已经有工程说明和忽略规则。
@@ -13,7 +16,8 @@
 然后把仓库网页地址发到聊天，例如 `https://github.com/<owner>/local-image-iq-ios`。
 地址不是密码；**不要发送 GitHub token、Apple 密码或签名证书**。
 
-本轮只准备本地源码和这些步骤，没有创建仓库、初始化 Git、提交、推送或扣用 Actions 额度。
+首次上传及运行状态见 [构建状态](BUILD_STATUS.md)。创建、转移组织仓库前仍需确认
+目标组织和权限；不自动修改企业策略、账单或仓库可见性。
 
 ## 2. 上传边界
 
@@ -60,4 +64,6 @@ Actions 产物包含 Simulator App ZIP 与 XCTest 的 xcresult；
 下一阶段才处理正式 Bundle ID、图标、模型再分发许可、真机性能和 Apple 签名。
 不需要为了当前模拟器验证先把 Apple 账户或付费开发者信息交给任何脚本。
 
-当前仍未执行任何 Mac/iOS 构建；运行后以实际日志和测试结果为准。
+企业托管账号的限制参考：
+[GitHub 官方说明](https://docs.github.com/en/enterprise-cloud@latest/admin/managing-iam/understanding-iam-for-enterprises/abilities-and-restrictions-of-managed-user-accounts#github-actions)。
+提交 workflow 并不等于分配了 Mac；以实际执行步骤及测试结果为准。

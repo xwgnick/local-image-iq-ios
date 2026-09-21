@@ -20,7 +20,10 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
 只把 **local_image_iq_ios 这个目录的内容** 作为一个私有仓库根目录。
 不要上传整个 BeatQwen3：其中有私人照片、演示录像、数据库和桌面缓存。
-此工作区目前没有配置 Git 远程，也尚未向 GitHub 上传或触发构建。
+独立工程已上传至私有仓库 `wengxie_microsoft/local-image-iq-ios`。首轮 workflow
+在执行任何步骤前被阻止：该仓库禁用 GitHub-hosted runners，尚未编译 Swift。
+企业托管用户的个人仓库不支持托管 runner；需要有相应权限的组织私有仓库。
+详见 [当前构建状态](docs/BUILD_STATUS.md)。
 
 工作流：[.github/workflows/ios.yml](.github/workflows/ios.yml)，仅手动触发：
 
