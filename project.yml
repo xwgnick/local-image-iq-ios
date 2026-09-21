@@ -1,0 +1,72 @@
+name: LocalImageIQ
+options:
+  minimumXcodeGenVersion: 2.42.0
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  ImageIQCore:
+    path: Packages/ImageIQCore
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  LocalImageIQ:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: [Info.plist]
+      - path: Resources/Models
+        excludes: [README.md, fixtures, licenses, provenance.json, parity-report.json, tokenizer-parity.json, image-preprocess-parity.json]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.localimageiq
+        INFOPLIST_FILE: App/Info.plist
+        COREML_CODEGEN_LANGUAGE: None
+    dependencies:
+      - package: ImageIQCore
+      - sdk: libsqlite3.tbd
+  LocalImageIQTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+      - path: Resources/Models/tokenizer-parity.json
+        optional: true
+        buildPhase: resources
+      - path: Resources/Models/image-preprocess-parity.json
+        optional: true
+        buildPhase: resources
+      - path: Resources/Models/fixtures
+        optional: true
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.localimageiq.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/LocalImageIQ.app/LocalImageIQ"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: LocalImageIQ
+      - package: ImageIQCore
+schemes:
+  LocalImageIQ:
+    build:
+      targets:
+        LocalImageIQ: all
+        LocalImageIQTests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - name: LocalImageIQTests
+          parallelizable: false
+      environmentVariables:
+        IMAGEIQ_REQUIRE_MODELS: "$(IMAGEIQ_REQUIRE_MODELS)"
+        IMAGEIQ_TEST_ALL_COMPUTE_UNITS: "$(IMAGEIQ_TEST_ALL_COMPUTE_UNITS)"

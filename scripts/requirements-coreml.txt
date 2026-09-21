@@ -1,0 +1,11 @@
+# macOS 14+ Apple Silicon, native CPython 3.11. Install only in the manual workflow.
+# A pinned conversion environment, not a claim that conversion has been run.
+coremltools==8.3.0
+torch==2.5.1
+transformers==4.48.3
+sentence-transformers==3.4.1
+numpy==1.26.4
+Pillow==11.1.0
+huggingface-hub==0.28.1
+tokenizers==0.21.0
+safetensors==0.5.2

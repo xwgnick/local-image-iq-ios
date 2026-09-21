@@ -1,0 +1,95 @@
+name: Native iOS — manual validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_models:
+        description: "Download the pinned public pair, convert on Mac and run native parity (slower, larger artifacts)"
+        type: boolean
+        default: false
+      all_compute_units:
+        description: "Also compare Core ML .all against CPU reference fixtures"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  simulator:
+    # This source directory must be the PRIVATE repo root. No photos/database/videos.
+    if: github.event.repository.private == true
+    runs-on: macos-15
+    env:
+      IMAGEIQ_REQUIRE_MODELS: ${{ inputs.include_models && '1' || '0' }}
+      IMAGEIQ_TEST_ALL_COMPUTE_UNITS: ${{ inputs.all_compute_units && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: arm64
+      - name: Inspect build tools
+        run: |
+          uname -m
+          xcodebuild -version
+          swift --version
+          python --version
+      - name: Check source contracts and pure Swift core
+        run: |
+          node scripts/check_project.mjs --self-test
+          node scripts/check_project.mjs
+          python scripts/test_static.py
+          plutil -lint App/Info.plist
+          swift test --package-path Packages/ImageIQCore
+      - name: Convert and check pinned model pair
+        if: inputs.include_models
+        run: |
+          python -m venv .model-env
+          .model-env/bin/python -m pip install -r scripts/requirements-coreml.txt
+          .model-env/bin/python scripts/export_models.py --download
+          node scripts/check_project.mjs --models
+      - name: Generate Xcode project
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen --version
+          xcodegen generate --spec project.yml
+      - name: Select an available iPhone simulator
+        run: |
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
+          node --input-type=module -e 'import fs from "node:fs"; const d=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/available-devices.json","utf8")); const all=Object.entries(d.devices).filter(([runtime])=>runtime.includes("iOS")).flatMap(([,v])=>v); const phone=all.find(x=>x.isAvailable&&x.name.startsWith("iPhone")); if(!phone)throw Error("No installed iPhone simulator; inspect the runner image"); fs.appendFileSync(process.env.GITHUB_ENV,"SIMULATOR_ID="+phone.udid+"\n");'
+      - name: Build and test (unsigned simulator only)
+        run: |
+          xcodebuild test -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath build/DerivedData -resultBundlePath build/TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            IMAGEIQ_REQUIRE_MODELS="$IMAGEIQ_REQUIRE_MODELS" \
+            IMAGEIQ_TEST_ALL_COMPUTE_UNITS="$IMAGEIQ_TEST_ALL_COMPUTE_UNITS"
+      - name: Package simulator app (not an installable iPhone IPA)
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/DerivedData/Build/Products/Debug-iphonesimulator/LocalImageIQ.app \
+            build/LocalImageIQ-Simulator.zip
+      - name: Keep build/test evidence in this private repository
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-image-iq-${{ inputs.include_models && 'with-models' || 'model-free' }}-${{ github.run_number }}
+          if-no-files-found: warn
+          path: |
+            build/TestResults.xcresult
+            build/LocalImageIQ-Simulator.zip
+            Resources/Models/parity-report.json
+            Resources/Models/provenance.json
+      - name: Summarize validation boundary
+        if: always()
+        run: |
+          echo '### Native iOS milestone' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This run does not sign, publish, upload to TestFlight, or prove physical-iPhone performance.' >> "$GITHUB_STEP_SUMMARY"
+          echo "Models requested: $IMAGEIQ_REQUIRE_MODELS. Model-free tests skip generated numerical parity; read xcresult for actual test outcomes." >> "$GITHUB_STEP_SUMMARY"
