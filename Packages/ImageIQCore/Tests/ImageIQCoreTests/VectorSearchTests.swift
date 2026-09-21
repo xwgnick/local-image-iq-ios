@@ -194,10 +194,17 @@ final class VectorSearchTests: XCTestCase {
         ] // distinct-place center=[0,0]
         for weight in [Float(0), 0.05, 0.5, 0.95, Float(1).nextDown] {
             let w = Double(weight)
-            let oldScores = photos.map { photo -> (id: String, score: Double) in
-                let placeScore = photo.location.map { Double($0.vector[0]) } ?? 0
-                return (photo.id, Double(photo.imageEmbedding[0]) + w / (1 - w) * placeScore)
-            }.sorted { $0.score == $1.score ? $0.id < $1.id : $0.score > $1.score }
+            let residualScale: Double = w / (1.0 - w)
+            var oldScores: [(id: String, score: Double)] = []
+            for photo in photos {
+                let placeScore: Double = Double(photo.location?.vector[0] ?? 0)
+                let imageScore: Double = Double(photo.imageEmbedding[0])
+                oldScores.append((id: photo.id, score: imageScore + residualScale * placeScore))
+            }
+            oldScores.sort { left, right in
+                if left.score == right.score { return left.id < right.id }
+                return left.score > right.score
+            }
             let hits = try search(photos, weight: weight)
             XCTAssertEqual(hits.map(\.id), oldScores.map { $0.id })
             for (hit, old) in zip(hits, oldScores) {
