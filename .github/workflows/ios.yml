@@ -11,6 +11,10 @@ on:
         description: "Also compare Core ML .all against CPU reference fixtures"
         type: boolean
         default: false
+      build_device_ipa:
+        description: "After tests, build an unsigned arm64 iPhone IPA for local re-signing (requires include_models)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,10 +44,15 @@ jobs:
           xcodebuild -version
           swift --version
           python --version
+      - name: Validate device build selection
+        if: inputs.build_device_ipa
+        run: |
+          test "$IMAGEIQ_REQUIRE_MODELS" = "1" || { echo 'Device IPA requires include_models=true'; exit 1; }
       - name: Check source contracts and pure Swift core
         run: |
           node scripts/check_project.mjs --self-test
           node scripts/check_project.mjs
+          node scripts/package_device.mjs --self-test
           python scripts/test_static.py
           plutil -lint App/Info.plist
           swift test --package-path Packages/ImageIQCore
@@ -76,10 +85,32 @@ jobs:
             IMAGEIQ_REQUIRE_MODELS="$IMAGEIQ_REQUIRE_MODELS" \
             IMAGEIQ_TEST_ALL_COMPUTE_UNITS="$IMAGEIQ_TEST_ALL_COMPUTE_UNITS"
       - name: Package simulator app (not an installable iPhone IPA)
+        if: ${{ !inputs.build_device_ipa }}
         run: |
           ditto -c -k --sequesterRsrc --keepParent \
             build/DerivedData/Build/Products/Debug-iphonesimulator/LocalImageIQ.app \
             build/LocalImageIQ-Simulator.zip
+      - name: Build native arm64 device app without Apple credentials
+        if: inputs.build_device_ipa
+        run: |
+          xcodebuild build -project LocalImageIQ.xcodeproj -target LocalImageIQ \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            SYMROOT="$PWD/build/DeviceProducts" OBJROOT="$PWD/build/DeviceIntermediates" \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
+            ENABLE_DEBUG_DYLIB=NO
+          node scripts/package_device.mjs build/DeviceProducts/Release-iphoneos/LocalImageIQ.app build/device
+      - name: Upload unsigned iPhone IPA separately
+        if: inputs.build_device_ipa && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-image-iq-iphone-unsigned-${{ github.run_number }}
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            build/device/LocalImageIQ-iphoneos-unsigned.ipa
+            build/device/device-build.json
+            build/device/SHA256SUMS.txt
       - name: Keep build/test evidence in this private repository
         if: always()
         uses: actions/upload-artifact@v4
