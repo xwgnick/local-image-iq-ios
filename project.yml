@@ -37,16 +37,6 @@ targets:
     platform: iOS
     sources:
       - path: Tests
-      - path: Resources/Models/tokenizer-parity.json
-        optional: true
-        buildPhase: resources
-      - path: Resources/Models/image-preprocess-parity.json
-        optional: true
-        buildPhase: resources
-      - path: Resources/Models/fixtures
-        optional: true
-        type: folder
-        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.localimageiq.tests

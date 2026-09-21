@@ -1,0 +1,15 @@
+include:
+  - project.yml
+
+# Generate this variant only AFTER export_models.py completes successfully.
+# Missing generated resources are errors in a model-enabled build, not placeholders.
+targets:
+  LocalImageIQTests:
+    sources:
+      - path: Resources/Models/tokenizer-parity.json
+        buildPhase: resources
+      - path: Resources/Models/image-preprocess-parity.json
+        buildPhase: resources
+      - path: Resources/Models/fixtures
+        type: folder
+        buildPhase: resources

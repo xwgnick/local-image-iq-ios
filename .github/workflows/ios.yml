@@ -58,7 +58,11 @@ jobs:
         run: |
           command -v xcodegen >/dev/null || brew install xcodegen
           xcodegen --version
-          xcodegen generate --spec project.yml
+          if [ "$IMAGEIQ_REQUIRE_MODELS" = "1" ]; then
+            xcodegen generate --spec project.models.yml
+          else
+            xcodegen generate --spec project.yml
+          fi
       - name: Select an available iPhone simulator
         run: |
           xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
