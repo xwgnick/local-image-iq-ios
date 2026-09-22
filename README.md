@@ -6,7 +6,7 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
 这是恢复后的**第一版原生工程**，不是已经签名、可安装到 iPhone 的成品。
 Windows 无 Swift/Xcode；现已通过用户提供的私有仓库运行 macOS 构建。
-最新**带真实模型**的模拟器构建已通过：79 个 Swift 核心测试、47 个 iOS App
+最新**带真实模型**的预览索引修复版已通过：79 个 Swift 核心测试、97 个 iOS App
 测试通过，仅 1 项真机文件保护测试明确跳过。两个 Core ML 模型、Swift 分词、
 图像预处理及 CPU／自动计算单元推理均已执行数值测试。见
 [构建记录与下载](docs/BUILD_STATUS.md)。真机安装、检索质量与性能尚未验证。
@@ -15,7 +15,10 @@ Windows 无 Swift/Xcode；现已通过用户提供的私有仓库运行 macOS �
 - Core ML 成对图像／多语言文本编码，512 维，SQLite 本机缓存。
 - 语义搜索、结果预览与分享；不上传照片或坐标。
 - 默认地点权重 0.6，支持 0...1；无离线地点包时明确显示无覆盖，不在线反查。
-- iCloud 原图下载默认关闭，用户主动开启后才通过 PhotoKit 下载。
+- iCloud 网络访问默认关闭，用户主动开启后才允许 PhotoKit 按需联网。
+- 0.1.1 索引改为**本地预览优先**，不再先请求原图；可接收低清预览。
+   仅本地无可用图像且用户开启联网时，才请求缺失的图像表示。PhotoKit 控制实际
+   下载量，不能保证全部云照片零联网。见 [预览索引修复](docs/PREVIEW_INDEXING.md)。
 - 无模型构建只展示真实的资源缺失状态，**不伪造检索结果**；带模型的构建才包含
    经过转换和对齐验证的真实编码器。
 - 当前没有 OCR、Agentic Search、Speedbird 生产模型接入或后台无限索引。
@@ -39,6 +42,10 @@ Windows 无 Swift/Xcode；现已通过用户提供的私有仓库运行 macOS �
    数值对齐，再运行 Swift tokenizer／预处理／模型推理夹具测试。
 3. 构建产物是 **Simulator App ZIP + xcresult**，不是可装到 iPhone 的 IPA。
    真机安装和 TestFlight 仍需要 Apple 签名、对应团队和后续配置。
+4. Windows 个人测试路线：勾选 `include_models` 与 `build_device_ipa`，通过测试后
+   额外编译 `iphoneos` SDK / arm64 Release App，生成**未签名真机 IPA**。由用户
+   在 Windows 用已同意的第三方签名工具安装，不向 CI 提供 Apple 密码或证书。
+   详见 [Windows 安装到 iPhone](docs/WINDOWS_IPHONE_INSTALL.md)。
 
 标准 `macos-15` runner 当前为 Apple Silicon；私有仓库消耗账号 Actions 额度，
 **不承诺无限免费**，模型转换尤其需要核对额度和存储。没有自动 push/PR 触发。
@@ -71,6 +78,9 @@ macOS 编译／测试和固定模型转换／原生 parity 已通过。下一步
 iCloud、耗时／内存／发热验证，以及 App 图标、正式 Bundle ID、模型许可审查、
 签名和 TestFlight。
 当前 `com.example.localimageiq` 仅为开发占位标识；未提交到任何商店。
+
+普通免费 Apple 账号可供个人开发测试使用，但描述文件通常 7 天过期；Windows
+第三方签名不是 TestFlight，也不等于永久安装或苹果官方 Windows 开发支持。
 
 文件备份排除可在模拟器测试；iOS 文件数据保护属性必须在真机验证。对应测试在
 模拟器明确跳过，但生产代码仍设置 `completeUntilFirstUserAuthentication`。

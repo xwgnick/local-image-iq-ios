@@ -1,5 +1,80 @@
 # Cloud build status — 2026-09-22
 
+## Preview-first fix for optimized iCloud libraries · 0.1.1 (2)
+
+The user confirmed the first device app opens and searches, but a real optimized
+iCloud library indexed only 114 of 7,994 checked images. Full permission was present;
+last error was PhotoKit 3164. This exposed an original-data request and misleading
+error categorization, not a 114-image product limit.
+
+The approved fix switches indexing to local-first PhotoKit preview requests,
+accepts degraded single-callback images, encodes CGImage pixels directly, and only
+falls back to a network-allowed preview request with explicit user permission.
+Networking remains off by default. No full-original download prerequisite, no
+UI layout redesign, and no photo upload. See [policy and device checklist](PREVIEW_INDEXING.md).
+
+The active cache identity appends `photokit-preview-v1` to the unchanged paired
+model version, so the first scan after updating rebuilds the image index using
+the new input path. Reduced previews may change rankings; there is no claim that
+all 7,994 assets are now locally accessible before a new device test.
+
+New coverage includes 26 callback/policy tests, 20 worker/persistence/source-counter
+tests, three direct-preview tensor tests and a real-model preview API parity test.
+An actual compiler error in the new async Core ML call was fixed by retaining the
+existing synchronous actor-isolated prediction path. A stale source-label assertion
+was aligned with the accurate online-fallback wording; no numerical gate was weakened.
+
+Final device validation: [run 35683805304](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35683805304),
+source `71c56c66bf75bbaeeafe414af8d2cc4076b97d8c`: **SUCCESS**.
+
+- Core: 79 tests passed, zero failures.
+- App: 98 tests total, **97 passed, one physical-device protection test skipped**,
+  zero failures. All seven real-model parity tests, 26 preview request tests and
+  20 worker tests passed. Tests do not substitute for an optimized-iCloud device test.
+- Device Release build: `BUILD SUCCEEDED`; same iPhoneOS/arm64 validation as before.
+- [Replacement IPA artifact](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35683805304/artifacts/10675548340),
+  IPA 709,546,542 bytes, SHA-256
+  `3481dbd842169caa96c6da8a1ba1f33517b09ec9232c81521a447e1e1a544ff5`.
+- Downloaded with bounded-memory streaming into ignored
+  `build/device-download/35683805304/LocalImageIQ-iphoneos-unsigned.ipa`; size and
+  SHA-256 verified before publishing the final local filename. Old package retained.
+
+Install this unsigned IPA with the same Sideloadly account/application identifier
+over the old version. Keep network disabled for the first new scan and compare the
+source/coverage counters. No promise of full-library offline coverage is made.
+
+## Latest: unsigned physical-iPhone IPA built
+
+The user has Windows only, an **iPhone 15 / iOS 26.6.1**, no paid Apple membership,
+and explicitly accepted Sideloadly for local signing. No third-party installer,
+Apple driver, Apple login or signing certificate was installed/configured by CI.
+
+[Run 35636586662](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35636586662)
+at source `4dd504e33ced08a5444f4e67fab5bd3a74149577`: **SUCCESS**.
+Model conversion and simulator tests passed again before the device build
+(79 core tests; App 48 total, 47 passed, one physical-protection test skipped).
+
+The subsequent Release build uses **iphoneos18.5 SDK / Xcode 16.4 / arm64**,
+minimum iOS **17.0**. Both compiled encoders and vocabulary are bundled. The
+packager verifies `CFBundleSupportedPlatforms=iPhoneOS`, `DTPlatformName=iphoneos`,
+Mach-O platform IOS, arm64 architecture and a real Payload/App layout. This is
+not a renamed simulator binary. Code signing is disabled; no mobile provisioning
+profile or test bundle is included.
+
+[Unsigned iPhone artifact](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35636586662/artifacts/10656339002)
+contains `LocalImageIQ-iphoneos-unsigned.ipa`, `device-build.json` and checksum file.
+
+- IPA bytes: **709,536,954** (~710 MB).
+- SHA-256: `f4027e85899914735d0d4f17fbbb727e0f4ca06c6406c7d0be7a80a862cc88a2`.
+- Bundle ID: `com.example.localimageiq` (development placeholder; re-signing may
+  assign a personal-account-specific identifier).
+- **Unsigned / not directly installable / not yet tested on a physical iPhone.**
+
+Follow [Windows iPhone installation](WINDOWS_IPHONE_INSTALL.md): the user signs
+locally, pairs/trusts the device and enables Developer Mode as required. Passwords,
+2FA codes and phone passcodes stay in the tool / Apple flow / phone, never in chat
+or GitHub. Free development profiles normally expire after seven days.
+
 ## Latest: model-enabled validation passed
 
 [Run 35634483200](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35634483200)
@@ -62,7 +137,8 @@ free-device-testing route uses an Apple Account / Personal Team signed in locall
 to Xcode on a Mac connected to the device. Profiles expire after seven days and
 need reprovisioning. The current simulator ZIP cannot be installed by renaming it
 to IPA. GitHub's cloud build does not provide that physical-device connection or
-replace personal signing. A Mac to use for installation has not been confirmed.
+replace personal signing. The user subsequently confirmed Windows-only access and
+approved the third-party signing route documented above instead.
 See [Apple account / Personal Team documentation](https://developer.apple.com/support/compare-memberships/).
 
 ## Active personal repository
