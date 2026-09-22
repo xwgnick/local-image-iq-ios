@@ -500,7 +500,7 @@ final class PhotoIndexWorkerTests: XCTestCase {
         let progress = IndexProgress(total: 10, completed: 10, encoded: 3, reused: 2, cloudSkipped: 4, failed: 1,
                                      localPreviews: 1, reducedPreviews: 1, networkPreviews: 1)
         XCTAssertEqual(progress.summary,
-                       "10/10 checked · 3 encoded · 2 reused · 4 need network · 1 unavailable · 1 local previews · 1 reduced previews · 1 network previews")
+                       "10/10 checked · 3 encoded · 2 reused · 4 need network · 1 unavailable · 1 local previews · 1 reduced previews · 1 online-fallback previews")
         XCTAssertEqual(progress.fraction, 1)
         assertSources(IndexProgress())
     }
