@@ -1,5 +1,56 @@
 # Cloud build status — 2026-09-22
 
+## Photo-first UI redesign · 0.2.0 (4)
+
+The user deferred model/retrieval changes and requested a complete UI redesign.
+Home is search-first, technical controls move into Library/Settings sheets, and
+results gain larger-photo/compact grids plus an ordered full-screen photo viewer.
+Models, scoring, networking defaults and `photokit-preview-v1` cache identity are
+unchanged. See [UI_REDESIGN.md](UI_REDESIGN.md) for exact layout and test boundaries.
+
+Initial [run 35706493782](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35706493782)
+compiled the redesigned app and passed all 79 core / 113 App tests (one physical
+protection skip), including all 16 presentation tests. One navigation test failed:
+the native Home screenshot exposed an unsolicited Photos permission dialog.
+Photos observation now starts only after access is granted, not in client init.
+
+[Run 35707292730](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35707292730)
+verified that fix: all three presentation/navigation tests passed. The 12 native
+review screenshots were inspected as a downscaled contact sheet; Home no longer
+has the permission popup, Library offers Choose photos, and the photo grids and
+normal/large-text Settings render correctly. One keyboard test received
+`d eat my apple pen` rather than the injected full query. The previous assertion
+ran only after submission, so it could not distinguish input loss from submission
+mutation. Tests now assert each typed prefix before dismissal, with no retries or
+query repair, and retain all exact post-dismissal assertions.
+
+Final [run 35708194014](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35708194014)
+at `b02357e128bc82313be48395dc5c3e9778c274eb`: **SUCCESS**.
+
+- Core: 79 passed. App: 114 total, 113 passed, one physical-protection skip;
+  all 16 presentation tests and seven real-model parity tests passed.
+- UI: all seven passed (three navigation and four keyboard tests). Keyboard tests
+  verified every injected prefix and exact text after Search/Done; no production
+  query workaround or test skipping was introduced.
+- Final 12 native screenshots were retrieved and reviewed as a 900×2720 contact
+  sheet. The clean Home, reachable Library, normal/large-text Settings, three grid
+  layouts and unavailable-photo state agree with the earlier visual review.
+  Screenshots use empty UI or labelled synthetic test scenes, not private photos.
+- Device Release: `BUILD SUCCEEDED`, iPhoneOS 18.5 SDK, arm64, unsigned, both real
+  encoders included. The model version remains unchanged.
+- [Device artifact](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35708194014/artifacts/10684943653):
+  IPA **709,723,454 bytes**, SHA-256
+  `4517a52c2732c6b29873724b05d4c1f3a1c8a4bde7612c97cf58a4389c2c03e6`.
+- Download completed with bounded-memory streaming and size/SHA-256 verification
+  into ignored `build/device-download/35708194014/LocalImageIQ-iphoneos-unsigned.ipa`.
+  Final local screenshots: `build/ui-review/35708194014/contact.jpg`.
+
+Use the same Sideloadly account / effective bundle identifier to overwrite the
+previous installation. Do not uninstall or clear/rebuild the index for this UI
+update. Actual iPhone 15 / iOS 26.6.1 interaction and private-library results still
+need device confirmation; full-screen photo gestures/sharing were implemented
+and compiled, not claimed as real-photo end-to-end validation by these screenshots.
+
 ## Search keyboard dismissal · 0.1.2 (3)
 
 The user screenshot showed returned matches covered by the keyboard. The previous
