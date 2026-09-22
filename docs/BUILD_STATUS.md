@@ -1,5 +1,42 @@
 # Cloud build status — 2026-09-22
 
+## Search keyboard dismissal · 0.1.2 (3)
+
+The user screenshot showed returned matches covered by the keyboard. The previous
+search field had no FocusState management: calling search did not resign focus,
+and there was no explicit dismissal control.
+
+- The query field now has explicit focus and single-line submit semantics.
+- Both keyboard Search and the page search button share the same action, which
+  clears focus before requesting search, including unavailable/empty submissions.
+- Keyboard toolbar Done and a focused-only navigation Done button dismiss without
+  searching or clearing the query. Dragging the scroll view dismisses interactively.
+- Opening a result clears focus. No networking, index, model or ranking changes;
+  the `photokit-preview-v1` cache remains reusable after this update.
+
+Four new XCUITest cases drive the actual simulator app: Search return, keyboard
+Done/re-focus, navigation Done and drag dismissal. They do not grant Photos access
+or fabricate a search index; the shared submit focus path is tested even when the
+search state is not ready. Actual result rendering with a personal library remains
+a separate device test. No local-network debug channel was added.
+
+Validation [run 35694536774](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35694536774)
+at `58f6783eba4a5fd4412b16635c34585c32ff9ed2`: **SUCCESS**.
+
+- Core 79 passed; App 98 total, 97 passed and one physical-device protection skip.
+- **All four SearchKeyboardTests passed** on the simulator (59.28 seconds), with
+  actual software-keyboard interaction. No fake results or private images supplied.
+- Device Release build succeeded with both models included.
+- [Unsigned device artifact](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35694536774/artifacts/10678914749):
+  IPA 709,552,244 bytes; SHA-256
+  `bce9d08d5a6f7cbcb341af7351bb84c03efbc3c381838c71a75f42c21c796c4f`.
+- Downloaded and streaming-hash verified locally under
+  `build/device-download/35694536774/LocalImageIQ-iphoneos-unsigned.ipa`.
+
+Update over 0.1.1 using the same Sideloadly account / effective bundle identifier.
+Do not uninstall or clear the existing index for this UI-only fix. Actual iOS
+26.6.1 device keyboard behavior remains to be confirmed after installation.
+
 ## Preview-first fix for optimized iCloud libraries · 0.1.1 (2)
 
 The user confirmed the first device app opens and searches, but a real optimized
