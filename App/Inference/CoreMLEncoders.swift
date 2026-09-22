@@ -37,7 +37,7 @@ actor CoreMLEncoders: PhotoEncoding {
         return try projection(output, name: models.manifest.output)
     }
 
-    func image(preview: IndexingImage) async throws -> [Float] {
+    func image(preview: IndexingImage) throws -> [Float] {
         try Task.checkCancellation()
         let models = try load()
         let tensor = try autoreleasepool {
