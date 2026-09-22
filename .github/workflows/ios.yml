@@ -92,6 +92,19 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             build/DerivedData/Build/Products/Debug-iphonesimulator/LocalImageIQ.app \
             build/LocalImageIQ-Simulator.zip
+      - name: Export native UI review screenshots
+        if: always()
+        run: |
+          if [ -d build/TestResults.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/TestResults.xcresult --output-path build/UIReview
+          fi
+      - name: Upload native UI review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-image-iq-ui-review-${{ github.run_number }}
+          if-no-files-found: warn
+          path: build/UIReview
       - name: Build native arm64 device app without Apple credentials
         if: inputs.build_device_ipa
         run: |

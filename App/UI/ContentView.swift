@@ -1,256 +1,224 @@
 import SwiftUI
-import Photos
-import UIKit
 import ImageIQCore
 
 @MainActor
 struct ContentView: View {
     @ObservedObject var state: AppState
-    @Environment(\.openURL) private var openURL
-    @State private var showLimitedPicker = false
-    @State private var confirmClear = false
+    @State private var showLibrary = false
+    @State private var showSettings = false
+    @State private var compactGrid = false
     @FocusState private var isSearchFocused: Bool
+    private var showingResults: Bool { state.completedQuery != nil || state.activity == .searching }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    header
-                    accessCard
-                    modelNotice
-                    indexCard
-                    searchCard
-                    results
-                    privacyNote
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        if !showingResults { introduction }
+                        libraryStatus
+                        searchField
+                        if !showingResults && !isSearchFocused { suggestions }
+                        searchContent
+                    }
+                    .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 28)
+                    .frame(maxWidth: 800).frame(maxWidth: .infinity)
                 }
-                .padding(20)
-                .frame(maxWidth: 850)
-                .frame(maxWidth: .infinity)
+                .scrollDismissesKeyboard(.interactively)
+                .accessibilityIdentifier("library-scroll")
+                .onChange(of: state.completedQuery) { _, query in
+                    guard query != nil else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("search-anchor", anchor: .top) }
+                }
             }
-            .scrollDismissesKeyboard(.interactively)
-            .accessibilityIdentifier("library-scroll")
-            .background(LinearGradient(colors: [Color(red: 0.12, green: 0.07, blue: 0.23), .black], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .navigationTitle("Local Image IQ")
+            .background(IQStyle.background)
+            .navigationTitle("Image IQ")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(IQStyle.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if isSearchFocused {
                         Button("Done") { isSearchFocused = false }
-                            .accessibilityLabel("Hide keyboard")
-                            .accessibilityIdentifier("hide-search-keyboard")
+                            .accessibilityLabel("Hide keyboard").accessibilityIdentifier("hide-search-keyboard")
+                    } else {
+                        Image(systemName: "sparkle").foregroundStyle(IQStyle.accent).accessibilityHidden(true)
                     }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { isSearchFocused = false; showSettings = true } label: {
+                        Image(systemName: "slider.horizontal.3").frame(minWidth: 44, minHeight: 44)
+                    }
+                    .accessibilityLabel("Settings").accessibilityIdentifier("open-settings")
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
                     Button("Done") { isSearchFocused = false }
-                        .accessibilityLabel("Hide keyboard")
-                        .accessibilityIdentifier("keyboard-done")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Refresh authorized library", systemImage: "arrow.clockwise") { state.refresh() }
-                        Button(role: .destructive) { confirmClear = true } label: {
-                            Label("Clear local index", systemImage: "trash")
-                        }
-                    } label: { Image(systemName: "ellipsis.circle") }
-                    .accessibilityLabel("Library actions")
+                        .accessibilityLabel("Hide keyboard").accessibilityIdentifier("keyboard-done")
                 }
             }
-            .confirmationDialog("Delete the local index? Your original photos will not be changed.", isPresented: $confirmClear, titleVisibility: .visible) {
-                Button("Delete local index", role: .destructive) { state.clearIndex() }
-            }
-            .sheet(isPresented: $showLimitedPicker, onDismiss: { state.libraryChanged() }) {
-                LimitedLibraryPicker {
-                    showLimitedPicker = false
-                    state.libraryChanged()
-                }
-            }
+            .sheet(isPresented: $showLibrary) { LibrarySheet(state: state) }
+            .sheet(isPresented: $showSettings) { SettingsSheet(state: state) }
             .fullScreenCover(item: $state.selection) { selection in
-                PhotoPreviewView(id: selection.id, library: state.library, networkAllowed: state.allowICloudDownload)
+                PhotoResultsViewer(hits: state.results, initialID: selection.id,
+                                   library: state.library, networkAllowed: state.allowICloudDownload)
             }
-        }
+        }.tint(IQStyle.accent)
     }
 
-    private var header: some View {
+    private var introduction: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("PRIVATE BY DESIGN", systemImage: "lock.shield")
-                .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.purple.opacity(0.95))
-            Text("Your memories.\nYour words.")
-                .font(.system(.largeTitle, design: .rounded, weight: .bold))
-            Text("Find images by meaning, right on your device.")
-                .foregroundStyle(.secondary)
-        }.padding(.vertical, 12)
+            Label("ONLY YOURS", systemImage: "lock.shield")
+                .font(.caption2.weight(.semibold)).tracking(2).foregroundStyle(IQStyle.secondary)
+            Text("Find the moment.").font(.system(.largeTitle, design: .rounded, weight: .bold)).foregroundStyle(.white)
+            Text("Describe what you remember.").font(.subheadline).foregroundStyle(IQStyle.secondary)
+        }.padding(.vertical, 10)
     }
 
-    private var accessCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("01  ·  Connect Photos", systemImage: "photo.stack")
-                .font(.headline)
-            Text(accessDescription).font(.subheadline).foregroundStyle(.secondary)
-            if state.authorization == .notDetermined {
-                Button("Choose photo access") { state.authorize() }.buttonStyle(.borderedProminent)
-            } else if state.authorization == .limited {
-                Button("Manage selected photos") { showLimitedPicker = true }.buttonStyle(.borderedProminent)
-                Button("Refresh selection") { state.refresh() }.buttonStyle(.bordered)
-            } else if !state.canRead {
-                Button("Open Photos permission settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
-                }.buttonStyle(.borderedProminent)
-            } else {
-                Label("Photos connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                Button("Manage access in Settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
-                }.font(.subheadline)
-            }
-        }.iqCard()
-    }
-
-    private var accessDescription: String {
-        switch state.authorization {
-        case .authorized: return "Full image-library access. Only images you authorize are indexed."
-        case .limited: return "Limited access is supported. Only your selected images are visible here."
-        case .denied: return "Access is off. Enable Selected Photos or Full Access in Settings."
-        case .restricted: return "Photos access is restricted by this device's settings or management policy."
-        default: return "Choose a few photos or your library. Originals stay in Photos; this app never changes them."
-        }
-    }
-
-    @ViewBuilder private var modelNotice: some View {
-        if let issue = state.summary.modelIssue {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Model unavailable", systemImage: "exclamationmark.triangle").font(.headline)
-                Text(issue).font(.subheadline)
-                Button("Recheck bundled models") { state.refresh() }
-            }.foregroundStyle(.orange).iqCard()
-        }
-        if let error = state.errorMessage {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(error).font(.subheadline)
-                if let action = state.actionHint { Text(action).font(.caption).foregroundStyle(.secondary) }
-                Button("Dismiss") { state.dismissError() }
-            }.foregroundStyle(.orange).iqCard()
-        }
-    }
-
-    private var indexCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("02  ·  Build your local index", systemImage: "sparkles.rectangle.stack").font(.headline)
-            HStack(alignment: .top, spacing: 24) {
-                metric(state.summary.authorizedCount, "authorized images")
-                metric(state.summary.indexedCount, "current indexed")
-                metric(state.summary.locatedCount, "offline place labels")
-            }
-            Toggle("Fetch missing images from iCloud", isOn: $state.allowICloudDownload)
-                .disabled(state.isBusy)
-                .accessibilityIdentifier("icloud-download-opt-in")
-            Text("Indexing uses locally available previews first, including reduced-quality images, without requesting originals. When off, it stays offline. Enable only to fetch missing images on demand; Photos controls the actual download size and may use mobile data. You do not need to download your entire library first.")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("Index / resume", systemImage: "play.fill") { state.index() }
-                    .buttonStyle(.borderedProminent).disabled(!state.canIndex)
-                    .accessibilityIdentifier("index-photos")
-                if state.isBusy {
-                    Button("Cancel", role: .cancel) { state.cancel() }.buttonStyle(.bordered)
+    private var libraryStatus: some View {
+        Button { isSearchFocused = false; showLibrary = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: state.canRead ? "photo.stack" : "photo.badge.plus")
+                    .font(.body.weight(.medium)).foregroundStyle(IQStyle.accent)
+                    .frame(width: 38, height: 38)
+                    .background(IQStyle.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(libraryTitle).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    Text(librarySubtitle).font(.caption).foregroundStyle(IQStyle.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if state.activity == .indexing { ProgressView(value: state.progress.fraction).tint(IQStyle.accent) }
                 }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(IQStyle.secondary)
             }
-            if state.activity == .indexing {
-                ProgressView(value: state.progress.fraction)
-            } else if state.isBusy { ProgressView() }
-            if state.progress.completed > 0 {
-                Text(state.progress.summary).font(.caption).foregroundStyle(.secondary)
-                if let failure = state.progress.lastFailure {
-                    Text("Last skipped-image issue: \(failure)").font(.caption).foregroundStyle(.orange)
-                }
-            }
-            Text(state.status).font(.footnote).foregroundStyle(.secondary)
-            Text("Keep the app in the foreground. Completed records are kept. This preview-index update rebuilds the previous index once; later runs reuse unchanged records.")
-                .font(.caption).foregroundStyle(.secondary)
-        }.iqCard()
+            .padding(14).background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+        }.buttonStyle(.plain).accessibilityIdentifier("open-library")
     }
 
-    private func metric(_ value: Int, _ caption: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(value, format: .number).font(.title2.bold()).monospacedDigit()
-            Text(caption).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }.frame(maxWidth: .infinity, alignment: .leading)
+    private var libraryTitle: String {
+        if state.activity == .indexing { return "Preparing your library" }
+        if state.activity == .refreshing { return "Checking your library" }
+        if !state.canRead { return "Connect your photos" }
+        if !state.modelsReady { return "Your library needs attention" }
+        if state.summary.indexedCount == 0 { return "Make your photos searchable" }
+        return "\(state.summary.indexedCount.formatted()) photos ready"
     }
 
-    private var searchCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("03  ·  Describe a memory", systemImage: "magnifyingglass").font(.headline)
-            // Single-line input keeps the Search return key a submit action,
-            // rather than inserting a newline into the previous multiline field.
-            TextField("A dog playing on the beach…", text: $state.query)
-                .focused($isSearchFocused)
-                .textFieldStyle(.plain).padding(14).background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 14))
-                .submitLabel(.search).onSubmit(submitSearch)
-                .accessibilityIdentifier("photo-query")
-            Picker("Results", selection: $state.resultLimit) {
-                Text("Top 3").tag(3)
-                Text("Top 12").tag(12)
-            }.pickerStyle(.segmented)
+    private var librarySubtitle: String {
+        if state.activity == .indexing { return "\(state.progress.completed.formatted()) of \(state.progress.total.formatted()) checked · Tap for progress" }
+        if state.activity == .refreshing { return "Your photos stay on this device" }
+        if !state.canRead { return "Choose the photos you want to search" }
+        if !state.modelsReady { return "Open library to see what’s needed" }
+        if state.summary.indexedCount < state.summary.authorizedCount {
+            return "\(state.summary.indexedCount.formatted()) of \(state.summary.authorizedCount.formatted()) ready · Manage library"
+        }
+        return state.summary.authorizedCount == 0 ? "No photos selected yet" : "On-device search · Manage library"
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(IQStyle.secondary).accessibilityHidden(true)
+            TextField("A moment, a place, a detail…", text: $state.query)
+                .focused($isSearchFocused).submitLabel(.search).onSubmit(submitSearch)
+                .font(.body).autocorrectionDisabled()
+                .accessibilityLabel("Describe a photo").accessibilityIdentifier("photo-query")
+            if !state.query.isEmpty {
+                Button { state.query = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(IQStyle.secondary).frame(minWidth: 32, minHeight: 44)
+                }.accessibilityLabel("Clear search").accessibilityIdentifier("clear-query")
+            }
+            Button(action: submitSearch) {
+                Image(systemName: "arrow.up").font(.body.weight(.bold)).frame(width: 44, height: 44)
+                    .foregroundStyle(state.canSearch ? IQStyle.background : IQStyle.secondary)
+                    .background(state.canSearch ? IQStyle.accent : Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+            }
+            .disabled(!state.canSearch).accessibilityLabel("Search photos").accessibilityIdentifier("search-photos")
+        }
+        .padding(.leading, 16).padding(.trailing, 7).padding(.vertical, 7)
+        .background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(isSearchFocused ? IQStyle.accent.opacity(0.8) : .white.opacity(0.1), lineWidth: 1))
+        .id("search-anchor")
+    }
+
+    private var suggestions: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                suggestion("Beach day", symbol: "sun.max")
+                suggestion("Birthday cake", symbol: "birthday.cake")
+                suggestion("My dog", symbol: "pawprint")
+            }
+        }
+    }
+
+    private func suggestion(_ text: String, symbol: String) -> some View {
+        Button {
+            state.query = text
+            if state.canSearch { submitSearch() } else { isSearchFocused = true }
+        } label: {
+            Label(text, systemImage: symbol).font(.caption.weight(.medium))
+                .padding(.horizontal, 13).frame(minHeight: 44)
+                .background(.white.opacity(0.045), in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.08), lineWidth: 1))
+        }.buttonStyle(.plain).foregroundStyle(IQStyle.secondary)
+    }
+
+    @ViewBuilder private var searchContent: some View {
+        if state.activity == .searching {
+            VStack(spacing: 14) {
+                ProgressView().controlSize(.large).tint(IQStyle.accent)
+                Text("Finding your moment…").font(.subheadline).foregroundStyle(IQStyle.secondary)
+                Button("Cancel") { state.cancel() }.font(.subheadline)
+            }.frame(maxWidth: .infinity).padding(.vertical, 54).accessibilityIdentifier("search-loading")
+        } else if state.errorMessage != nil {
+            emptyCard(symbol: "exclamationmark.circle", title: "Something needs attention",
+                      detail: "Your photos are safe. Open your library for details and try again.")
+            Button("Open library") { showLibrary = true }.buttonStyle(.bordered)
+        } else if !state.results.isEmpty {
             HStack {
-                Text("Location contribution").font(.subheadline)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Your matches").font(.title3.weight(.bold))
+                    Text("\(state.results.count) photos · Best matches first").font(.caption).foregroundStyle(IQStyle.secondary)
+                }
                 Spacer()
-                Text(state.locationWeight, format: .percent.precision(.fractionLength(0))).monospacedDigit()
+                Button { compactGrid.toggle() } label: {
+                    Image(systemName: compactGrid ? "rectangle.grid.1x2" : "square.grid.3x3")
+                        .frame(width: 44, height: 44).background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 13))
+                }.accessibilityLabel(compactGrid ? "Show larger photos" : "Show compact grid")
+                    .accessibilityIdentifier("toggle-grid-layout")
+            }.accessibilityIdentifier("results-heading")
+            PhotoResultsGrid(hits: state.results, compact: compactGrid, onSelect: { id in
+                isSearchFocused = false
+                state.selection = AppState.Selection(id: id)
+            }) { photo in
+                PhotoThumbnailView(photo: photo, cache: state.thumbnails, networkAllowed: state.allowICloudDownload)
             }
-            Slider(value: $state.locationWeight, in: 0...1, step: 0.01) { Text("Location contribution") }
-                .accessibilityIdentifier("location-weight")
-            Text("0% = image only · 100% = place only. Missing places contribute zero; at 100%, their scores are zero and can outrank negative place scores. This is a soft score, not a location filter.")
-                .font(.caption).foregroundStyle(.secondary)
-            Text("\(state.summary.locatedCount) of \(state.summary.indexedCount) indexed photos have an offline label. \(state.summary.placesDescription)")
-                .font(.caption).foregroundStyle(.secondary)
-            Button("Search locally", systemImage: "magnifyingglass", action: submitSearch)
-                .buttonStyle(.borderedProminent).disabled(!state.canSearch)
-                .accessibilityIdentifier("search-photos")
-        }.iqCard()
-    }
-
-    private func submitSearch() {
-        // Dismiss before work starts, including empty/not-ready submissions.
-        // A failed search must not leave the keyboard covering an error or results.
-        isSearchFocused = false
-        state.search()
-    }
-
-    @ViewBuilder private var results: some View {
-        if !state.results.isEmpty {
-            Text("Closest matches").font(.title2.bold())
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
-                ForEach(state.results) { hit in
-                    Button {
-                        isSearchFocused = false
-                        state.selection = AppState.Selection(id: hit.photo.id)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 8) {
-                            PhotoThumbnailView(photo: hit.photo, cache: state.thumbnails, networkAllowed: state.allowICloudDownload)
-                            Text("Score \(hit.score.formatted(.number.precision(.fractionLength(3))))")
-                                .font(.caption.monospacedDigit()).foregroundStyle(.primary)
-                            Text(hit.photo.location?.text ?? "No offline place label")
-                                .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                        }.padding(10).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
-                    }.buttonStyle(.plain).accessibilityLabel("Open matching photo, score \(hit.score)")
-                }
+        } else if state.completedQuery != nil {
+            emptyCard(symbol: "magnifyingglass", title: "No photos to show",
+                      detail: "Try another description or check which photos are ready in your library.")
+        } else {
+            emptyCard(symbol: state.canRead ? "sparkle.magnifyingglass" : "photo.on.rectangle.angled",
+                      title: state.canRead && state.summary.indexedCount > 0 ? "Start with a memory" : "Your photos. A new way to find them.",
+                      detail: state.canRead && state.summary.indexedCount > 0
+                        ? "The scene, the people, the little detail you remember."
+                        : "Connect your library, then describe what you’re looking for.")
+            if !state.canRead || state.summary.indexedCount == 0 {
+                Button("Set up my library") { isSearchFocused = false; showLibrary = true }
+                    .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 50)
+                    .background(IQStyle.accent, in: RoundedRectangle(cornerRadius: 16))
+                    .foregroundStyle(IQStyle.background).buttonStyle(.plain).accessibilityIdentifier("setup-library")
             }
-        } else if state.summary.indexedCount == 0 {
-            ContentUnavailableView("Start with your photos", systemImage: "photo.on.rectangle.angled",
-                                   description: Text("Authorize images, then build the local index. No sample results or synthetic embeddings are used."))
         }
     }
 
-    private var privacyNote: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("On-device search. No application server.", systemImage: "lock.fill")
-            Text("The local cache stores authorized photo IDs, revisions, embeddings and optional place labels—not originals or GPS. It is excluded from backups and protected until the first unlock after restart.")
-            Text("Preview index v1 · Image + optional place-text retrieval only. Reduced-quality inputs can affect matches. No OCR, date filters, agentic search or production search-stack integration. Native resizing is not pixel-identical to the reference preprocessing.")
-        }.font(.caption).foregroundStyle(.secondary).padding(.vertical, 10)
+    private func emptyCard(symbol: String, title: String, detail: String) -> some View {
+        VStack(spacing: 15) {
+            Image(systemName: symbol).font(.system(size: 36, weight: .light)).foregroundStyle(IQStyle.accent)
+                .frame(width: 82, height: 82).background(IQStyle.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 26))
+            Text(title).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+            Text(detail).font(.subheadline).foregroundStyle(IQStyle.secondary)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        }.frame(maxWidth: .infinity).padding(.horizontal, 20).padding(.vertical, 32)
     }
-}
 
-private extension View {
-    func iqCard() -> some View {
-        padding(18).frame(maxWidth: .infinity, alignment: .leading)
-            .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 22))
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(.white.opacity(0.09), lineWidth: 1))
-    }
+    private func submitSearch() { isSearchFocused = false; state.search() }
 }

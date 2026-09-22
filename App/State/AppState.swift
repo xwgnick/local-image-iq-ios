@@ -11,6 +11,7 @@ final class AppState: ObservableObject {
     @Published private(set) var authorization = PhotoLibraryClient.authorization
     @Published private(set) var summary = LibrarySummary()
     @Published private(set) var results: [SearchHit] = []
+    @Published private(set) var completedQuery: String?
     @Published private(set) var progress = IndexProgress()
     @Published private(set) var activity: Activity?
     @Published private(set) var status = "Connect your photos to start."
@@ -106,7 +107,7 @@ final class AppState: ObservableObject {
         guard canSearch else { return }
         let text = query, limit = resultLimit, weight = Float(locationWeight)
         invalidateDisplayedPhotos()
-        schedule(.searching) { [worker] _ in .search(try await worker.search(text: text, limit: limit, locationWeight: weight)) }
+        schedule(.searching) { [worker] _ in .search(try await worker.search(text: text, limit: limit, locationWeight: weight), text) }
     }
 
     func cancel() {
@@ -127,7 +128,7 @@ final class AppState: ObservableObject {
         if activity == .searching { cancel() }
     }
 
-    private func invalidateDisplayedPhotos() { results = []; selection = nil }
+    private func invalidateDisplayedPhotos() { results = []; selection = nil; completedQuery = nil }
 
     private func accept(progress: IndexProgress, token: UUID) {
         guard token == operationID else { return }
@@ -136,7 +137,7 @@ final class AppState: ObservableObject {
 
     private enum Outcome {
         case summary(LibrarySummary, String)
-        case search(SearchResponse)
+        case search(SearchResponse, String)
     }
 
     private func schedule(_ activity: Activity, operation: @escaping @MainActor (UUID) async throws -> Outcome) {
@@ -158,9 +159,10 @@ final class AppState: ObservableObject {
                 guard let self, self.operationID == token else { return }
                 switch outcome {
                 case .summary(let summary, let message): self.summary = summary; self.status = message
-                case .search(let response):
+                case .search(let response, let query):
                     self.summary = response.summary
                     self.results = response.hits
+                    self.completedQuery = query
                     self.status = "\(response.hits.count) results · exact local scores, not probabilities."
                 }
                 self.activity = nil
