@@ -9,8 +9,14 @@ final class SearchKeyboardTests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
         app.launch()
+    }
+
+    override func tearDownWithError() throws {
+        app.terminate()
+        app = nil
     }
 
     private func focusQuery(_ query: String = "dog eat my apple pen") -> XCUIElement {
@@ -25,7 +31,18 @@ final class SearchKeyboardTests: XCTestCase {
         XCTAssertTrue(field.exists && field.isHittable, "Search input must be reachable")
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        field.typeText(query)
+        // Synchronize each injected key with the actual field value. This also
+        // distinguishes typing loss from mutation by Search/Done; never repair
+        // the query, retry missing keys, or relax the post-dismissal assertion.
+        var expected = ""
+        for character in query {
+            field.typeText(String(character))
+            expected.append(character)
+            let entered = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", expected), object: field)
+            XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 5), .completed,
+                           "Input must contain every typed character before dismissal")
+        }
         return field
     }
 
