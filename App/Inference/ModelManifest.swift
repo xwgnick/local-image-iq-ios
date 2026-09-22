@@ -48,7 +48,7 @@ enum AppFailure: LocalizedError {
         case .modelContract(let detail): return "Model contract mismatch: \(detail) Install a matching model-enabled build."
         case .storage(let detail): return "Local cache error: \(detail) Retry, or clear the local index and rebuild it."
         case .photo(let detail): return "Photo unavailable: \(detail)"
-        case .cloudOnly: return "This photo is in iCloud. Enable downloading explicitly to use it."
+        case .cloudOnly: return "No local preview is available for this photo. On-demand iCloud access is required for this item; the rest of the library does not need to be downloaded first."
         case .permission: return "Allow access to photos, or select photos using Limited Access."
         case .places(let detail): return "Offline places unavailable: \(detail) Image search still works without place labels."
         }

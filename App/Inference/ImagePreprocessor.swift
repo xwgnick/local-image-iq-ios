@@ -72,8 +72,15 @@ enum ImagePreprocessor {
     }
 
     static func tensor(data: Data, orientation: CGImagePropertyOrientation) throws -> MLMultiArray {
-        let values = try values(data: data, orientation: orientation)
-        let tensor = try MLMultiArray(shape: [1, 3, 224, 224], dataType: .float32)
+        try tensor(values: values(data: data, orientation: orientation))
+    }
+
+    static func tensor(image: CGImage, orientation: CGImagePropertyOrientation = .up) throws -> MLMultiArray {
+        try tensor(values: values(image: image, orientation: orientation))
+    }
+
+    private static func tensor(values: [Float]) throws -> MLMultiArray {
+        let tensor = try MLMultiArray(shape: [1, 3, NSNumber(value: size), NSNumber(value: size)], dataType: .float32)
         for (index, value) in values.enumerated() { tensor[index] = NSNumber(value: value) }
         return tensor
     }

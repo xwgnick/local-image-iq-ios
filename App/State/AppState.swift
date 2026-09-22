@@ -95,7 +95,10 @@ final class AppState: ObservableObject {
             let summary = try await worker.index(networkAllowed: networkAllowed) { [weak self] progress in
                 await self?.accept(progress: progress, token: token)
             }
-            return .summary(summary, "Index complete. Search uses only current authorized, indexed images.")
+            let message = summary.indexedCount == summary.authorizedCount
+                ? "Index complete. \(summary.indexedCount) authorized images are searchable."
+                : "Scan finished: \(summary.indexedCount)/\(summary.authorizedCount) indexed. Missing previews are not searchable yet; see need-network and unavailable counts."
+            return .summary(summary, message)
         }
     }
 

@@ -87,7 +87,119 @@ final class GeneratedModelParityTests: XCTestCase {
         }
     }
 
+    func testAppEncodersModelSizedPreviewAndAllTextReferenceParity() async throws {
+        // The production actor uses .all. Unlike the optional engine comparison,
+        // this app-API gate runs in EVERY model-enabled build, without MainActor.
+        var report = Report(test: name, requestedComputeUnits: "all")
+        report.coverageNote = "Synthetic ImageIO raw pixels -> CGContext.high aspect-preserving model-sized preview -> app actor. Not PhotoKit pixel identity, iCloud availability, or real-device quality."
+        report.expectedAppPredictions = ["image.preview": 4, "text": 12]
+        // withReport is synchronous: never place an await inside its inout closure.
+        defer { self.attach(report) }
+        do {
+            let fixtures = try self.resources(report: &report)
+            try require(fixtures.images.cases.count == 4 && fixtures.text.cases.count == 12,
+                        "App API parity requires exactly four image patterns and all twelve text cases.")
+            let encoders: any PhotoEncoding = CoreMLEncoders(bundle: fixtures.bundle)
+            let manifest = try await encoders.prepare()
+            try require(manifest.modelVersion == fixtures.manifest.modelVersion,
+                        "The app actor must load the fixture owner's model pair.")
+
+            for fixture in fixtures.images.cases {
+                let preview = try modelSizedPreview(fixture, resources: fixtures, report: &report)
+                let projection = try await encoders.image(preview: preview)
+                report.completedAppPredictions["image.preview", default: 0] += 1
+                try checkAppProjection(projection, st: fixture.sentenceTransformerRaw, exported: fixture.coreMLRaw,
+                                       id: fixture.id, stage: "image.appModelSizedPreview",
+                                       minCosine: Self.nativeImageMinCosine, strictCosine: false, report: &report)
+            }
+            for fixture in fixtures.text.cases {
+                let projection = try await encoders.text(fixture.text)
+                report.completedAppPredictions["text", default: 0] += 1
+                try checkAppProjection(projection, st: fixture.sentenceTransformerRaw, exported: fixture.coreMLRaw,
+                                       id: fixture.id, stage: "text.appNativeTokens",
+                                       minCosine: Self.conversionMinCosine, strictCosine: true, report: &report)
+            }
+            try require(report.completedAppPredictions == report.expectedAppPredictions
+                        && report.previews.count == 4 && report.measurements.count == 40,
+                        "Incomplete app API parity: expected 16 predictions and 40 comparisons (8 tensor diagnostics, 32 normalized embedding gates).")
+            report.completed = true // Completion is NOT a claim that assertions passed.
+        } catch {
+            report.skipped = error is XCTSkip
+            report.error = String(describing: error)
+            throw error
+        }
+    }
+
     // MARK: - Actual native pipelines, one model load per role per test
+
+    private func modelSizedPreview(_ fixture: ImageCase, resources: Resources,
+                                   report: inout Report) throws -> IndexingImage {
+        try autoreleasepool {
+            let data = try checkedData(resources.fixtureURL(fixture.image), sha256: fixture.imageSHA256)
+            let orientation = try inspectOrientation(data, fixture: fixture)
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+            // Decode RAW pixels: no ImageIO thumbnail transform, UIKit orientation,
+            // PNG/JPEG re-encoding, or orientation copied from fixture expectations.
+            let raw = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            try require([raw.width, raw.height] == fixture.sourceSize, "Unexpected decoded raw dimensions: \(fixture.id)")
+            let shortest = min(raw.width, raw.height)
+            let size = ImagePreprocessor.size
+            let scale = Double(size) / Double(shortest)
+            let width = max(size, Int(Double(raw.width) * scale))
+            let height = max(size, Int(Double(raw.height) * scale))
+            let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+            let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                                bytesPerRow: width * 4, space: colorSpace,
+                                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue |
+                                                    CGBitmapInfo.byteOrder32Big.rawValue))
+            let rect = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+            context.setFillColor(red: 0, green: 0, blue: 0, alpha: 1)
+            context.fill(rect)
+            context.interpolationQuality = .high
+            context.draw(raw, in: rect) // Keep the full aspect ratio, not a stretched 224x224 square.
+            let pixels = try XCTUnwrap(context.makeImage())
+            let swapped = (5...8).contains(orientation.rawValue)
+            let orientedSize = swapped ? [height, width] : [width, height]
+            try require(min(width, height) == size && orientedSize == fixture.resizedSize,
+                        "Preview must preserve oriented resize geometry: \(fixture.id)")
+            // Only checker-nonsquare is genuinely downsampled by these fixtures;
+            // the solid is already 224, and the 197-short-edge EXIF cases grow.
+            // These source labels are synthetic metadata, not PhotoKit callbacks.
+            let preview = IndexingImage(cgImage: pixels, orientation: orientation, source: .localPreview)
+            report.previews.append(PreviewMeasurement(id: fixture.id, sourceSize: [raw.width, raw.height],
+                                                      previewSize: [pixels.width, pixels.height],
+                                                      orientedPreviewSize: orientedSize,
+                                                      exifOrientation: orientation.rawValue,
+                                                      source: preview.source.rawValue,
+                                                      resampling: shortest > size ? "downsample" : (shortest < size ? "upsample" : "same-size")))
+            let original = try ImagePreprocessor.values(data: data, orientation: orientation)
+            let candidate = try imageValues(ImagePreprocessor.tensor(image: preview.cgImage, orientation: preview.orientation))
+            try record(reference: original, candidate: candidate, id: fixture.id,
+                       stage: "image.previewVsOriginalTensor", target: "native original-data preprocessing",
+                       report: &report)
+            try record(reference: referenceTensor(fixture, resources: resources), candidate: candidate, id: fixture.id,
+                       stage: "image.previewVsHFTensor", target: "HF/Pillow full NCHW tensor", report: &report)
+            // Tensor deltas are diagnostic. The async test gates actual app embeddings
+            // against ST at >= .995 even when pre-resizing changes the pixels.
+            return preview
+        }
+    }
+
+    private func checkAppProjection(_ projection: [Float], st: [Float], exported: [Float],
+                                    id: String, stage: String, minCosine: Double, strictCosine: Bool,
+                                    report: inout Report) throws {
+        try require(projection.count == 512 && projection.allSatisfy(\.isFinite),
+                    "\(stage)/\(id): app output must contain 512 finite Float values.")
+        let norm = sqrt(projection.reduce(0.0) { $0 + Double($1) * Double($1) })
+        try require(abs(norm - 1) <= 1e-5, "\(stage)/\(id): app output must already be normalized; norm=\(norm).")
+        // Do not normalize the candidate again and hide an app normalization bug.
+        // Raw-output conversion gates remain in the existing synchronous tests.
+        for (target, reference) in [("sentenceTransformerRaw", st), ("coreMLRaw", exported)] {
+            try record(reference: EmbeddingValidation.normalizeProjection(reference), candidate: projection,
+                       id: id, stage: stage + ".normalized", target: target,
+                       minCosine: minCosine, strictCosine: strictCosine, report: &report)
+        }
+    }
 
     private func runText(_ resources: Resources, computeUnits: MLComputeUnits,
                          report: inout Report) throws {
@@ -272,7 +384,7 @@ final class GeneratedModelParityTests: XCTestCase {
                         "Malformed token fixture: \(fixture.id)")
             try checkRawVectors(fixture.sentenceTransformerRaw, fixture.coreMLRaw)
         }
-        let result = Resources(manifest: manifest, imageModel: imageModel, textModel: textModel,
+        let result = Resources(bundle: owner, manifest: manifest, imageModel: imageModel, textModel: textModel,
                                vocabulary: vocabulary, imageDocumentURL: imageURL, fixtureBundles: fixtureBundles,
                                text: text, images: images)
         for fixture in images.cases {
@@ -307,6 +419,7 @@ final class GeneratedModelParityTests: XCTestCase {
     }
 
     private struct Resources {
+        let bundle: Bundle
         let manifest: ModelManifest
         let imageModel: URL
         let textModel: URL
@@ -619,6 +732,16 @@ final class GeneratedModelParityTests: XCTestCase {
         let minimumCosine: Double?
     }
 
+    private struct PreviewMeasurement: Encodable {
+        let id: String
+        let sourceSize: [Int]
+        let previewSize: [Int]
+        let orientedPreviewSize: [Int]
+        let exifOrientation: UInt32
+        let source: String
+        let resampling: String
+    }
+
     private struct Report: Encodable {
         let schemaVersion = 1
         let test: String
@@ -630,6 +753,10 @@ final class GeneratedModelParityTests: XCTestCase {
         var modelVersion: String?
         var exportNativeMarkers: [String: String] = [:]
         var fixtureCounts: [String: Int] = [:]
+        var coverageNote: String?
+        var expectedAppPredictions: [String: Int] = [:]
+        var completedAppPredictions: [String: Int] = [:]
+        var previews: [PreviewMeasurement] = []
         var tokens: [TokenMeasurement] = []
         var measurements: [Measurement] = []
         var summaries: [Summary] = []

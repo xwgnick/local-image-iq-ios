@@ -6,6 +6,7 @@ import ImageIQCore
 protocol PhotoEncoding: Sendable {
     func prepare() async throws -> ModelManifest
     func image(data: Data, orientation: CGImagePropertyOrientation) async throws -> [Float]
+    func image(preview: IndexingImage) async throws -> [Float]
     func text(_ text: String) async throws -> [Float]
 }
 
@@ -29,6 +30,19 @@ actor CoreMLEncoders: PhotoEncoding {
         try Task.checkCancellation()
         let models = try load()
         let tensor = try autoreleasepool { try ImagePreprocessor.tensor(data: data, orientation: orientation) }
+        try Task.checkCancellation()
+        let input = try MLDictionaryFeatureProvider(dictionary: [models.manifest.imageInput: tensor])
+        let output = try models.image.prediction(from: input)
+        try Task.checkCancellation()
+        return try projection(output, name: models.manifest.output)
+    }
+
+    func image(preview: IndexingImage) async throws -> [Float] {
+        try Task.checkCancellation()
+        let models = try load()
+        let tensor = try autoreleasepool {
+            try ImagePreprocessor.tensor(image: preview.cgImage, orientation: preview.orientation)
+        }
         try Task.checkCancellation()
         let input = try MLDictionaryFeatureProvider(dictionary: [models.manifest.imageInput: tensor])
         let output = try models.image.prediction(from: input)

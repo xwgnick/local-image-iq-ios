@@ -124,10 +124,10 @@ struct ContentView: View {
                 metric(state.summary.indexedCount, "current indexed")
                 metric(state.summary.locatedCount, "offline place labels")
             }
-            Toggle("Allow iCloud image downloads", isOn: $state.allowICloudDownload)
+            Toggle("Fetch missing images from iCloud", isOn: $state.allowICloudDownload)
                 .disabled(state.isBusy)
                 .accessibilityIdentifier("icloud-download-opt-in")
-            Text("Off by default. When off, network access is disabled for image data, thumbnails and previews. Cloud-only images may be skipped. Enabling it lets Apple Photos download images and may use mobile data; nothing is uploaded by this app.")
+            Text("Indexing uses locally available previews first, including reduced-quality images, without requesting originals. When off, it stays offline. Enable only to fetch missing images on demand; Photos controls the actual download size and may use mobile data. You do not need to download your entire library first.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Index / resume", systemImage: "play.fill") { state.index() }
@@ -147,7 +147,7 @@ struct ContentView: View {
                 }
             }
             Text(state.status).font(.footnote).foregroundStyle(.secondary)
-            Text("Keep the app in the foreground. Cancelling keeps completed records; unchanged images are reused next time.")
+            Text("Keep the app in the foreground. Completed records are kept. This preview-index update rebuilds the previous index once; later runs reuse unchanged records.")
                 .font(.caption).foregroundStyle(.secondary)
         }.iqCard()
     }
@@ -213,7 +213,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("On-device search. No application server.", systemImage: "lock.fill")
             Text("The local cache stores authorized photo IDs, revisions, embeddings and optional place labels—not originals or GPS. It is excluded from backups and protected until the first unlock after restart.")
-            Text("Image + optional place-text retrieval only. No OCR, date filters, agentic search or production search-stack integration. Native high-quality image resizing approximates, but is not verified bit-for-bit against, the training preprocessing.")
+            Text("Preview index v1 · Image + optional place-text retrieval only. Reduced-quality inputs can affect matches. No OCR, date filters, agentic search or production search-stack integration. Native resizing is not pixel-identical to the reference preprocessing.")
         }.font(.caption).foregroundStyle(.secondary).padding(.vertical, 10)
     }
 }

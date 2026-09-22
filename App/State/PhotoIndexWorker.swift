@@ -8,11 +8,14 @@ struct IndexProgress: Sendable, Equatable {
     var reused = 0
     var cloudSkipped = 0
     var failed = 0
+    var localPreviews = 0
+    var reducedPreviews = 0
+    var networkPreviews = 0
     var lastFailure: String?
 
     var fraction: Double { total == 0 ? 0 : Double(completed) / Double(total) }
     var summary: String {
-        "\(completed)/\(total) checked · \(encoded) encoded · \(reused) reused · \(cloudSkipped) iCloud skipped · \(failed) unavailable"
+        "\(completed)/\(total) checked · \(encoded) encoded · \(reused) reused · \(cloudSkipped) need network · \(failed) unavailable · \(localPreviews) local previews · \(reducedPreviews) reduced previews · \(networkPreviews) online-fallback previews"
     }
 }
 
@@ -41,17 +44,19 @@ protocol PhotoWorkServicing: Sendable {
 /// serialize whole async jobs: the caller waits for a cancelled predecessor before
 /// starting the next job, including time spent awaiting Photos/encoders/storage.
 actor PhotoIndexWorker: PhotoWorkServicing {
-    private let library: PhotoLibraryClient
+    private let library: any PhotoLibraryIndexing
     private let encoders: any PhotoEncoding
     private let suppliedDirectory: URL?
     private var store: SQLitePhotoStore?
     private var places: OfflinePlaceResolver?
     private var placeVectors: [Data: [Float]] = [:]
 
-    init(library: PhotoLibraryClient, encoders: any PhotoEncoding = CoreMLEncoders(), directory: URL? = nil) {
+    init(library: any PhotoLibraryIndexing, encoders: any PhotoEncoding = CoreMLEncoders(), directory: URL? = nil,
+         resolver: OfflinePlaceResolver? = nil) {
         self.library = library
         self.encoders = encoders
         suppliedDirectory = directory
+        places = resolver
     }
 
     private func storage() throws -> SQLitePhotoStore {
@@ -92,8 +97,9 @@ actor PhotoIndexWorker: PhotoWorkServicing {
 
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary {
         let snapshot = try await reconcile()
-        guard PhotoLibraryClient.canRead else { throw AppFailure.permission }
+        guard library.canReadImages else { throw AppFailure.permission }
         let manifest = try await encoders.prepare()
+        let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
         let resolver = boundaries()
         let store = try storage()
         var state = IndexProgress(total: snapshot.count)
@@ -101,23 +107,28 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         for revision in snapshot {
             try Task.checkCancellation()
             let old = try await store.record(id: revision.id)
-            let reusable = old?.photo.modificationTime == revision.modificationTime && old?.photo.modelVersion == manifest.modelVersion
+            let reusable = old?.photo.modificationTime == revision.modificationTime && old?.photo.modelVersion == cacheVersion
             if reusable, old?.geographyVersion == resolver.version {
                 state.reused += 1
             } else {
                 let image: [Float]
+                var source: IndexingImage.Source? = nil
                 if reusable, let old { image = old.photo.imageEmbedding }
                 else {
                     do {
-                        // The data and decoded pixels live for ONE asset only.
-                        image = try await encodeImage(id: revision.id, networkAllowed: networkAllowed)
+                        // Preview pixels live for ONE asset only; no original-data fallback.
+                        let encoded = try await encodeImage(id: revision.id, networkAllowed: networkAllowed)
+                        image = encoded.embedding
+                        source = encoded.source
                     } catch is CancellationError { throw CancellationError() }
-                    catch AppFailure.cloudOnly {
+                    catch AppFailure.cloudOnly where !networkAllowed {
+                        try Task.checkCancellation()
                         state.cloudSkipped += 1
                         state.completed += 1
                         await progress(state)
                         continue
                     } catch let error as AppFailure {
+                        try Task.checkCancellation()
                         if case .modelContract = error { throw error }
                         if case .modelsMissing = error { throw error }
                         state.failed += 1
@@ -126,14 +137,20 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                         await progress(state)
                         continue
                     } catch {
-                        state.failed += 1
-                        state.lastFailure = error.localizedDescription
+                        try Task.checkCancellation()
+                        // Also classify raw PhotoKit errors from an injected library.
+                        if !networkAllowed, PhotoImageRequestInfo.requiresNetwork(error) {
+                            state.cloudSkipped += 1
+                        } else {
+                            state.failed += 1
+                            state.lastFailure = error.localizedDescription
+                        }
                         state.completed += 1
                         await progress(state)
                         continue
                     }
                 }
-                let location = try await location(id: revision.id, resolver: resolver, manifest: manifest, store: store)
+                let location = try await location(id: revision.id, resolver: resolver, cacheVersion: cacheVersion, store: store)
                 try Task.checkCancellation()
                 guard library.currentRevision(id: revision.id) == revision else {
                     state.failed += 1
@@ -143,10 +160,18 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                     continue
                 }
                 let photo = IndexedPhoto(id: revision.id, modificationTime: revision.modificationTime,
-                                         modelVersion: manifest.modelVersion, imageEmbedding: image, location: location,
+                                         modelVersion: cacheVersion, imageEmbedding: image, location: location,
                                          creationTime: revision.creationTime)
                 try await store.save(CachedPhoto(photo: photo, geographyVersion: resolver.version))
                 if reusable { state.reused += 1 } else { state.encoded += 1 }
+                // Only committed, newly encoded records contribute source counts.
+                if let source {
+                    switch source {
+                    case .localPreview: state.localPreviews += 1
+                    case .localReducedPreview: state.reducedPreviews += 1
+                    case .networkPreview: state.networkPreviews += 1
+                    }
+                }
             }
             state.completed += 1
             await progress(state)
@@ -155,19 +180,23 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         return try await summary(snapshot: current, manifest: manifest, resolver: resolver)
     }
 
-    private func encodeImage(id: String, networkAllowed: Bool) async throws -> [Float] {
-        let image = try await library.imageData(id: id, networkAllowed: networkAllowed)
-        return try await encoders.image(data: image.data, orientation: image.orientation)
+    private func encodeImage(id: String, networkAllowed: Bool) async throws -> (embedding: [Float], source: IndexingImage.Source) {
+        let preview = try await library.indexImage(id: id, networkAllowed: networkAllowed)
+        let source = preview.source
+        try Task.checkCancellation()
+        let embedding = try await encoders.image(preview: preview)
+        try Task.checkCancellation()
+        return (embedding, source)
     }
 
-    private func location(id: String, resolver: OfflinePlaceResolver, manifest: ModelManifest,
+    private func location(id: String, resolver: OfflinePlaceResolver, cacheVersion: String,
                           store: SQLitePhotoStore) async throws -> PlaceEmbedding? {
         guard let label = library.placeLabel(id: id, resolver: resolver) else { return nil }
         let text = "Photo taken in \(label)."
-        let key = Data((manifest.modelVersion + "\n" + text).utf8)
+        let key = Data((cacheVersion + "\n" + text).utf8)
         if let vector = placeVectors[key] { return PlaceEmbedding(text: text, vector: vector) }
         let vector: [Float]
-        if let cached = try await store.place(text: text, modelVersion: manifest.modelVersion) { vector = cached }
+        if let cached = try await store.place(text: text, modelVersion: cacheVersion) { vector = cached }
         else { vector = try await encoders.text(text) }
         placeVectors[key] = vector
         return PlaceEmbedding(text: text, vector: vector)
@@ -175,7 +204,7 @@ actor PhotoIndexWorker: PhotoWorkServicing {
 
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse {
         let snapshot = try await reconcile()
-        guard PhotoLibraryClient.canRead else { throw AppFailure.permission }
+        guard library.canReadImages else { throw AppFailure.permission }
         let manifest = try await encoders.prepare()
         let resolver = boundaries()
         let photos = try await currentPhotos(manifest: manifest, resolver: resolver)
@@ -202,7 +231,8 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     }
 
     private func currentPhotos(manifest: ModelManifest, resolver: OfflinePlaceResolver) async throws -> [IndexedPhoto] {
-        let records = try await storage().records(modelVersion: manifest.modelVersion)
+        let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
+        let records = try await storage().records(modelVersion: cacheVersion)
         return records.map { cached in
             let photo = cached.photo
             return IndexedPhoto(id: photo.id, modificationTime: photo.modificationTime, modelVersion: photo.modelVersion,
@@ -221,6 +251,7 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                              resolver: OfflinePlaceResolver) -> LibrarySummary {
         LibrarySummary(authorizedCount: snapshot.count, indexedCount: photos.count,
                        locatedCount: photos.filter { $0.location != nil }.count,
-                       modelVersion: manifest.modelVersion, placesDescription: resolver.coverageDescription)
+                       modelVersion: IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion),
+                       placesDescription: resolver.coverageDescription)
     }
 }

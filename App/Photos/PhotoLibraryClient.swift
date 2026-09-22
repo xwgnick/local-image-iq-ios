@@ -85,7 +85,7 @@ final class PhotoRequestGate<Value>: @unchecked Sendable {
 
 /// Only the change callback is mutable, protected by callbackLock. PhotoKit's
 /// thread-safe manager is shared, while PHAsset instances stay within each call.
-final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
+final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLibraryIndexing, @unchecked Sendable {
     private let manager = PHImageManager.default()
     private let callbackLock = NSLock()
     private var changeHandler: (@Sendable () -> Void)?
@@ -113,6 +113,8 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, @uncheck
     static var authorization: PHAuthorizationStatus { PHPhotoLibrary.authorizationStatus(for: .readWrite) }
 
     static var canRead: Bool { authorization == .authorized || authorization == .limited }
+
+    var canReadImages: Bool { Self.canRead }
 
     /// No date/place predicates. A successful return is a COMPLETE authorized image
     /// enumeration; cancellation/authorization transitions throw before pruning.
@@ -150,6 +152,17 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, @uncheck
         return asset?.mediaType == .image ? asset : nil
     }
 
+    func indexImage(id: String, networkAllowed: Bool) async throws -> IndexingImage {
+        try Task.checkCancellation()
+        guard let asset = asset(id: id) else { throw AppFailure.photo("Access was removed or the photo was deleted.") }
+        let target = PreviewImageLoader.targetSize(pixelWidth: asset.pixelWidth, pixelHeight: asset.pixelHeight)
+        return try await PreviewImageLoader.load(targetSize: target, networkAllowed: networkAllowed,
+                                                request: { [manager] targetSize, contentMode, options, callback in
+            manager.requestImage(for: asset, targetSize: targetSize, contentMode: contentMode,
+                                 options: options, resultHandler: callback)
+        }, cancel: { [manager] in manager.cancelImageRequest($0) })
+    }
+
     func imageData(id: String, networkAllowed: Bool = false) async throws -> PhotoImageData {
         try Task.checkCancellation()
         guard let asset = asset(id: id) else { throw AppFailure.photo("Access was removed or the photo was deleted.") }
@@ -164,8 +177,15 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, @uncheck
                 gate.install(continuation)
                 if Task.isCancelled { gate.cancel(); return }
                 let request = manager.requestImageDataAndOrientation(for: asset, options: options) { data, _, orientation, info in
-                    if Self.flag(PHImageCancelledKey, info) { gate.finish(.failure(CancellationError())); return }
-                    if let error = info?[PHImageErrorKey] as? Error { gate.finish(.failure(error)); return }
+                    if PhotoImageRequestInfo.isCancellation(info) { gate.finish(.failure(CancellationError())); return }
+                    if let error = info?[PHImageErrorKey] as? Error {
+                        if !networkAllowed, data == nil, PhotoImageRequestInfo.requiresNetwork(error) {
+                            gate.finish(.failure(AppFailure.cloudOnly)); return
+                        }
+                        if data == nil || !PhotoImageRequestInfo.requiresNetwork(error) {
+                            gate.finish(.failure(error)); return
+                        }
+                    }
                     if Self.flag(PHImageResultIsDegradedKey, info) { return }
                     if let data {
                         gate.finish(.success(PhotoImageData(data: data, orientation: orientation)))
@@ -186,7 +206,9 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, @uncheck
         let options = PHImageRequestOptions()
         options.isNetworkAccessAllowed = networkAllowed
         options.isSynchronous = false
-        options.deliveryMode = .highQualityFormat
+        // Offline results should show a cached reduced preview rather than wait
+        // for unavailable high-quality pixels. fastFormat completes once.
+        options.deliveryMode = networkAllowed ? .highQualityFormat : .fastFormat
         options.resizeMode = .fast
         let gate = PhotoRequestGate<UIImage> { [manager] in manager.cancelImageRequest($0) }
         return try await withTaskCancellationHandler(operation: {
@@ -194,9 +216,16 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, @uncheck
                 gate.install(continuation)
                 if Task.isCancelled { gate.cancel(); return }
                 let request = manager.requestImage(for: asset, targetSize: targetSize, contentMode: .aspectFit, options: options) { image, info in
-                    if Self.flag(PHImageCancelledKey, info) { gate.finish(.failure(CancellationError())); return }
-                    if let error = info?[PHImageErrorKey] as? Error { gate.finish(.failure(error)); return }
-                    if Self.flag(PHImageResultIsDegradedKey, info) { return }
+                    if PhotoImageRequestInfo.isCancellation(info) { gate.finish(.failure(CancellationError())); return }
+                    if let error = info?[PHImageErrorKey] as? Error {
+                        if !networkAllowed, image == nil, PhotoImageRequestInfo.requiresNetwork(error) {
+                            gate.finish(.failure(AppFailure.cloudOnly)); return
+                        }
+                        if image == nil || !PhotoImageRequestInfo.requiresNetwork(error) {
+                            gate.finish(.failure(error)); return
+                        }
+                    }
+                    if networkAllowed, Self.flag(PHImageResultIsDegradedKey, info) { return }
                     if let image { gate.finish(.success(image)) }
                     else if Self.flag(PHImageResultIsInCloudKey, info), !networkAllowed {
                         gate.finish(.failure(AppFailure.cloudOnly))
