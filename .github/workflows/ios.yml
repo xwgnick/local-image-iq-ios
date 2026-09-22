@@ -74,6 +74,8 @@ jobs:
           fi
       - name: Select an available iPhone simulator
         run: |
+          # UI regression tests need the software keyboard, not a host keyboard.
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
           xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
           node --input-type=module -e 'import fs from "node:fs"; const d=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/available-devices.json","utf8")); const all=Object.entries(d.devices).filter(([runtime])=>runtime.includes("iOS")).flatMap(([,v])=>v); const phone=all.find(x=>x.isAvailable&&x.name.startsWith("iPhone")); if(!phone)throw Error("No installed iPhone simulator; inspect the runner image"); fs.appendFileSync(process.env.GITHUB_ENV,"SIMULATOR_ID="+phone.udid+"\n");'
       - name: Build and test (unsigned simulator only)

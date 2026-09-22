@@ -9,6 +9,7 @@ struct ContentView: View {
     @Environment(\.openURL) private var openURL
     @State private var showLimitedPicker = false
     @State private var confirmClear = false
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -26,10 +27,25 @@ struct ContentView: View {
                 .frame(maxWidth: 850)
                 .frame(maxWidth: .infinity)
             }
+            .scrollDismissesKeyboard(.interactively)
+            .accessibilityIdentifier("library-scroll")
             .background(LinearGradient(colors: [Color(red: 0.12, green: 0.07, blue: 0.23), .black], startPoint: .topLeading, endPoint: .bottomTrailing))
             .navigationTitle("Local Image IQ")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if isSearchFocused {
+                        Button("Done") { isSearchFocused = false }
+                            .accessibilityLabel("Hide keyboard")
+                            .accessibilityIdentifier("hide-search-keyboard")
+                    }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { isSearchFocused = false }
+                        .accessibilityLabel("Hide keyboard")
+                        .accessibilityIdentifier("keyboard-done")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("Refresh authorized library", systemImage: "arrow.clockwise") { state.refresh() }
@@ -162,9 +178,12 @@ struct ContentView: View {
     private var searchCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("03  ·  Describe a memory", systemImage: "magnifyingglass").font(.headline)
-            TextField("A dog playing on the beach…", text: $state.query, axis: .vertical)
+            // Single-line input keeps the Search return key a submit action,
+            // rather than inserting a newline into the previous multiline field.
+            TextField("A dog playing on the beach…", text: $state.query)
+                .focused($isSearchFocused)
                 .textFieldStyle(.plain).padding(14).background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 14))
-                .submitLabel(.search).onSubmit { state.search() }
+                .submitLabel(.search).onSubmit(submitSearch)
                 .accessibilityIdentifier("photo-query")
             Picker("Results", selection: $state.resultLimit) {
                 Text("Top 3").tag(3)
@@ -181,10 +200,17 @@ struct ContentView: View {
                 .font(.caption).foregroundStyle(.secondary)
             Text("\(state.summary.locatedCount) of \(state.summary.indexedCount) indexed photos have an offline label. \(state.summary.placesDescription)")
                 .font(.caption).foregroundStyle(.secondary)
-            Button("Search locally", systemImage: "magnifyingglass") { state.search() }
+            Button("Search locally", systemImage: "magnifyingglass", action: submitSearch)
                 .buttonStyle(.borderedProminent).disabled(!state.canSearch)
                 .accessibilityIdentifier("search-photos")
         }.iqCard()
+    }
+
+    private func submitSearch() {
+        // Dismiss before work starts, including empty/not-ready submissions.
+        // A failed search must not leave the keyboard covering an error or results.
+        isSearchFocused = false
+        state.search()
     }
 
     @ViewBuilder private var results: some View {
@@ -192,7 +218,10 @@ struct ContentView: View {
             Text("Closest matches").font(.title2.bold())
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
                 ForEach(state.results) { hit in
-                    Button { state.selection = AppState.Selection(id: hit.photo.id) } label: {
+                    Button {
+                        isSearchFocused = false
+                        state.selection = AppState.Selection(id: hit.photo.id)
+                    } label: {
                         VStack(alignment: .leading, spacing: 8) {
                             PhotoThumbnailView(photo: hit.photo, cache: state.thumbnails, networkAllowed: state.allowICloudDownload)
                             Text("Score \(hit.score.formatted(.number.precision(.fractionLength(3))))")
