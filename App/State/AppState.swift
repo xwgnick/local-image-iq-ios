@@ -63,6 +63,7 @@ final class AppState: ObservableObject {
 
     func refresh() {
         authorization = authorizationStatus()
+        library.synchronizeObservation()
         invalidateDisplayedPhotos()
         guard isForeground else { operationTask?.cancel(); return }
         schedule(.refreshing) { [worker] _ in .summary(try await worker.refresh(), "Library refreshed. Unchanged completed records can be reused.") }

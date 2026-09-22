@@ -89,13 +89,29 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
     private let manager = PHImageManager.default()
     private let callbackLock = NSLock()
     private var changeHandler: (@Sendable () -> Void)?
+    private var observing = false
 
     override init() {
         super.init()
-        PHPhotoLibrary.shared().register(self)
     }
 
-    deinit { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
+    deinit {
+        if observing { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
+    }
+
+    /// Registering before authorization can trigger an implicit system prompt.
+    /// Refresh runs after the user's explicit choice and on foreground/access changes.
+    @MainActor
+    func synchronizeObservation() {
+        let shouldObserve = Self.canRead
+        callbackLock.lock()
+        let changed = observing != shouldObserve
+        observing = shouldObserve
+        callbackLock.unlock()
+        guard changed else { return }
+        if shouldObserve { PHPhotoLibrary.shared().register(self) }
+        else { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
+    }
 
     func observe(_ handler: @escaping @Sendable () -> Void) {
         callbackLock.lock()
