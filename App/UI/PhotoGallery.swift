@@ -98,10 +98,20 @@ struct PhotoResultsViewer: View {
     let initialID: String
     let library: PhotoLibraryClient
     let networkAllowed: Bool
+    let state: AppState?
+
+    init(hits: [SearchHit], initialID: String, library: PhotoLibraryClient,
+         networkAllowed: Bool, state: AppState? = nil) {
+        self.hits = hits
+        self.initialID = initialID
+        self.library = library
+        self.networkAllowed = networkAllowed
+        self.state = state
+    }
 
     var body: some View {
         PhotoGalleryViewer(ids: hits.map(\.id), initialID: initialID,
-                           library: library, networkAllowed: networkAllowed)
+                           library: library, networkAllowed: networkAllowed, state: state)
     }
 }
 
@@ -112,6 +122,7 @@ struct PhotoGalleryViewer: View {
     let ids: [String]
     let library: PhotoLibraryClient
     let networkAllowed: Bool
+    let state: AppState?
 
     private struct Request: Hashable {
         let id: String
@@ -135,6 +146,11 @@ struct PhotoGalleryViewer: View {
         let image: UIImage
     }
 
+    private struct PhotoCheckSelection: Identifiable {
+        let id: String
+        let initialQuery: String
+    }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedID: String
@@ -142,11 +158,14 @@ struct PhotoGalleryViewer: View {
     @State private var loadedPhoto: LoadedPhoto?
     @State private var failedPhoto: FailedPhoto?
     @State private var shareItem: ShareItem?
+    @State private var photoCheckSelection: PhotoCheckSelection?
 
-    init(ids: [String], initialID: String, library: PhotoLibraryClient, networkAllowed: Bool) {
+    init(ids: [String], initialID: String, library: PhotoLibraryClient,
+         networkAllowed: Bool, state: AppState? = nil) {
         self.ids = ids
         self.library = library
         self.networkAllowed = networkAllowed
+        self.state = state
         _selectedID = State(initialValue: ids.contains(initialID) ? initialID : (ids.first ?? ""))
     }
 
@@ -183,16 +202,21 @@ struct PhotoGalleryViewer: View {
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .task(id: request) { await load(request) }
-        .onChange(of: selectedID) { _, _ in shareItem = nil }
+        .onChange(of: selectedID) { _, _ in
+            shareItem = nil
+            clearPhotoCheck()
+        }
         .onChange(of: ids) { _, updated in
             if !updated.contains(selectedID) {
                 selectedID = updated.first ?? ""
                 shareItem = nil
+                clearPhotoCheck()
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { recheckAccess() }
+            if phase == .active { recheckAccess() } else { clearPhotoCheck() }
         }
+        .onDisappear { clearPhotoCheck() }
         .sheet(item: $shareItem) { item in
             // The sheet uses an immutable snapshot, never whichever UIImage
             // happens to finish loading after the Share button was pressed.
@@ -203,11 +227,16 @@ struct PhotoGalleryViewer: View {
                                        description: Text("Close sharing and check Photos access."))
             }
         }
+        .sheet(item: $photoCheckSelection, onDismiss: { state?.dismissPhotoCheck() }) { selection in
+            if let state {
+                PhotoCheckSheet(state: state, photoID: selection.id, initialQuery: selection.initialQuery)
+            }
+        }
     }
 
     private var topBar: some View {
         HStack {
-            Button { dismiss() } label: {
+            Button { clearPhotoCheck(); dismiss() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
@@ -234,6 +263,24 @@ struct PhotoGalleryViewer: View {
     }
 
     private var bottomBar: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                shareButton
+                checkButton
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            VStack(spacing: 8) {
+                shareButton
+                checkButton
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(PhotoGalleryStyle.background.opacity(0.8))
+    }
+
+    private var shareButton: some View {
         Button(action: shareCurrentPhoto) {
             Label("Share", systemImage: "square.and.arrow.up")
                 .font(.body.weight(.semibold))
@@ -247,9 +294,44 @@ struct PhotoGalleryViewer: View {
         .opacity(currentImage == nil ? 0.4 : 1)
         .accessibilityHint("Shares the displayed photo without location metadata")
         .accessibilityIdentifier("share-photo-preview")
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(PhotoGalleryStyle.background.opacity(0.8))
+    }
+
+    private var checkButton: some View {
+        Group {
+            if let state {
+                PhotoCheckPreviewButton(state: state, hasSelection: hasCheckableSelection, action: openPhotoCheck)
+            } else {
+                Button {} label: { PhotoCheckPreviewLabel() }
+                    .disabled(true)
+                    .opacity(0.4)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Compare the saved index with a fresh local preview without changing the index")
+        .accessibilityIdentifier("check-photo-preview")
+    }
+
+    private var hasCheckableSelection: Bool {
+        guard !selectedID.isEmpty, ids.contains(selectedID) else { return false }
+        if let failedPhoto, failedPhoto.request == request, case .access = failedPhoto.issue { return false }
+        return true
+    }
+
+    private func openPhotoCheck() {
+        guard let state, state.canRead, hasCheckableSelection else { return }
+        guard library.currentRevision(id: selectedID) != nil else {
+            recheckAccess()
+            return
+        }
+        state.dismissPhotoCheck()
+        // Independent of the display-image task, so this action works while
+        // that image is loading. The sheet never follows subsequent paging.
+        photoCheckSelection = PhotoCheckSelection(id: selectedID, initialQuery: state.completedQuery ?? state.query)
+    }
+
+    private func clearPhotoCheck() {
+        photoCheckSelection = nil
+        state?.dismissPhotoCheck()
     }
 
     private func page(id: String) -> some View {
@@ -333,6 +415,7 @@ struct PhotoGalleryViewer: View {
         guard ids.contains(selectedID), library.currentRevision(id: selectedID) == nil else { return }
         loadedPhoto = nil
         shareItem = nil
+        clearPhotoCheck()
         failedPhoto = FailedPhoto(request: request, issue: .access)
     }
 
@@ -349,6 +432,32 @@ struct PhotoGalleryViewer: View {
             return
         }
         shareItem = ShareItem(photoID: selectedID, image: rendered)
+    }
+}
+
+/// Observe authorization without requiring AppState in the compatibility viewer.
+@MainActor
+private struct PhotoCheckPreviewButton: View {
+    @ObservedObject var state: AppState
+    let hasSelection: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) { PhotoCheckPreviewLabel() }
+            .disabled(!hasSelection || !state.canRead)
+            .opacity(hasSelection && state.canRead ? 1 : 0.4)
+    }
+}
+
+private struct PhotoCheckPreviewLabel: View {
+    var body: some View {
+        Label("Check this photo", systemImage: "magnifyingglass")
+            .font(.body.weight(.semibold))
+            .foregroundStyle(PhotoGalleryStyle.accent)
+            .padding(.horizontal, 16)
+            .frame(minHeight: 48)
+            .background(.ultraThinMaterial, in: Capsule())
+            .contentShape(Capsule())
     }
 }
 

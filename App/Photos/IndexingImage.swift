@@ -13,6 +13,18 @@ struct IndexingImage: @unchecked Sendable {
     let cgImage: CGImage
     let orientation: CGImagePropertyOrientation
     let source: Source
+    let requestedSize: CGSize?
+    let photokitDegraded: Bool?
+
+    /// Defaults keep synthetic/legacy callers compatible; unknown is not false.
+    init(cgImage: CGImage, orientation: CGImagePropertyOrientation, source: Source,
+         requestedSize: CGSize? = nil, photokitDegraded: Bool? = nil) {
+        self.cgImage = cgImage
+        self.orientation = orientation
+        self.source = source
+        self.requestedSize = requestedSize
+        self.photokitDegraded = photokitDegraded
+    }
 }
 
 enum IndexImagePolicy {
@@ -25,10 +37,21 @@ enum IndexImagePolicy {
 
 protocol PhotoLibraryIndexing: Sendable {
     var canReadImages: Bool { get }
+    /// Optional for existing test libraries; production also detects full/limited
+    /// permission transitions that happen to leave the same authorized image IDs.
+    var authorizationStatusRawValue: Int? { get }
     func enumerateAuthorizedImages() throws -> [PhotoRevision]
     func currentRevision(id: String) -> PhotoRevision?
     func placeLabel(id: String, resolver: OfflinePlaceResolver) -> String?
     func indexImage(id: String, networkAllowed: Bool) async throws -> IndexingImage
+}
+
+extension PhotoLibraryIndexing {
+    var authorizationStatusRawValue: Int? { nil }
+}
+
+extension PhotoLibraryClient {
+    var authorizationStatusRawValue: Int? { Self.authorization.rawValue }
 }
 
 /// Shared classification for previews and the retained original-data/parity API.
@@ -46,6 +69,10 @@ enum PhotoImageRequestInfo {
     static func isCancellation(_ info: [AnyHashable: Any]?) -> Bool {
         if flag(PHImageCancelledKey, info) { return true }
         guard let error = info?[PHImageErrorKey] as? Error else { return false }
+        return isCancellation(error)
+    }
+
+    static func isCancellation(_ error: Error) -> Bool {
         if error is CancellationError { return true }
         let nsError = error as NSError
         return (nsError.domain == PHPhotosErrorDomain && nsError.code == PHPhotosError.Code.userCancelled.rawValue)
@@ -119,7 +146,8 @@ enum PreviewImageLoader {
                     }
                     do {
                         if let image, let pixels = cgImage(from: image) {
-                            let reduced = PhotoImageRequestInfo.flag(PHImageResultIsDegradedKey, info)
+                            let degraded = (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue
+                            let reduced = (degraded ?? false)
                                 || CGFloat(min(pixels.width, pixels.height)) < min(targetSize.width, targetSize.height)
                             let source: IndexingImage.Source = network ? .networkPreview
                                 : (reduced ? .localReducedPreview : .localPreview)
@@ -127,7 +155,8 @@ enum PreviewImageLoader {
                             // for a nonexistent better image, and never JPEG/PNG re-encode.
                             gate.finish(.success(IndexingImage(cgImage: pixels,
                                                               orientation: orientation(image.imageOrientation),
-                                                              source: source)))
+                                                              source: source, requestedSize: targetSize,
+                                                              photokitDegraded: degraded)))
                         } else if let error = info?[PHImageErrorKey] as? Error {
                             if !network, PhotoImageRequestInfo.requiresNetwork(error) {
                                 throw LocalMissing.requiresNetwork

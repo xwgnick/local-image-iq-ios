@@ -61,7 +61,7 @@ struct ContentView: View {
             .sheet(isPresented: $showSettings) { SettingsSheet(state: state) }
             .fullScreenCover(item: $state.selection) { selection in
                 PhotoResultsViewer(hits: state.results, initialID: selection.id,
-                                   library: state.library, networkAllowed: state.allowICloudDownload)
+                                   library: state.library, networkAllowed: state.allowICloudDownload, state: state)
             }
         }.tint(IQStyle.accent)
     }

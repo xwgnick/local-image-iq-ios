@@ -37,7 +37,15 @@ protocol PhotoWorkServicing: Sendable {
     func refresh() async throws -> LibrarySummary
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse
+    func checkPhoto(id: String, query: String, locationWeight: Float) async throws -> PhotoDiagnosticReport
     func clear() async throws -> LibrarySummary
+}
+
+extension PhotoWorkServicing {
+    func checkPhoto(id: String, query: String, locationWeight: Float) async throws -> PhotoDiagnosticReport {
+        try Task.checkCancellation()
+        throw AppFailure.photo("Photo diagnostics are unsupported by this service.")
+    }
 }
 
 /// Called by AppState's serialized task chain. Actor isolation alone does NOT
@@ -222,6 +230,124 @@ actor PhotoIndexWorker: PhotoWorkServicing {
             throw AppFailure.photo("The authorized library changed during search. Refresh and search again.")
         }
         return SearchResponse(summary: makeSummary(snapshot: snapshot, photos: photos, manifest: manifest, resolver: resolver), hits: hits)
+    }
+
+    /// Read-only observation, not a quality fix. Uses the same local preview and
+    /// encoders as indexing, but never storage(), reconciliation, place lookup,
+    /// progress callbacks, persistent writes or a network/original-data fallback.
+    func checkPhoto(id: String, query: String, locationWeight: Float) async throws -> PhotoDiagnosticReport {
+        try Task.checkCancellation()
+        guard library.canReadImages else { throw AppFailure.permission }
+        let authorization = library.authorizationStatusRawValue
+        let snapshot = try library.enumerateAuthorizedImages()
+        try Task.checkCancellation()
+        guard let selected = snapshot.first(where: { $0.id == id }) else {
+            throw AppFailure.photo("This photo is no longer in the authorized library.")
+        }
+        try validateDiagnosticSnapshot(snapshot, selected: selected, authorization: authorization)
+        let manifest = try await encoders.prepare()
+        try validateDiagnosticSnapshot(snapshot, selected: selected, authorization: authorization)
+        try manifest.validate()
+        let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
+        let resolver = boundaries()
+        let directory = try suppliedDirectory ?? SQLitePhotoStore.defaultDirectory(create: false)
+        let reader = SQLitePhotoStore(directory: directory, readOnly: true)
+        let cached = try await reader.diagnosticSnapshot(modelVersion: cacheVersion, selectedID: id)
+        try validateDiagnosticSnapshot(snapshot, selected: selected, authorization: authorization)
+        // Match normal reconciliation's revision rule, but filter ONLY in memory.
+        let revisions = Dictionary(snapshot.map { ($0.id, $0.modificationTime) }, uniquingKeysWith: { _, last in last })
+        let photos: [IndexedPhoto] = cached.records.compactMap { record in
+            let photo = record.photo
+            guard revisions[photo.id] == photo.modificationTime else { return nil }
+            return IndexedPhoto(id: photo.id, modificationTime: photo.modificationTime,
+                                modelVersion: photo.modelVersion, imageEmbedding: photo.imageEmbedding,
+                                location: record.geographyVersion == resolver.version ? photo.location : nil,
+                                creationTime: photo.creationTime)
+        }
+        let currentPhoto = photos.first { $0.id == id }
+        let status = currentPhoto != nil ? "current" : (cached.selectedExists ? "stale" : "missing")
+        try Task.checkCancellation()
+        let queryVector = try await encoders.text(query)
+        try validateDiagnosticSnapshot(snapshot, selected: selected, authorization: authorization)
+        let cachedResult = try PhotoDiagnosticRanking.rank(id: id, query: queryVector, photos: photos,
+                                                           locationWeight: locationWeight)
+        var report = PhotoDiagnosticReport(photoID: id, query: query, locationWeight: locationWeight,
+                                           galleryCount: photos.count, cachedRank: cachedResult.rank,
+                                           cachedScore: cachedResult.score, modelVersion: cacheVersion,
+                                           cachedStatus: status)
+        try validateDiagnosticSnapshot(snapshot, selected: selected, authorization: authorization)
+        var preview: IndexingImage?
+        do {
+            preview = try await library.indexImage(id: id, networkAllowed: false)
+        } catch {
+            report.freshIssue = try diagnosticFreshIssue(error,
+                fallback: "A local preview is unavailable for this photo. No network request was made.")
+        }
+        // Keep snapshot validation OUTSIDE recoverable-error handlers. Once a
+        // change is detected, even a later restored snapshot cannot hide it.
+        try validateDiagnosticSnapshot(snapshot, selected: selected, authorization: authorization)
+        if let preview {
+            report.requestedWidth = preview.requestedSize.flatMap { Int(exactly: $0.width.rounded()) }
+            report.requestedHeight = preview.requestedSize.flatMap { Int(exactly: $0.height.rounded()) }
+            report.pixelWidth = preview.cgImage.width
+            report.pixelHeight = preview.cgImage.height
+            report.orientationRawValue = preview.orientation.rawValue
+            report.degraded = preview.photokitDegraded
+            report.source = preview.source.rawValue
+            var fresh: [Float]?
+            do {
+                fresh = try await encoders.image(preview: preview)
+            } catch {
+                report.freshIssue = try diagnosticFreshIssue(error,
+                    fallback: "The local preview could not be encoded. The cached ranking is unchanged.")
+            }
+            try validateDiagnosticSnapshot(snapshot, selected: selected, authorization: authorization)
+            if let fresh {
+                try EmbeddingValidation.validateUnit(fresh)
+                if let currentPhoto {
+                    let result = try PhotoDiagnosticRanking.rank(id: id, query: queryVector, photos: photos,
+                                                                 locationWeight: locationWeight, replacingImageWith: fresh)
+                    let cosine = try EmbeddingMath.dot(currentPhoto.imageEmbedding, fresh)
+                    report.freshRank = result.rank
+                    report.freshScore = result.score
+                    report.cachedFreshCosine = cosine
+                }
+            }
+        }
+        try validateDiagnosticSnapshot(snapshot, selected: selected, authorization: authorization)
+        return report
+    }
+
+    /// Never expose arbitrary PhotoKit/encoder descriptions, IDs or paths in a
+    /// partial report. Cancellation, permission and model contract failures abort.
+    private func diagnosticFreshIssue(_ error: Error, fallback: String) throws -> String {
+        try Task.checkCancellation()
+        if PhotoImageRequestInfo.isCancellation(error) { throw CancellationError() }
+        if let failure = error as? AppFailure {
+            switch failure {
+            case .permission, .modelsMissing, .modelContract: throw failure
+            case .cloudOnly:
+                return "No local preview is available. This photo needs iCloud access; this check did not download it."
+            default: break
+            }
+        } else if PhotoImageRequestInfo.requiresNetwork(error) {
+            return "No local preview is available. This photo needs iCloud access; this check did not download it."
+        }
+        return fallback
+    }
+
+    private func validateDiagnosticSnapshot(_ snapshot: [PhotoRevision], selected: PhotoRevision,
+                                            authorization: Int?) throws {
+        try Task.checkCancellation()
+        guard library.canReadImages else { throw AppFailure.permission }
+        let current = try library.enumerateAuthorizedImages()
+        try Task.checkCancellation()
+        guard library.canReadImages else { throw AppFailure.permission }
+        guard library.authorizationStatusRawValue == authorization, current == snapshot,
+              library.currentRevision(id: selected.id) == selected else {
+            throw AppFailure.photo("The photo or authorized library changed during this check. Please try again.")
+        }
+        try Task.checkCancellation()
     }
 
     func clear() async throws -> LibrarySummary {

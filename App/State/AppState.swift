@@ -5,13 +5,15 @@ import ImageIQCore
 
 @MainActor
 final class AppState: ObservableObject {
-    enum Activity: Equatable { case refreshing, indexing, searching, clearing }
+    enum Activity: Equatable { case refreshing, indexing, searching, clearing, checkingPhoto }
     struct Selection: Identifiable { let id: String }
 
     @Published private(set) var authorization = PhotoLibraryClient.authorization
     @Published private(set) var summary = LibrarySummary()
     @Published private(set) var results: [SearchHit] = []
     @Published private(set) var completedQuery: String?
+    @Published private(set) var photoCheckReport: PhotoDiagnosticReport?
+    @Published private(set) var photoCheckIssue: String?
     @Published private(set) var progress = IndexProgress()
     @Published private(set) var activity: Activity?
     @Published private(set) var status = "Connect your photos to start."
@@ -29,6 +31,7 @@ final class AppState: ObservableObject {
     private let authorizationStatus: () -> PHAuthorizationStatus
     private var operationTask: Task<Void, Never>?
     private var operationID = UUID()
+    private var photoCheckID = UUID()
     private var isForeground = true
 
     init(library: PhotoLibraryClient = PhotoLibraryClient(), worker: (any PhotoWorkServicing)? = nil,
@@ -111,6 +114,29 @@ final class AppState: ObservableObject {
         schedule(.searching) { [worker] _ in .search(try await worker.search(text: text, limit: limit, locationWeight: weight), text) }
     }
 
+    /// Uses the same serialized task chain without clearing the visible results.
+    /// The worker reads a separate read-only SQLite snapshot and never saves the
+    /// new vector. Closing/editing the sheet invalidates even late completions.
+    func checkPhoto(id: String, query: String) {
+        guard isForeground, canRead, !isBusy,
+              !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let token = UUID()
+        photoCheckID = token
+        photoCheckReport = nil
+        photoCheckIssue = nil
+        let weight = Float(locationWeight)
+        schedule(.checkingPhoto) { [worker] _ in
+            .photoCheck(try await worker.checkPhoto(id: id, query: query, locationWeight: weight), token)
+        }
+    }
+
+    func dismissPhotoCheck() {
+        photoCheckID = UUID()
+        photoCheckReport = nil
+        photoCheckIssue = nil
+        if activity == .checkingPhoto { operationTask?.cancel() }
+    }
+
     func cancel() {
         operationTask?.cancel()
         status = "Cancelling… completed index records are kept."
@@ -129,7 +155,10 @@ final class AppState: ObservableObject {
         if activity == .searching { cancel() }
     }
 
-    private func invalidateDisplayedPhotos() { results = []; selection = nil; completedQuery = nil }
+    private func invalidateDisplayedPhotos() {
+        dismissPhotoCheck()
+        results = []; selection = nil; completedQuery = nil
+    }
 
     private func accept(progress: IndexProgress, token: UUID) {
         guard token == operationID else { return }
@@ -139,6 +168,7 @@ final class AppState: ObservableObject {
     private enum Outcome {
         case summary(LibrarySummary, String)
         case search(SearchResponse, String)
+        case photoCheck(PhotoDiagnosticReport, UUID)
     }
 
     private func schedule(_ activity: Activity, operation: @escaping @MainActor (UUID) async throws -> Outcome) {
@@ -165,12 +195,22 @@ final class AppState: ObservableObject {
                     self.results = response.hits
                     self.completedQuery = query
                     self.status = "\(response.hits.count) results · exact local scores, not probabilities."
+                case .photoCheck(let report, let checkID):
+                    if self.photoCheckID == checkID {
+                        self.photoCheckReport = report
+                        self.status = "Photo check complete. Your index is unchanged."
+                    }
                 }
                 self.activity = nil
             } catch {
                 guard let self, self.operationID == token else { return }
                 self.activity = nil
-                if error is CancellationError {
+                if activity == .checkingPhoto {
+                    if !(error is CancellationError), !Task.isCancelled {
+                        self.photoCheckIssue = "Could not finish this check. Keep the app open and confirm this photo is still accessible, then try again."
+                    }
+                    self.status = "Photo check stopped. Your index is unchanged."
+                } else if error is CancellationError {
                     self.status = "Cancelled. Completed records are saved; refresh or index again to resume."
                 } else {
                     self.errorMessage = error.localizedDescription

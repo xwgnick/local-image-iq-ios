@@ -12,21 +12,56 @@ struct CachedPhoto: Sendable {
 /// excluded parent also covers transient rollback journals created by SQLite.
 actor SQLitePhotoStore {
     let directory: URL
+    private let readOnly: Bool
     private var connection: SQLiteConnection?
 
-    init(directory: URL) { self.directory = directory }
+    init(directory: URL, readOnly: Bool = false) {
+        self.directory = directory
+        self.readOnly = readOnly
+    }
 
-    static func defaultDirectory() throws -> URL {
+    static func defaultDirectory(create: Bool = true) throws -> URL {
         let support = try FileManager.default.url(for: .applicationSupportDirectory,
-                                                  in: .userDomainMask, appropriateFor: nil, create: true)
+                                                  in: .userDomainMask, appropriateFor: nil, create: create)
         return support.appendingPathComponent("LocalImageIQIndex", isDirectory: true)
     }
 
     private func database() throws -> SQLiteConnection {
         if let connection { return connection }
-        let opened = try SQLiteConnection(directory: directory)
+        let opened = try SQLiteConnection(directory: directory, readOnly: readOnly)
         connection = opened
         return opened
+    }
+
+    /// One SELECT establishes a consistent cached-gallery snapshot and checks
+    /// target row presence even under an older model. No obsolete vectors are
+    /// decoded for that presence check. The private read-only handle is closed
+    /// on every exit, BEFORE the caller starts any Photos/encoder work.
+    func diagnosticSnapshot(modelVersion: String, selectedID: String) throws
+        -> (records: [CachedPhoto], selectedExists: Bool) {
+        guard readOnly else { throw AppFailure.storage("Diagnostics require a read-only cache connection.") }
+        defer { connection = nil }
+        try Task.checkCancellation()
+        let file = directory.appendingPathComponent("index.sqlite3")
+        guard FileManager.default.fileExists(atPath: file.path) else { return ([], false) }
+        let db = try database()
+        return try db.statement(Self.select + " WHERE p.model_version = ? OR p.id = ? ORDER BY p.id") { statement in
+            try db.bind(modelVersion, at: 1, to: statement)
+            try db.bind(selectedID, at: 2, to: statement)
+            var records: [CachedPhoto] = []
+            var selectedExists = false
+            while try db.next(statement) {
+                try Task.checkCancellation()
+                if try db.string(statement, at: 0) == selectedID { selectedExists = true }
+                if try db.string(statement, at: 2) == modelVersion { records.append(try decode(statement)) }
+            }
+            try Task.checkCancellation()
+            return (records, selectedExists)
+        }
+    }
+
+    private func requireWritable() throws {
+        guard !readOnly else { throw AppFailure.storage("This cache connection is read-only.") }
     }
 
     func record(id: String) throws -> CachedPhoto? {
@@ -64,6 +99,7 @@ actor SQLitePhotoStore {
 
     func save(_ cached: CachedPhoto) throws {
         try Task.checkCancellation()
+        try requireWritable()
         let photo = cached.photo
         guard photo.modificationTime.isFinite, photo.creationTime?.isFinite != false,
               !photo.id.isEmpty, !photo.modelVersion.isEmpty else { throw AppFailure.storage("Invalid photo metadata.") }
@@ -101,6 +137,7 @@ actor SQLitePhotoStore {
     /// rolls the whole reconciliation back; completed indexing writes remain reusable.
     func reconcile(completeEnumeration: [PhotoRevision]) throws {
         try Task.checkCancellation()
+        try requireWritable()
         let revisions = Dictionary(completeEnumeration.map { ($0.id, $0.modificationTime) }, uniquingKeysWith: { _, last in last })
         let db = try database()
         try db.transaction {
@@ -130,6 +167,7 @@ actor SQLitePhotoStore {
 
     func clear() throws {
         try Task.checkCancellation()
+        try requireWritable()
         // Also recovers an unreadable/unsupported database without first opening it.
         connection = nil
         for suffix in ["", "-journal", "-wal", "-shm"] {
@@ -169,18 +207,21 @@ private final class SQLiteConnection {
     private var handle: OpaquePointer?
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    init(directory: URL) throws {
+    init(directory: URL, readOnly: Bool = false) throws {
         let manager = FileManager.default
-        try manager.createDirectory(at: directory, withIntermediateDirectories: true,
-                                    attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
-        try manager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: directory.path)
-        var excluded = directory
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        try excluded.setResourceValues(values)
+        if !readOnly {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true,
+                                        attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+            try manager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: directory.path)
+            var excluded = directory
+            try excluded.setResourceValues(values)
+        }
         let file = directory.appendingPathComponent("index.sqlite3")
         var pointer: OpaquePointer?
-        let result = sqlite3_open_v2(file.path, &pointer, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil)
+        let flags = readOnly ? SQLITE_OPEN_READONLY : (SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE)
+        let result = sqlite3_open_v2(file.path, &pointer, flags | SQLITE_OPEN_FULLMUTEX, nil)
         guard result == SQLITE_OK, let pointer else {
             if let pointer { sqlite3_close(pointer) }
             throw AppFailure.storage("Unable to open SQLite (\(result)).")
@@ -188,15 +229,21 @@ private final class SQLiteConnection {
         handle = pointer
         // Clear the handle on failure so initialization cleanup cannot close twice.
         do {
-            try manager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: file.path)
-            var excludedFile = file
-            try excludedFile.setResourceValues(values)
-            try exec("PRAGMA journal_mode = DELETE")
-            try exec("PRAGMA synchronous = FULL")
-            try exec("PRAGMA secure_delete = ON")
+            if !readOnly {
+                try manager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: file.path)
+                var excludedFile = file
+                try excludedFile.setResourceValues(values)
+                try exec("PRAGMA journal_mode = DELETE")
+                try exec("PRAGMA synchronous = FULL")
+                try exec("PRAGMA secure_delete = ON")
+            }
             let version = try statement("PRAGMA user_version") { statement -> Int32 in
                 guard try next(statement) else { throw AppFailure.storage("Missing schema version.") }
                 return sqlite3_column_int(statement, 0)
+            }
+            if readOnly {
+                guard version == 1 else { throw AppFailure.storage("Unsupported cache schema version.") }
+                return
             }
             guard version == 0 || version == 1 else { throw AppFailure.storage("Unsupported cache schema version.") }
             try transaction {
