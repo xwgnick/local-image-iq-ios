@@ -1,8 +1,92 @@
 # Native generated-model parity — SigLIP 2 / schema 2
 
-## Current status: 0.3.1 (7) — native parity passed; IPA verified
+## Current status: 0.3.2 (8) — all eight native parity tests passed; IPA verified
 
-Source HEAD `18ad52d37690ecfbf92b63a21285a6c3e8e753d4`;
+Source `b40d2faaf11b2f499779881b4863325fa7dae659`;
+[CI 35848409845](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845)
+/ [job 107140049230](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845/job/107140049230):
+**SUCCESS on the first attempt**. All **8 GeneratedModelParityTests passed in
+101.581 seconds**, including the new real four-image-actor gate. App version
+**0.3.2 / build 8**, device packaging and the complete local IPA download/length/hash
+are verified. This documentation-only edit records supplied verified results; it
+runs no commands, tests, CI queries/retries, downloads or phone actions.
+
+The user explicitly requested **four indexing workers**. Each slot uses its own
+image `MLModel` actor for PhotoKit-preview preprocessing/inference. The factory
+reuses one persistent primary image encoder and creates three indexing-scoped,
+lazily loaded image-only actors; their scoped ownership ends after all children
+drain and the index call exits. **ONE central text model and ONE tokenizer remain**,
+not four paired/text models. The three extra image instances and concurrent
+intermediates are an explicit memory trade-off, not a measured phone-memory result.
+
+The rolling production window includes running AND finished-but-uncommitted work
+in its fixed **4** positions: no fifth outstanding item and no unbounded pending
+preview/result queue. One ordered commit frees one position immediately, not a
+four-item batch barrier. The parent keeps locations, place-text deduplication,
+writes and progress in snapshot order; saves precede their counters. Cancellation/
+fatal exit cancels and awaits all four children before the next serialized job;
+late PhotoKit callbacks remain gated out. Valid cache hits fetch no preview and
+run no image inference; a cache-only scan does not load the extra three models.
+No new timeout, automatic retry, arbitrary row/byte limit or networking change.
+
+Same SigLIP 2 weights/revision, FP32, schema/modelVersion, tokenizer, preprocessing,
+`photokit-preview-v1`, **2,943-feature** geography pack, centered score and **0.6**
+default location weight. This run's device report confirms the unchanged model and
+pack identities; this run's passing native gates validate the new model ownership,
+not merely the unchanged weights or historical results below.
+Four actors or simulator `.all` results do not prove physical GPU/ANE overlap,
+**4× speed**, phone latency/memory/heat or private-photo quality.
+
+| Build 8 gate | Verified result / remaining boundary |
+| --- | --- |
+| Core / export / places / model and App checks | All passed; Swift core 79 passed. Model-report parityPassed:true; raw exact extrema were not returned, so no old extrema are copied as build 8 measurements. |
+| IndexPipelineTests | All 19 passed, including 4 new tests; separate pipeline/order/cancellation/cache tests, not generated-model numerical gates. |
+| Default factory boundary | New test passed for four injected slots and pre-cancellation; mocks alone are not real-model independence proof. |
+| GeneratedModelParityTests | All 8 passed in 101.581 seconds, including the production four-slot image factory test. |
+| New four-slot factory parity | Passed: 6 fixtures × 4 real image actors = 24 predictions; 48 normalized comparisons + 12 tensor measurements = 60. Counts and image cosine ≥ 0.995 gates asserted and passed. |
+| Original production API parity | Passed: unchanged 23 predictions / 58 measurements and numerical gates; retained alongside, not replaced by, the new test. |
+| Full model-enabled App run | 221 total / 220 passed / 1 physical-device file-protection skip on simulator / 0 failures. The App suites above are included, not additional tests. |
+| UI tests | All 7 passed in 209.329 seconds; visual review is narrower, as recorded below. |
+| Build 8 resource/device/IPA checks and complete download | Passed; version 0.3.2 / build 8 verified. Local stream download COMPLETE, actual bytes/hash verified; checksum and device-build JSON exist, no partial file remains. |
+| Physical phone / redistribution | PENDING-DEVICE / PENDING-LICENSE-REVIEW — separate boundaries, not implied by native CI. |
+
+### Verified build 8 package, identities and limited screenshot review
+
+- [IPA artifact 10745235946](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845/artifacts/10745235946):
+  outer **1,414,636,737 bytes**, inner IPA **1,414,629,419 bytes**;
+  IPA SHA-256 `7d37581966a45028213a52a0a9c504e2ed273293a92bbbad4ab9d77a0d73ef8e`.
+  Completed local download:
+  [build/device-download/35848409845/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35848409845/LocalImageIQ-iphoneos-unsigned.ipa).
+  Still unsigned; local Sideloadly signing is required.
+- Device report confirms unchanged modelVersion
+  `siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`
+  and the **2,943-feature** pack, GeoJSON SHA-256
+  `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`.
+  Full pack identity: [BUILD_STATUS.md](BUILD_STATUS.md).
+- **20 UI frames retrieved; only 3 index/place frames reviewed**, in the
+  [960×680 contact sheet](../build/ui-review/35848409845/four-workers-ui-contact.jpg):
+  Library after backfill, Library with zero GPS, and Settings with locations not
+  checked. Disclosures stayed collapsed; expanded counters and the other 17
+  frames were not reviewed. These synthetic scenes are not four-worker
+  physical-device proof or private-library GPS observations.
+
+Normal overwrite installation with the same Sideloadly account/effective Bundle ID
+and **Library → Index / resume** reuses compatible 0.3.0/0.3.1 caches; do not uninstall
+or clear index/cache for the update. For the user's optional from-zero speed test,
+**after installation choose Settings → Clear index, then Library → Index / resume**,
+with network off and the app foreground. Clearing loses App index/cache data
+**but not system photos**; it is not an upgrade prerequisite. Compare 0.3.1 vs 0.3.2
+with the same geopack, empty indexes, phone/photo set/count and comparable
+temperature/heat/power. No actual speed/memory test has been performed, and no
+index rescue or additional diagnostics are required. Verified result ledger:
+[BUILD_STATUS.md](BUILD_STATUS.md); full pipeline: [INDEX_PIPELINE_PLACES.md](INDEX_PIPELINE_PLACES.md).
+
+## Historical evidence: 0.3.1 (7) — native parity passed; IPA verified
+
+All results and then-current installation steps in this build 7 section are older
+evidence, not verification or delivery of build 8's four-worker implementation.
+
+Source `18ad52d37690ecfbf92b63a21285a6c3e8e753d4`;
 [CI 35840838147](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147)
 / [job 107115240763](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147/job/107115240763).
 **SUCCESS on the first attempt, with no fix/retry needed**; logs contain
@@ -80,7 +164,7 @@ license review remains separate. Full scope and delivery evidence:
 ## Historical evidence: 0.3.0 (6) — native parity passed; IPA verified
 
 All execution counts, measured values, package and review results in this section
-belong to the previous build 6, not build 7.
+belong to the older build 6, not build 7 or build 8.
 
 User-approved paired model replacement, source
 `f9a2c85e9307cf365a8c2f62ec57eaf6e01bad78`.
@@ -128,8 +212,9 @@ full same-tensor controls and numerical thresholds were not weakened or bypassed
 
 Historical CLIP/WordPiece/raw-512 reports and prior successful builds are retained
 in [BUILD_STATUS.md](BUILD_STATUS.md). They are not proof for SigLIP 2. All
-acceptance requirements below describe the unchanged tests that passed in the
-corrected build 6 run and again in build 7, whose XCTest evidence is recorded above.
+original acceptance requirements below describe the seven tests that passed in
+corrected build 6 and again in build 7. Build 8 retains those gates and adds the
+eighth factory-parity test; all eight passed in build 8's verified run above.
 Physical-iPhone behavior/performance and license review remain separate boundaries.
 
 ## Authoritative model and tokenizer contract
@@ -174,9 +259,9 @@ using the field names from that exporter and
 surrogate reference embeddings, download weights, compile models at runtime,
 or touch personal photos.
 
-The native consumer and generated tests target this contract and passed in the
-historical corrected build 6 run and in the current build 7 run above. Source
-presence alone would not establish execution. This
+The original seven generated tests target this contract and passed in historical
+builds 6 and 7 above. Build 8's refactored consumer and new eighth test also passed
+native execution in run 35848409845. This
 documentation edit performs no export, test run, installation or CI action;
 passing source checks or Python export alone is not a native parity result.
 
@@ -233,10 +318,11 @@ its skip cannot conceal missing resources in an enabled build.
 
 ## Tests and numerical acceptance
 
-The requirements below remain the unchanged test contract. Both build 6 and
-build 7 passed all seven tests; their run-specific timings and totals are separate
-above. Per-test prediction/measurement counts below are assertions in that contract,
-not extra suite tests or additional exporter comparisons.
+The original seven tests and thresholds remain unchanged, with an eighth test
+added for the real four-image-encoder factory. Builds 6 and 7 passed the original
+seven; build 8 passed all eight. Per-test prediction/measurement counts below
+were asserted and passed in build 8, not merely planned coverage; they are not
+extra suite tests or exporter comparisons.
 
 | Test | Input and acceptance |
 | --- | --- |
@@ -246,14 +332,15 @@ not extra suite tests or additional exporter comparisons.
 | `testNativeImagePreprocessingCPUParity` | Decode all six PNGs through native preprocessing; attach full-tensor maxAbs/MAE. Raw and normalized embedding cosine ≥ 0.995 against both references. Interpolated pixel errors are diagnostic, not bit-exact gates; EXIF rotation/mirroring and both low-resolution inputs are mandatory. |
 | `testKnownSolidRGBNormalizationWithoutModels` | Six uniform sRGB colors: (31,127,223), red, green, blue, black, white. Every NCHW component matches independently pinned mean/std 0.5 within 0.00001. Requires no models and does not derive expected constants from production code. |
 | `testGeneratedPairAllComputeUnitsParityWhenRequested` | Opt in with `IMAGEIQ_TEST_ALL_COMPUTE_UNITS=1`. Repeat both text-input paths, unchanged image-tensor control, and native image preprocessing with `.all`, using the same numerical criteria. This is separate from the CPU export-comparison gates. |
-| `testAppEncodersModelSizedPreviewAndAllTextReferenceParity` | Exercise production `CoreMLEncoders` with `.all` in every model-enabled build, independently of the optional-engine flag. Six actual-sized synthetic CGImage previews + 17 texts yield 23 predictions. Outputs must already be 768D unit vectors (norm error ≤ 1e-5); compare to each normalized raw reference with image cosine ≥ 0.995 and text cosine > 0.999. The 58-measurement count was asserted and passed; details below. |
+| `testAppEncodersModelSizedPreviewAndAllTextReferenceParity` | PASSED in build 8, with the same gates as builds 6/7. Exercise production `CoreMLEncoders` with `.all` in every model-enabled build, independently of the optional-engine flag. Six actual-sized synthetic CGImage previews + 17 texts yield 23 predictions. Outputs must already be 768D unit vectors (norm error ≤ 1e-5); compare to each normalized raw reference with image cosine ≥ 0.995 and text cosine > 0.999. The 58-measurement assertion passed unchanged. Details below. |
+| `testIndexingImageFactoryAllSlotsConcurrentPreviewParity` | NEW in build 8, PASSED. Call production `makeIndexingImageEncoders()` on one owner with `.all`, independently of the optional-engine flag. Retain all four real image actors; predict each of six raw CGImage fixtures on all four slots concurrently. Require exactly one output per slot per fixture, 24 predictions, already-normalized 768D outputs with norm error ≤ 1e-5 and image cosine ≥ 0.995 against each normalized raw reference. Assert 48 embedding comparisons + 12 tensor measurements = 60. All counts/gates passed. No four-text-model construction, timing gate or physical GPU/ANE concurrency claim. |
 
 The production API test retains raw ImageIO pixels, including **68×120** and
 **112×199**, until the App actor performs its 224×224 warp. There is no test-side
 preview upscaling or PNG/JPEG round trip. ImageIO reads actual EXIF orientation;
 fixture metadata is a check, not a substitute for that observation.
 
-Asserted counts for this API test, which passed in both build 6 and build 7:
+Asserted counts for this API test, which passed unchanged in builds 6, 7 and 8:
 
 - 6 image + 17 text predictions = **23**.
 - 6 exact direct-CGImage/native-data tensor comparisons + 6 diagnostic native/HF
@@ -263,12 +350,29 @@ Asserted counts for this API test, which passed in both build 6 and build 7:
 - Do not normalize the App output again and hide a normalization bug. The test
   checks its norm directly. These counts are not the entire suite's test count.
 
-Separately, the exporter completed 23 cases × four stages = **92** comparisons:
+The **new factory test's independent counts** were asserted and passed in build 8:
+
+- 6 image fixtures × 4 production image slots = **24** predictions. Reuse the same
+  four actors across fixtures; the first fixture's completed group has exercised
+  all four real image models. One owner loads the text model only once.
+- 24 already-normalized outputs × two normalized raw references = **48** embedding
+  gates, with the same image cosine ≥ 0.995 and direct norm check as the old API gate.
+- Decode/inspect each fixture once, preserving EXIF and actual 68×120 / 112×199
+  pixels until production preprocessing: 6 direct/native tensor comparisons +
+  6 diagnostic native/HF tensor comparisons = **12** tensor measurements, not 12
+  per slot. Total **60**; diagnostic tensor errors are not new bit-exact Pillow gates.
+- This is a separate eighth test, not a replacement or loosening of the original
+  **23/58** test. Both tests' counts and gates are executed, passing build 8 results.
+
+Separately, in historical builds 6 and 7, the exporter completed
+23 cases × four stages = **92** comparisons:
 `referenceVsWrapper`, `wrapperVsTrace`, `traceVsCoreML`, `referenceVsCoreML`.
 Every stage requires cosine > 0.999; the first two require maxAbs ≤ 1e-5, the
 saved Core ML comparisons ≤ 1e-3. The 17×6 paired cosine matrix has 102 entries
 and requires maxAbs ≤ 1e-4; independent Pillow/HF pixels require ≤ 1e-6.
-All export gates passed in build 6 and build 7. Their measured minima/maxima are
+All export gates passed in builds 6 and 7; build 8's export also passed, with
+model-report `parityPassed:true`. Build 8 raw exact extrema were not returned and
+are not inferred from historical numbers. The older measured minima/maxima are
 recorded in the separate run sections above; build 7's own model-report artifact
 10741671604 supplies its values even though they match build 6 numerically.
 
@@ -352,18 +456,28 @@ discrepancies. Synthetic patterns do not prove real-photo retrieval quality.
 
 Tests call the production tokenizer, Int32 tensor builder, image preprocessing,
 and `CoreMLEncoders.normalizedProjection`. Direct model tests use `MLModel`
-because the actor's raw predictions/configuration are private and it selects
+because production raw predictions/configuration are private and the actors select
 `.all`. CPU raw-component comparisons therefore need no production visibility
-change. The separate API test exercises the actual actor's prepare, image-preview
-and text calls. Neither path establishes PhotoKit availability, cancellation,
+change. The existing API test exercises the actual owner's prepare, image-preview
+and text calls. The new test exercises all four production image-factory slots.
+None of these numerical paths establishes PhotoKit availability, cancellation,
 persistence or search UI behavior. Output coordinate indexing honors Core ML
 strides instead of assuming contiguous memory.
 
-Each role's model is loaded once per test, outside query/fixture loops, not once
-per query. All fixtures run serially with a per-fixture `autoreleasepool`.
-Only one image fixture's bytes/tensors are processed at a time. The optional
-pair test finishes/releases the text model before loading the image model.
-The production API test reuses one encoder actor for all 23 predictions.
+Direct single-model tests load each role once before its fixture loop. Production
+tests reuse their owners/actors rather than recreating models per query; the new
+factory's three extra image models load lazily on first use in the first fixture,
+then remain loaded across the other five. Existing tests iterate fixtures serially with per-fixture
+`autoreleasepool` work. The new factory test iterates the six fixtures serially
+but runs **four image predictions concurrently within each fixture**. It keeps
+one central owner (one text model/tokenizer), the primary image actor and three
+extra image actors for all 24 predictions; it does not load four text models.
+Only one fixture's raw input is selected at a time, although four predictions
+can each allocate their preprocessing/inference intermediates. This test grouping
+is not the production scheduler, whose window rolls forward per ordered commit
+rather than waiting on a four-item batch. The optional pair test finishes/releases
+the text model before loading the image model. The original production API test
+reuses one owner and its primary image actor for all 23 predictions.
 Xcode runner-level parallelization is separate; select serial test execution
 when memory measurements require avoiding overlapping test processes. The
 suite adds no arbitrary memory caps, timeout rules, or speed requirements.
@@ -389,21 +503,32 @@ this suite does not rewrite them to "passed". Only a subsequently executed
 native XCTest result can establish these gates, on the OS and requested compute
 configuration recorded in that run. Runs 35824403795 (build 6) and 35840838147
 (build 7) each supplied passing native results; their pre-XCTest JSON markers are
-not failed or unexecuted XCTest results.
+not failed or unexecuted XCTest results. Run 35848409845 (build 8) supplied its own
+verified eight-test native pass, including the new real four-image-actor test;
+this is not a reuse of the older seven-test results.
 
 ## Migration, device use and unchanged boundaries
 
-### Current: 0.3.0 → 0.3.1, reuse image vectors and backfill places
+### Current: 0.3.0 / 0.3.1 → 0.3.2, normally reuse image vectors
 
-The semantic modelVersion and image policy do not change. The new IPA has passed
-its gates and been completely downloaded/verified. Overwrite with the same
-Sideloadly account/effective Bundle ID and open **Library → Index / resume** once.
-Do not uninstall, clear storage or rebuild every image vector. Still-valid 0.3.0
-rows bypass pixel fetch and image inference while locations are checked; changed
+The semantic modelVersion and image policy do not change. Build 8's CI, IPA gates
+and complete local byte/hash-verified download are finished. Use that package to
+overwrite with the same Sideloadly account/effective Bundle ID and use
+**Library → Index / resume** normally. Do not uninstall; no index clear or full
+image rebuild is required. Still-valid 0.3.0/0.3.1 rows bypass preview fetch and
+image inference while locations are checked; changed
 labels/geography or removed GPS can update/remove place embeddings, and compatible
 distinct-place text vectors can be reused. New/changed photos encode normally.
 Keep the app open and network off; interrupted indexing resumes through the same
 entry. No original-download prerequisite or additional diagnostic round is added.
+
+For the user's optional **from-zero** timing comparison, after installation choose
+**Settings → Clear index**, then **Library → Index / resume**, with network off
+and the app foreground. This loses the existing index/cache, not system photos.
+Compare 0.3.1 and 0.3.2
+using the same geography pack, both empty indexes, same phone/photo set/count,
+network off and comparable heat/power conditions. Do not conflate this optional
+test with normal update/resume. No actual speed or memory result is available.
 
 ### Historical: 0.2.x CLIP → 0.3.0 SigLIP 2 model migration
 
@@ -412,7 +537,7 @@ Legacy 512D cache decoding exists only for migration, not SigLIP 2 search or a
 fallback encoder. The build 6 IPA was verified: overwrite with the same Sideloadly
 account/effective Bundle ID, then **must use Library → Index / resume once**.
 Before new vectors exist, old-model usable coverage is expected to be **0**
-because that model changed. This does not apply to valid 0.3.0 rows in build 7.
+because that model changed. This does not apply to valid SigLIP 2 rows in builds 7/8.
 Do not uninstall or manually clear the index.
 Interrupted indexing reuses completed,
 still-valid new rows. Photo `id` primary-key replacement means retained old IPA
@@ -423,8 +548,9 @@ files are not old-index backups; rollback cannot promise restored old vectors.
 `photokit-preview-v1` remains preview-first with reduced images accepted, network
 default off, and fallback only after explicit user opt-in. Original downloads
 are not required. This is not a preview-quality fix or a promise that every
-cloud photo is available offline. After indexing, normal use is enough; no
-extra test queries, diagnostic screenshots or user testing round is requested.
+cloud photo is available offline. After indexing, normal use is enough; beyond
+the user's optional cold speed comparison, no extra test queries, diagnostic
+screenshots or additional user testing round is requested.
 
 Synthetic numerical parity is not retrieval-quality evidence. The desktop
 comparison had language/query/resolution trade-offs, not universal improvement;

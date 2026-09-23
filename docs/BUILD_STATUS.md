@@ -1,8 +1,142 @@
 # Cloud build status — 2026-09-23
 
-## Current: 0.3.1 (7) — SUCCESS first attempt; IPA downloaded and verified
+## Current: 0.3.2 (8) — four workers passed first attempt; IPA downloaded and verified
 
-Source HEAD: `18ad52d37690ecfbf92b63a21285a6c3e8e753d4`.
+Source: `b40d2faaf11b2f499779881b4863325fa7dae659`.
+[Run 35848409845](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845)
+/ [job 107140049230](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845/job/107140049230):
+**SUCCESS on the first attempt**. App version **0.3.2 / build 8** is verified.
+Core, export, places, model/App resource checks, native/UI tests and device
+packaging passed; the local IPA download and actual length/hash verification are
+complete. Physical-phone performance remains unmeasured. This edit records the
+supplied verified results only; it runs no commands, tests, downloads, CI
+queries/retries or phone actions.
+
+### Implemented scope — the user's explicit four-worker request
+
+- A fixed **four-slot rolling window** covers child cache reads, PhotoKit preview
+  retrieval, preprocessing and image inference. Running and finished-but-not-yet-
+  committed items **together occupy at most four slots**. A slow snapshot head can
+  stall submission: an out-of-order completion does not admit a fifth outstanding
+  item or grow an unbounded reorder queue. Each ordered commit frees one slot
+  immediately; this is **not a four-item batch barrier**.
+- Production slots have independent image `MLModel` actors. Slot 0 reuses the
+  persistent primary image encoder; three additional image-only actors are scoped
+  to this indexing call, load lazily on first use, and lose their scoped ownership
+  after the children drain and the call exits. **One central text model and one
+  tokenizer remain**, not four model pairs or four text models. Cache-only indexing
+  does not load the three extra image models; valid image hits fetch no previews
+  and perform no image inference.
+- The parent alone handles locations, distinct-place text-cache reuse/deduplication,
+  database writes and progress in snapshot order. Successful saves precede their
+  published counters. Finished results retain embeddings/errors, not preview pixels.
+  Cancellation/fatal scope exit cancels and awaits all up-to-four Swift children
+  before the next serialized operation; an in-flight synchronous Core ML call may
+  finish before draining. Late PhotoKit callbacks are gated out, not evidence of an
+  OS cancellation acknowledgement.
+- The extra **three image models plus concurrent preprocessing/inference state**
+  are an explicit memory trade-off. Releasing scoped references is not a measured
+  immediate OS-memory reduction. Four actors do not prove four simultaneous GPU/ANE
+  executions, **4× speed**, or any physical-device speed/memory/heat outcome.
+- No new job timeout, automatic retry, arbitrary row/byte ceiling or whole-library
+  batch limit. Four is the requested concurrency window, not a library-size limit.
+  Same SigLIP 2 paired weights/revision, FP32, semantic modelVersion, preprocessing,
+  `photokit-preview-v1`, **2,943-feature** geography pack, scoring formula and default
+  location weight **0.6**. Network remains off by default with explicit opt-in only;
+  no originals-download requirement. This run's device report confirms the
+  unchanged model and geography identity recorded below.
+
+### Validation ledger — observed build 8 results
+
+Four new pipeline tests bring that suite from 15 to **19**; one injected-default-
+factory boundary test and one real-model four-encoder parity test bring the App
+source total from 215 to **221**. The generated-model suite grows from 7 to **8**.
+The actual model-enabled App result is **221 total / 220 passed / 1 physical-device
+file-protection test skipped on simulator / 0 failures**. The suites below are
+included in the App total, not additional tests to add again.
+
+| Gate | Verified build 8 result / remaining boundary |
+| --- | --- |
+| Windows local Node checks | Reported PASS; not rerun by this edit and not native proof. |
+| CI conclusion / job | SUCCESS first attempt: run 35848409845 / job 107140049230, linked above. |
+| Source/static, places, model and App checks | All passed, including model export, geography generation/validation and bundled-resource checks; no historical test count is substituted for a new count. |
+| Pure Swift core | 79 passed. |
+| Model export report | Passed; model-report parityPassed:true. Raw exact extrema were not returned, so no historical minimum/maximum is relabelled as a build 8 measurement. |
+| App XCTest summary | 221 total, 220 passed, 1 physical-protection skip on simulator, 0 failures. |
+| IndexPipelineTests | All 19 passed, including the 4 additions; overlap, ordered-window, drain/resume and centralized place-cache contracts. |
+| Default factory boundary | New injected-slot/pre-cancellation test passed; mocks alone do not prove production model independence. |
+| GeneratedModelParityTests | All 8 passed in 101.581 seconds, including the new real four-image-actor factory gate. 6 fixtures × 4 slots = 24 predictions; 48 normalized comparisons + 12 tensor measurements = 60, with counts and image cosine ≥ 0.995 gates asserted and passed. |
+| Existing production App encoder API gate | Passed with unchanged 23 predictions / 58 measurements and thresholds; retained alongside the new 24/60 gate. |
+| UI tests | All 7 passed in 209.329 seconds. |
+| Native screenshot review | 20 frames retrieved; only 3 index/place frames reviewed in the 960×680 contact sheet below. Collapsed disclosures were not expanded. |
+| Simulator/device resources, arm64 Release and IPA validation | Passed; device report verifies 0.3.2 / build 8 and unchanged model/pack identity. Unsigned device package, not physical-device execution. |
+| Artifact / bytes / SHA-256 | Artifact 10745235946; verified identity and exact byte/hash values below. |
+| Complete local IPA download | COMPLETE: bounded-memory stream, actual local bytes/hash verified; checksum and device-build JSON exist, no partial download remains. |
+| User-side signing/install; physical-phone speed, memory/heat, file protection and GPS coverage | PENDING-DEVICE — no phone run or additional diagnostics requested by this edit. |
+| Model/geography redistribution | PENDING-LICENSE-REVIEW — unchanged separate release requirement. |
+
+### Verified build 8 device package and completed download
+
+- [Unsigned IPA artifact 10745235946](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845/artifacts/10745235946):
+  outer artifact **1,414,636,737 bytes**; inner IPA **1,414,629,419 bytes**.
+- IPA SHA-256:
+  `7d37581966a45028213a52a0a9c504e2ed273293a92bbbad4ab9d77a0d73ef8e`.
+- **Download actually completed** using bounded-memory streaming. Actual local
+  byte length and SHA-256 were verified at
+  [build/device-download/35848409845/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35848409845/LocalImageIQ-iphoneos-unsigned.ipa).
+  The checksum file and device-build JSON exist alongside it; **no partial download
+  remains**. This is the verified **0.3.2 / build 8** unsigned package, still
+  requiring local Sideloadly signing.
+- This run's device report confirms the unchanged modelVersion:
+  `siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`.
+  Both towers retain `google/siglip2-base-patch16-224`, revision
+  `75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2`, FP32 and the same preprocessing.
+- The same device report confirms the unchanged **2,943-feature** places pack:
+  **15,175,079 GeoJSON bytes, CHN/FRA/DEU/NLD, 8 sources**. GeoJSON SHA-256:
+  `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`.
+  Manifest SHA-256:
+  `0b060aab6515670f136beed831ec043fe8d9e9bdce25c23802e8e9b3bda61812`.
+  These are confirmed build 8 device-package identities, not an inference from
+  unchanged source or build 7 results.
+
+### Bounded build 8 visual review — not a four-worker phone test
+
+**20 native UI screenshots retrieved; only 3 index/place frames reviewed**:
+Library after backfill, Library with zero GPS, and Settings with locations not
+checked, in the **960×680**
+[build/ui-review/35848409845/four-workers-ui-contact.jpg](../build/ui-review/35848409845/four-workers-ui-contact.jpg).
+Disclosures stayed collapsed; their expanded internal counters were not visually
+reviewed. The other 17 frames were not reviewed. Synthetic scenes do not establish
+user GPS coverage, four-worker execution on a physical phone, speed or memory/heat.
+
+### Update normally; optionally start from zero for the user's speed comparison
+
+Use the verified **build 8** package above and overwrite using the same Sideloadly
+account and effective Bundle ID; do not uninstall or clear index/cache for the update. Normal
+**Library → Index / resume** reuses still-valid 0.3.0/0.3.1 SigLIP 2 image vectors,
+checks/backfills places as needed, and encodes only new/changed images. Resume
+after interruption through the same entry; keep the app foreground and network off.
+
+The user wants a from-zero indexing speed comparison. **Optionally clear the index
+only for that deliberately chosen cold test**: after installation, choose
+**Settings → Clear index**, then **Library → Index / resume**, with network off
+and the app foreground. This removes the App's existing index/cache, **not photos
+in the system library**, and requires reindexing. Clearing is
+not an update prerequisite or normal-resume requirement. Compare **0.3.1 vs 0.3.2
+with the same geography pack**, both starting with an empty index, the same phone,
+authorized photo set/count, network off and comparable temperature/heat and power
+conditions. A warm cache-resume is not a cold-build comparison. No speed measurement
+or physical memory test has been made, no phone action is performed here, and no
+index-rescue or extra diagnostic/query round is required. Detailed contracts:
+[INDEX_PIPELINE_PLACES.md](INDEX_PIPELINE_PLACES.md),
+[NATIVE_PARITY.md](NATIVE_PARITY.md), [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md).
+
+## Historical: 0.3.1 (7) — SUCCESS first attempt; IPA downloaded and verified
+
+The following build 7 results, one-ahead implementation and installation handoff
+are older evidence, not success or delivery evidence for current build 8.
+
+Source: `18ad52d37690ecfbf92b63a21285a6c3e8e753d4`.
 [Run 35840838147](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147)
 / [job 107115240763](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147/job/107115240763).
 **SUCCESS on the first attempt; no fix or retry was needed.** Logs contain
@@ -108,7 +242,7 @@ These synthetic numerical checks do not measure real-photo retrieval quality.
 
 Implementation, provenance and test contracts: [INDEX_PIPELINE_PLACES.md](INDEX_PIPELINE_PLACES.md).
 
-### Install the verified build 7 package; backfill places once
+### Historical build 7 handoff: install the verified package; backfill places once
 
 Overwrite with the same Sideloadly account/effective Bundle ID; **do not uninstall,
 clear the index or re-encode the whole existing 0.3.0 image library**. Open
@@ -135,7 +269,7 @@ TestFlight/distribution configuration; no store submission has occurred.
 ## Historical: SigLIP 2 · 0.3.0 (6) — SUCCESS; IPA downloaded and verified
 
 Everything in this build 6 section, including its migration instructions, metrics,
-package and screenshot review, belongs to the previous release, not build 7.
+package and screenshot review, belongs to the older release, not build 7 or build 8.
 
 Source: `f9a2c85e9307cf365a8c2f62ec57eaf6e01bad78`.
 [Run 35824403795](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35824403795)
