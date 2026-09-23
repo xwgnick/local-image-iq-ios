@@ -1,6 +1,134 @@
 # Cloud build status — 2026-09-23
 
-## Read-only single-photo check · 0.2.1 (5)
+## Current: SigLIP 2 · 0.3.0 (6) — SUCCESS; IPA downloaded and verified
+
+Source: `f9a2c85e9307cf365a8c2f62ec57eaf6e01bad78`.
+[Run 35824403795](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35824403795)
+/ job `107062896845`: **SUCCESS**, the corrected run. The logs report
+`TEST SUCCEEDED` and `BUILD SUCCEEDED`. This documentation-only update records
+the completed run and verified download; it does not rerun CI or claim a
+physical-device result.
+
+Initial [run 35823153931](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35823153931)
+at `aee4cdc00be92e1699f68baa9ef7ccc72cbcfbda` **failed**. It passed all 30 static tests, 79 core tests, model conversion
+and same-tensor native prediction, but failed native compatibility checks: Quartz
+resizing did not match bilinear interpolation for the 68×120/112×199 inputs, and
+Swift lowercasing omitted Unicode Final_Sigma context. All seven UI tests passed.
+The fix replaces resizing with explicit Pillow-compatible 22-bit separable
+bilinear filters and implements Unicode Final_Sigma. It does not change fixtures,
+thresholds, PhotoKit policy or queries. Ten resampler and three Unicode regression
+tests were added. The corrected run above now passes both low-resolution native
+cases and the exact Gemma token checks, including Final_Sigma. Full same-tensor
+controls and numerical gates were retained, not weakened to obtain a pass.
+
+The user approved replacing BOTH encoders with `google/siglip2-base-patch16-224`,
+same revision `75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2` for image and text.
+[IMPLEMENTATION_CONTRACT.md](IMPLEMENTATION_CONTRACT.md) is authoritative:
+schema 2, 768-dimensional raw outputs, 64 text positions, only `input_ids` as
+text input, both original tokenizer JSON resources, explicit lowercase and
+EOS/right-padding policy. The App pins `swift-transformers` 1.3.4 / `Tokenizers`
+for local JSON loading; the Foundation-only core is separate. Do not mix a
+SigLIP image encoder with the retired CLIP text encoder or old index vectors.
+
+### Completed validation — evidence from corrected run 35824403795
+
+| Gate | Current evidence / remaining boundary |
+| --- | --- |
+| Python static checks | 30 passed, reported for this change; not rerun by this documentation edit. Static checks are not model export or native parity. |
+| Pure Swift core | 79 passed, zero failures in this run. |
+| FP32 Python/Core ML export | Passed: 17 texts + 6 synthetic images = 23 cases, 92 stage comparisons and a 17×6 paired cosine matrix; measured values below. |
+| Native generated parity | All 7 GeneratedModelParityTests passed in 72.985 seconds: exact Gemma IDs/masks including Final_Sigma, same-tensor runtime, native preprocessing and requested CPU / `.all` checks. No parity skip. |
+| Production encoder API coverage | Passed with asserted counts: 23 predictions (17 text + 6 image previews), 58 measurements (12 tensor + 46 normalized embedding comparisons). These are executed results, distinct from the exporter's 92 comparisons; diagnostic tensor measurements are not bit-exact Pillow gates. |
+| App tests | 178 total: 177 passed, 1 physical-device file-protection test explicitly skipped on simulator, 0 failures. The 7 generated parity tests are included, not additional App tests. |
+| UI tests | All 7 passed on the iOS 18.5 simulator; `TEST SUCCEEDED`. |
+| Device build | iPhoneOS arm64 Release `BUILD SUCCEEDED`; unsigned FP32 package, not a physical-iPhone execution test. |
+| New unsigned IPA | Artifact 10734323054 downloaded completely with bounded-memory streaming; local length and SHA-256 verified. Identity and link below. |
+| iPhone behavior / performance | `PENDING-DEVICE`: not established by static, CPU or simulator results; no additional user diagnostic/query round is requested. |
+| Distribution review | `PENDING-LICENSE-REVIEW`: shared model card declares Apache-2.0; copying license evidence is not legal certification. |
+
+Measured FP32 export report (not physical-device measurements):
+
+| Metric | Corrected-run value |
+| --- | --- |
+| Minimum embedding cosine across 92 comparisons | 0.9999999999960657 |
+| Maximum raw component difference | 0.000011444091796875 |
+| Maximum paired text/image cosine matrix difference | 1.8557397291063538e-7 |
+
+Model version:
+`siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`.
+The export JSON's native `not-run` statuses were produced **before XCTest**;
+they are provenance, not failures or a claim that the subsequent native tests
+did not run. The later passing XCTest results establish native parity. Exact
+token IDs/masks, full same-input tensor controls and all numerical thresholds
+remain unchanged; synthetic parity is not real-library quality evidence.
+
+### Verified IPA and bounded visual review
+
+- Toolchain: **Xcode 16.4 / Swift 6**, with App Swift 5 language mode;
+  **iphoneos18.5 SDK / arm64 / minimum iOS 17.0 / FP32**.
+- [Unsigned IPA artifact 10734323054](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35824403795/artifacts/10734323054):
+  outer artifact **1,408,905,095 bytes**; inner IPA **1,408,903,848 bytes**.
+- IPA SHA-256:
+  `529b8ae5f708f57d14929fccf4a374dfb943d0e950b7671239e99f69b5acd98e`.
+- **Download actually completed**, with bounded-memory streaming and verified
+  local length/SHA-256:
+  [build/device-download/35824403795/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35824403795/LocalImageIQ-iphoneos-unsigned.ipa).
+  This is the new build 6 package, not an older IPA or a pending download.
+  It remains unsigned and requires local Sideloadly signing before installation.
+- **17 native UI screenshots retrieved; only 4 reviewed**: Home, Library,
+  Settings and hero-results layout, in the downscaled
+  [build/ui-review/35824403795/siglip2-ui-contact.jpg](../build/ui-review/35824403795/siglip2-ui-contact.jpg).
+  Synthetic/test scenes only, no private photos. Retrieval of the other 13 is
+  not visual review; neither these screenshots nor simulator `.all` tests
+  establish physical-phone performance or actual Neural Engine execution.
+
+### Installation and required vector migration
+
+1. Overwrite using the same Sideloadly account and effective Bundle ID. **Do not
+   uninstall or manually clear the index.**
+2. **Now open Library → Index / resume once** to generate the new vectors; this
+   is required because the model changed. Before new vectors exist, usable
+   coverage from old-model rows is expected to be **0**, not a reason to clear
+   storage. Keep network access off. Original-photo downloads / “Download and Keep Originals”
+   are not prerequisites. If interrupted, resume there; completed, still-valid
+   new-version rows are reused.
+3. Use search and photos normally. No further test queries, screenshots or
+   single-photo diagnostics are required for this handoff.
+
+Legacy 512D CLIP rows can be decoded ONLY to support migration; they are not
+searchable with a SigLIP 2 768D query. The semantic modelVersion changes while
+`photokit-preview-v1` stays unchanged. Image and any place-text vectors must be
+regenerated under the new modelVersion, never padded or mixed across models.
+Photo rows use `id` as their primary key and are replaced as reindexing succeeds.
+The old IPA is retained, but it is NOT an index backup: rolling back the binary
+does not promise restoration of overwritten old-model rows.
+
+### Unchanged boundaries
+
+- PhotoKit remains preview-first with local reduced previews accepted, network
+  default off and online fallback only after explicit user opt-in. This change
+  does not fix preview quality, force original downloads or guarantee offline
+  access to every cloud asset. Scoring/settings/privacy policies are unchanged.
+- The small desktop comparison showed trade-offs by query, language and input
+  resolution, not an across-the-board winner. Desktop CPU timings are not
+  iPhone latency, memory, heat or energy measurements.
+- The exporter copies actual shared model-card/LICENSE/NOTICE evidence where
+  present, preserves manual review and `redistributionApproved:false`; neither
+  Apache-2.0 metadata nor numerical parity is certification for distribution.
+- Free Apple development profiles still normally expire after seven days;
+  Sideloadly is local third-party signing, not TestFlight or permanent installation.
+  No Apple credentials go to chat/CI, and photos, GPS and local vectors are not
+  uploaded. No new user diagnostics are part of this model replacement.
+
+## Historical records — old versions, not SigLIP 2 proof
+
+Everything below records the earlier builds and their then-current instructions.
+In particular, old “do not rebuild” guidance applied to UI/diagnostic-only updates;
+it does not waive build 6's new-vector indexing step above. Old success counts,
+parity measurements, license findings, package sizes and checksums do not describe
+the new paired model. Preserve them as history, not as pending-result substitutes.
+
+## Historical: read-only single-photo check · 0.2.1 (5)
 
 User confirmed the target is absent from Top 12 for `Dog eat my apple pen`, but
 appears first for `a hand holding a broken white pen`. It is therefore indexed;
@@ -45,7 +173,7 @@ at `36b4a7fa43fd5dd8d47cda8332fbaef4be0630ec`: **SUCCESS**, first attempt.
 Overwrite with the same Sideloadly identity/effective Bundle ID. Do not uninstall,
 clear or rebuild the index. Phone steps are in [PHOTO_CHECK.md](PHOTO_CHECK.md).
 
-## Photo-first UI redesign · 0.2.0 (4)
+## Historical: photo-first UI redesign · 0.2.0 (4)
 
 The user deferred model/retrieval changes and requested a complete UI redesign.
 Home is search-first, technical controls move into Library/Settings sheets, and
@@ -96,7 +224,7 @@ update. Actual iPhone 15 / iOS 26.6.1 interaction and private-library results st
 need device confirmation; full-screen photo gestures/sharing were implemented
 and compiled, not claimed as real-photo end-to-end validation by these screenshots.
 
-## Search keyboard dismissal · 0.1.2 (3)
+## Historical: search keyboard dismissal · 0.1.2 (3)
 
 The user screenshot showed returned matches covered by the keyboard. The previous
 search field had no FocusState management: calling search did not resign focus,
@@ -133,7 +261,7 @@ Update over 0.1.1 using the same Sideloadly account / effective bundle identifie
 Do not uninstall or clear the existing index for this UI-only fix. Actual iOS
 26.6.1 device keyboard behavior remains to be confirmed after installation.
 
-## Preview-first fix for optimized iCloud libraries · 0.1.1 (2)
+## Historical: preview-first fix for optimized iCloud libraries · 0.1.1 (2)
 
 The user confirmed the first device app opens and searches, but a real optimized
 iCloud library indexed only 114 of 7,994 checked images. Full permission was present;
@@ -176,7 +304,7 @@ Install this unsigned IPA with the same Sideloadly account/application identifie
 over the old version. Keep network disabled for the first new scan and compare the
 source/coverage counters. No promise of full-library offline coverage is made.
 
-## Latest: unsigned physical-iPhone IPA built
+## Historical: first unsigned physical-iPhone IPA built
 
 The user has Windows only, an **iPhone 15 / iOS 26.6.1**, no paid Apple membership,
 and explicitly accepted Sideloadly for local signing. No third-party installer,
@@ -208,7 +336,7 @@ locally, pairs/trusts the device and enables Developer Mode as required. Passwor
 2FA codes and phone passcodes stay in the tool / Apple flow / phone, never in chat
 or GitHub. Free development profiles normally expire after seven days.
 
-## Latest: model-enabled validation passed
+## Historical: CLIP model-enabled validation passed
 
 [Run 35634483200](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35634483200)
 at source `b7983083e86b231a4d27ea8a548ce3382c2cf27b`: **SUCCESS**, with
@@ -274,7 +402,7 @@ replace personal signing. The user subsequently confirmed Windows-only access an
 approved the third-party signing route documented above instead.
 See [Apple account / Personal Team documentation](https://developer.apple.com/support/compare-memberships/).
 
-## Active personal repository
+## Historical: personal repository setup and initial validation
 
 The user supplied `xwgnick/local-image-iq-ios` and confirmed the separate personal
 account login. The API verified login `xwgnick`, private visibility and push access.

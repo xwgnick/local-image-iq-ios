@@ -1,8 +1,39 @@
 # Pinned SigLIP 2 Core ML models — schema 2
 
-**SigLIP 2 export and native validation are pending.** This source/configuration
-update does not run conversion, tests, builds or device packaging. Historical
-CLIP results in [build evidence](../../docs/BUILD_STATUS.md) do not establish
+**SigLIP 2 0.3.0 (build 6): export/native validation passed; IPA download verified.**
+Source `f9a2c85e9307cf365a8c2f62ec57eaf6e01bad78` in
+[CI 35824403795](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35824403795)
+/ job `107062896845`: **SUCCESS**, `TEST SUCCEEDED` / `BUILD SUCCEEDED`.
+
+- Core: 79 passed. App: 178 total, 177 passed, 1 physical-protection skip,
+   0 failures. All 7 UI tests passed.
+- All 7 `GeneratedModelParityTests` passed in **72.985 seconds**, including exact
+   Gemma IDs/masks with Final_Sigma, full same-tensor controls and native 68×120 /
+   112×199 inputs. Numerical thresholds and exact-token gates are unchanged.
+- The passing production API test asserted **23 predictions (17 texts + 6 images)
+   and 58 measurements**; these are executed counts, not expected-only coverage.
+- FP32 export report: **23 cases / 92 comparisons**, minimum cosine
+   `0.9999999999960657`, maximum raw difference `0.000011444091796875`, paired
+   cosine matrix maximum difference `1.8557397291063538e-7`.
+- Artifact **10734323054** was fully downloaded with bounded-memory streaming
+   and verified local length/SHA-256. Exact URL, sizes, checksum and local IPA
+   are in [build evidence](../../docs/BUILD_STATUS.md). It remains unsigned;
+   physical-device performance and redistribution review are not completed.
+- 17 native screenshots retrieved, **only 4 core views reviewed** (Home, Library,
+   Settings, hero results) in a downscaled contact sheet; synthetic scenes, no
+   private photos. This is not review of all 17 or physical-iPhone validation.
+
+Export JSON native `not-run` statuses were written before XCTest. They are
+provenance, not failures; the later XCTest results establish native parity.
+
+The initial source
+`aee4cdc00be92e1699f68baa9ef7ccc72cbcfbda` in
+[CI 35823153931](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35823153931)
+passed model export but **failed** native image geometry/resampling and Unicode
+Final Sigma checks. Pillow-compatible 22-bit resampling and contextual Unicode
+lowercasing corrected those failures; fixtures, queries and gates were not weakened.
+Historical CLIP results in
+[build evidence](../../docs/BUILD_STATUS.md) do not establish
 SigLIP 2 parity. Generated models, tokenizer data and fixtures are excluded from
 source control; their presence alone is not a validation result.
 
@@ -21,6 +52,9 @@ The authoritative fields are defined by `base_manifest()` in
 | Text input (IDs only) | `input_ids`, Int32, `[1,64]` |
 | Both outputs | `output_embedding`, Float32, raw `[1,768]` |
 
+Verified modelVersion:
+`siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`.
+
 One built-in Transformers `SiglipModel` supplies both towers. This is the fixed
 224/patch-16 model, not NaFlex. The image wrapper preserves the complete learned
 vision attention pooling head; the text wrapper preserves the learned text head
@@ -33,8 +67,13 @@ Image preprocessing applies EXIF orientation, converts to RGB, then **warps the
 entire image directly to 224×224** using Pillow 11.1.0 BILINEAR (`resample=2`).
 It neither preserves aspect ratio nor center-crops. Divide by 255, normalize
 with mean and std both `[0.5,0.5,0.5]`, and lay out NCHW Float32. These pixel
-operations are outside the Core ML graph. Native CoreGraphics interpolation
-must be validated separately; Python/HF agreement does not establish native parity.
+operations are outside the Core ML graph. Native preprocessing now uses an
+explicit Pillow-compatible separable bilinear resampler with 22-bit fixed-point
+weights and per-pass 8-bit rounding, not CoreGraphics medium interpolation for
+model resizing. CoreGraphics only decodes pixels without resizing; EXIF
+orientation uses integer pixel addressing. Native validation now passes,
+including both low-resolution inputs; the evidence is the corrected XCTest run,
+not Python/HF agreement alone. This does not claim bit-exact native/Pillow pixels.
 
 Text uses explicit Python `str.lower()` followed by the pinned
 `GemmaTokenizerFast` BPE/byte-fallback tokenizer. The runtime requires both
@@ -48,10 +87,17 @@ remain valid content. Empty text produces `[1,0,...,0]`.
 Fixture `attentionMask` remains a 64-element exact-tokenization check, **never a
 model input**. A literal content PAD has mask 1, so masks cannot be inferred from
 nonzero IDs. The wrapper converts public Int32 IDs to `torch.long` internally.
-Swift lowercasing/tokenization still needs exact multilingual fixture comparison,
-particularly contextual Greek sigma, Turkish dotted I and combining marks.
+Swift `SigLIPTokenizer.normalizedQuery` now includes Unicode Final Sigma handling
+for contextual Greek lowercasing. Queries are unchanged. Exact multilingual
+fixture comparison, including Greek sigma, Turkish dotted I and combining marks,
+passed in the corrected native run for all 17 cases, without replacing exact
+IDs/masks with a cosine-only check.
 
 ## Export environment and validation boundaries
+
+The verified native build uses **Swift 6 toolchain / Xcode 16.4** (App Swift 5
+language mode), iOS 18.5 simulator and **iphoneos18.5 / arm64 / minimum iOS 17.0**
+for the unsigned FP32 device package. Simulator execution is not phone performance.
 
 Export requires native Apple Silicon macOS 14+ and CPython 3.11, with the versions
 in [requirements-coreml.txt](../../scripts/requirements-coreml.txt): CoreMLTools
@@ -167,7 +213,7 @@ legal review. Missing evidence is not permission. Numerical parity does not
 change `redistributionApproved:false`. Review checkpoint/tokenizer, upstream/data
 obligations and dependency licenses before redistribution.
 
-## Generated fixture schema and pending native handoff
+## Generated fixture schema and completed native handoff
 
 Exporter-generated metadata/fixture reports use UTF-8, `schemaVersion:2` and the
 same `modelVersion`; the two original tokenizer JSONs retain their upstream
@@ -198,10 +244,29 @@ The exporter leaves `nativeTokenizerParity`, `nativeImagePreprocessParity` and
 `nativeModelRuntimeParity` as `not-run`, and `semanticRetrievalQuality` as
 `not-evaluated`; manifest native statuses are also `not-run`. Exact native Unicode
 tokenization, full native tensor geometry/pixels, same-input Core ML outputs and
-the actual app encoder path must be checked separately using the updated native
-tests. Historical CLIP tests cannot stand in for these SigLIP 2 gates. Synthetic
+the actual app encoder path are checked separately by the native tests, which
+passed in run 35824403795. Those export markers precede XCTest and are not
+failures; native pixel measurements retain their diagnostic, non-bit-exact scope.
+Historical CLIP tests cannot stand in for these SigLIP 2 gates. Synthetic
 conversion parity does not prove PhotoKit availability, retrieval improvements,
 physical-device latency or thermal behavior.
+
+## Required new-model indexing; unchanged preview policy
+
+Install the verified IPA over the existing App using the **same Sideloadly account
+and effective Bundle ID**, then **Library → Index / resume once** is required to
+generate new image and place-text vectors. Do not uninstall or manually clear
+the index. Old-model usable coverage is expected to be **0** until new vectors
+are generated; legacy 512D decoding is migration-only, never a 768D search fallback.
+Interrupted indexing can reuse completed, still-valid new-version rows. Retaining
+an old IPA is not an index backup because photo rows are replaced by `id`.
+
+Keep network access off. `photokit-preview-v1` remains unchanged: local previews,
+including reduced ones, are accepted; online fallback requires explicit opt-in.
+This model replacement is **not a PhotoKit preview-quality fix**, does not require
+originals and does not guarantee offline access to all cloud photos. No additional
+user diagnostic queries or screenshots are requested. Normal use after indexing
+is sufficient; physical-device behavior/performance and license review remain open.
 
 ## Optional geography
 
