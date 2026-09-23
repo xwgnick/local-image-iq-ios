@@ -283,7 +283,7 @@ struct LibrarySheet: View {
                 if let error = state.errorMessage, error != modelProblem {
                     diagnostic("Last operation issue", error)
                 }
-                Text("Prepares the next photo while encoding the current one")
+                Text("4 image workers · reads and encodes photos concurrently")
                     .font(.footnote)
                     .foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)

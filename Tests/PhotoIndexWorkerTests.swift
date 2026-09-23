@@ -70,11 +70,17 @@ final class PhotoIndexWorkerTests: XCTestCase {
         let dataCalls = await context.encoders.dataCalls
         XCTAssertEqual(previews.count, 120)
         XCTAssertEqual(dataCalls, 0)
-        for preview in previews.prefix(114) {
+        // Four speculative slots may arrive at the encoder out of snapshot order.
+        // Keep exact source, pixel identity and orientation coverage, not a prefix assumption.
+        let localPreviews = previews.filter { $0.source == .localPreview }
+        let reducedPreviews = previews.filter { $0.source == .localReducedPreview }
+        XCTAssertEqual(localPreviews.count, 114)
+        XCTAssertEqual(reducedPreviews.count, 6)
+        for preview in localPreviews {
             XCTAssertTrue(preview.cgImage === local.cgImage)
             XCTAssertEqual(preview.orientation, .right)
         }
-        for preview in previews.suffix(6) {
+        for preview in reducedPreviews {
             XCTAssertTrue(preview.cgImage === reduced.cgImage)
             XCTAssertEqual(preview.orientation, .leftMirrored)
         }
@@ -229,7 +235,7 @@ final class PhotoIndexWorkerTests: XCTestCase {
         XCTAssertEqual(final.reused, 1)
         XCTAssertEqual(final.encoded, 3)
         assertSources(final, local: 3)
-        XCTAssertEqual(context.library.requests.map(\.id), ["original", "old-model", "old-policy"])
+        XCTAssertEqual(context.library.requests.map(\.id).sorted(), ["original", "old-model", "old-policy"].sorted())
         let saved = try await context.store.records(modelVersion: cacheVersion)
         XCTAssertEqual(saved.count, 4)
         for record in saved {
@@ -292,7 +298,7 @@ final class PhotoIndexWorkerTests: XCTestCase {
         XCTAssertEqual(final.cloudSkipped, 0)
         XCTAssertNil(final.lastFailure)
         assertSources(final, local: 2)
-        XCTAssertEqual(context.library.requests.map(\.id), ["legacy-a", "legacy-b"])
+        XCTAssertEqual(context.library.requests.map(\.id).sorted(), ["legacy-a", "legacy-b"])
         XCTAssertTrue(context.library.requests.allSatisfy { !$0.networkAllowed })
 
         let saved = try await context.store.records(modelVersion: cacheVersion)
@@ -474,16 +480,22 @@ final class PhotoIndexWorkerTests: XCTestCase {
     }
 
     func testCancellationDuringEncodingPreservesCompletedRowsAndResumesByReuse() async throws {
-        let started = expectation(description: "Second preview reached encoder")
-        let encoders = try WorkerTestEncoders(holdPreviewCall: 2, started: started)
+        let started = expectation(description: "Interrupted reduced preview reached encoder")
+        let committed = expectation(description: "First row committed before cancellation")
+        let encoders = try WorkerTestEncoders(holdPreviewSource: .localReducedPreview, started: started)
         let context = try makeWorker([
             WorkerTestRecord("completed", .preview(try WorkerPreviewFactory.make(.localPreview))),
             WorkerTestRecord("interrupted", .preview(try WorkerPreviewFactory.make(.localReducedPreview)))
         ], encoders: encoders)
         let worker = context.worker
         let progress = WorkerProgressTrace()
-        let task = Task { try await worker.index(networkAllowed: false) { await progress.append($0) } }
-        await fulfillment(of: [started], timeout: 3)
+        let task = Task {
+            try await worker.index(networkAllowed: false) {
+                await progress.append($0)
+                if $0.completed == 1 { committed.fulfill() }
+            }
+        }
+        await fulfillment(of: [started, committed], timeout: 3)
         task.cancel()
         await encoders.release()
         do { _ = try await task.value; XCTFail("Expected cancellation despite a late encoder success.") }
@@ -503,7 +515,7 @@ final class PhotoIndexWorkerTests: XCTestCase {
         XCTAssertEqual(resumedProgress.completed, 2)
         XCTAssertEqual(resumedProgress.reused, 1)
         assertSources(resumedProgress, reduced: 1)
-        XCTAssertEqual(context.library.requests.map(\.id), ["completed", "interrupted", "interrupted"])
+        XCTAssertEqual(context.library.requests.map(\.id).sorted(), ["completed", "interrupted", "interrupted"])
     }
 
     func testAccessRemovedDuringEncodingDoesNotSaveOrCountPreview() async throws {
@@ -789,16 +801,20 @@ private actor WorkerTestEncoders: PhotoEncoding {
     private let manifest: ModelManifest
     private let imageFailure: AppFailure?
     private let holdPreviewCall: Int?
+    private let holdPreviewSource: IndexingImage.Source?
+    private var heldPreview = false
     private let started: XCTestExpectation?
     private let latch = WorkerEncoderLatch()
     private(set) var previews: [IndexingImage] = []
     private(set) var texts: [String] = []
     private(set) var dataCalls = 0
 
-    init(imageFailure: AppFailure? = nil, holdPreviewCall: Int? = nil, started: XCTestExpectation? = nil) throws {
+    init(imageFailure: AppFailure? = nil, holdPreviewCall: Int? = nil,
+         holdPreviewSource: IndexingImage.Source? = nil, started: XCTestExpectation? = nil) throws {
         manifest = try JSONDecoder().decode(ModelManifest.self, from: Data(TestFixtures.manifest.utf8))
         self.imageFailure = imageFailure
         self.holdPreviewCall = holdPreviewCall
+        self.holdPreviewSource = holdPreviewSource
         self.started = started
     }
 
@@ -815,7 +831,8 @@ private actor WorkerTestEncoders: PhotoEncoding {
 
     func image(preview: IndexingImage) async throws -> [Float] {
         previews.append(preview)
-        if previews.count == holdPreviewCall {
+        if !heldPreview && (previews.count == holdPreviewCall || preview.source == holdPreviewSource) {
+            heldPreview = true
             started?.fulfill()
             await latch.wait()
         }

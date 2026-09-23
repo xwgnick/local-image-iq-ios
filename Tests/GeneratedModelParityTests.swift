@@ -152,6 +152,55 @@ final class GeneratedModelParityTests: XCTestCase {
         }
     }
 
+    func testIndexingImageFactoryAllSlotsConcurrentPreviewParity() async throws {
+        // Exercise the production .all factory in every model-enabled build, not
+        // the optional engine-comparison gate. No timing/hardware-overlap claim.
+        try await withAsyncReport(computeUnits: "all") { report in
+            report.coverageNote = "Actual indexing factory, four retained image actors, six raw CGImage fixtures. All four slots predict each fixture concurrently; numerical coverage is not proof of physical GPU/ANE overlap or PhotoKit pixel identity."
+            report.expectedAppPredictions = ["image.indexingPreview": 24]
+            let fixtures = try self.resources(report: &report)
+            try require(fixtures.images.cases.count == 6,
+                        "Indexing factory parity requires all six generated image cases.")
+            // One owner loads the text model once; do not create four paired encoders.
+            let owner: any PhotoEncoding = CoreMLEncoders(bundle: fixtures.bundle)
+            let encoders = try await owner.makeIndexingImageEncoders()
+            try require(encoders.count == 4, "The production indexing factory must return four image encoders.")
+
+            for fixture in fixtures.images.cases {
+                try Task.checkCancellation()
+                // Decode/inspect once per fixture, retaining its actual raw dimensions.
+                let preview = try modelSizedPreview(fixture, resources: fixtures, report: &report)
+                let outputs = try await withThrowingTaskGroup(of: (Int, [Float]).self) { group in
+                    for (slot, encoder) in encoders.enumerated() {
+                        group.addTask { [slot, encoder, preview] in
+                            try Task.checkCancellation()
+                            return (slot, try await encoder.image(preview: preview))
+                        }
+                    }
+                    var outputs: [(Int, [Float])] = []
+                    for try await output in group { outputs.append(output) }
+                    return outputs
+                }
+                try Task.checkCancellation()
+                // The first completed group has opened all four real image models;
+                // reuse these same actors for the remaining five fixtures.
+                try require(outputs.count == 4 && Set(outputs.map { $0.0 }) == Set(0..<4),
+                            "\(fixture.id): expected exactly one output from each factory slot 0...3.")
+                // Only the parent touches XCTest/helpers/report; children capture
+                // just their slot, Sendable encoder and immutable preview.
+                for (slot, projection) in outputs.sorted(by: { $0.0 < $1.0 }) {
+                    report.completedAppPredictions["image.indexingPreview", default: 0] += 1
+                    try checkAppProjection(projection, reference: fixture.referenceRaw, exported: fixture.coreMLRaw,
+                                           id: fixture.id, stage: "image.appIndexingSlot\(slot)",
+                                           minCosine: Self.nativeImageMinCosine, strictCosine: false, report: &report)
+                }
+            }
+            try require(report.completedAppPredictions == report.expectedAppPredictions
+                        && report.previews.count == 6 && report.measurements.count == 60,
+                        "Incomplete indexing factory parity: expected 24 predictions and 60 comparisons (12 tensor comparisons, 48 normalized embedding gates).")
+        }
+    }
+
     // MARK: - Actual native pipelines, one model load per role per test
 
     private func modelSizedPreview(_ fixture: ImageCase, resources: Resources,

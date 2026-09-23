@@ -63,6 +63,8 @@ extension PhotoWorkServicing {
 /// serialize whole async jobs: the caller waits for a cancelled predecessor before
 /// starting the next job, including time spent awaiting Photos/encoders/storage.
 actor PhotoIndexWorker: PhotoWorkServicing {
+    static let indexingWorkerCount = 4
+
     private let library: any PhotoLibraryIndexing
     private let encoders: any PhotoEncoding
     private let suppliedDirectory: URL?
@@ -118,65 +120,94 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         let snapshot = try await reconcile()
         guard library.canReadImages else { throw AppFailure.permission }
         let manifest = try await encoders.prepare()
+        try Task.checkCancellation()
+        // The factory supplies exactly four image slots, scoped to this index
+        // call, with extra image models loaded lazily only on cache misses.
+        // Location encoding still uses the single parent-owned text encoder.
+        let imageEncoders = try await encoders.makeIndexingImageEncoders()
+        try Task.checkCancellation()
+        guard imageEncoders.count == Self.indexingWorkerCount else {
+            throw AppFailure.modelContract("Indexing requires exactly four image encoder slots.")
+        }
         let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
         let resolver = boundaries()
         let store = try storage()
         var state = IndexProgress(total: snapshot.count)
         await progress(state)
-        // One child owns the following item; only this parent calls the encoders
-        // and saves. Consuming that child before adding another preserves array
-        // order and bounds live pixels to the current preview plus one ahead.
-        // Cached following rows return without any PhotoKit preview request.
+        // Four children read/prepare/encode images; only the parent resolves
+        // places, updates the text cache, saves and reports actual outcomes.
+        // The sliding window includes finished-but-uncommitted items, so a slow
+        // head can stall submission. This is NOT a four-item batch barrier:
+        // each ordered commit immediately frees one slot for its successor.
+        // Finished results retain embeddings/errors, never preview pixels.
         try await withThrowingTaskGroup(of: PreparedIndexItem.self) { group in
             // Structured scope exit awaits ALL children, including late success
-            // from a cancelled request. This covers success, errors and cancel;
+            // from cancelled PhotoKit requests or CoreML predictions. This covers
+            // success, errors and cancellation, even if CoreML finishes late.
             // No Swift child can escape into the next serialized job. PhotoKit's
             // cancel API has no acknowledgement; its late callbacks are ignored
             // by PhotoRequestGate rather than claimed to have already stopped.
             defer { group.cancelAll() }
             let library = self.library
-            if let first = snapshot.first {
+            var nextSubmit = 0
+            var nextCommit = 0
+            var pending: [Int: PreparedIndexItem] = [:]
+            while nextSubmit < min(snapshot.count, Self.indexingWorkerCount) {
                 try Task.checkCancellation()
+                let snapshotIndex = nextSubmit
+                let revision = snapshot[snapshotIndex]
+                let imageEncoder = imageEncoders[snapshotIndex % Self.indexingWorkerCount]
                 guard group.addTaskUnlessCancelled(operation: {
-                    try await Self.prepare(first, library: library, store: store,
+                    try await Self.prepare(revision, snapshotIndex: snapshotIndex,
+                                           imageEncoder: imageEncoder, library: library, store: store,
                                            cacheVersion: cacheVersion, networkAllowed: networkAllowed)
                 }) else { throw CancellationError() }
+                nextSubmit += 1
             }
-            for currentIndex in snapshot.indices {
+            while nextCommit < snapshot.count {
                 try Task.checkCancellation()
                 guard let item = try await group.next() else { throw CancellationError() }
                 try Task.checkCancellation()
                 guard library.canReadImages else { throw AppFailure.permission }
-                let nextIndex = currentIndex + 1
-                if nextIndex < snapshot.count {
-                    let next = snapshot[nextIndex]
+                pending[item.snapshotIndex] = item
+                while let item = pending.removeValue(forKey: nextCommit) {
+                    let outcome = try await indexPrepared(item, resolver: resolver, cacheVersion: cacheVersion,
+                                                          store: store, networkAllowed: networkAllowed)
+                    // No counters for speculative work or an uncommitted save.
+                    state.record(outcome.place)
+                    if outcome.reused { state.reused += 1 }
+                    if outcome.placeUpdated { state.placeUpdated += 1 }
+                    if outcome.cloudSkipped { state.cloudSkipped += 1 }
+                    if let failure = outcome.failure {
+                        state.failed += 1
+                        state.lastFailure = failure
+                    }
+                    if let source = outcome.source {
+                        state.encoded += 1
+                        switch source {
+                        case .localPreview: state.localPreviews += 1
+                        case .localReducedPreview: state.reducedPreviews += 1
+                        case .networkPreview: state.networkPreviews += 1
+                        }
+                    }
+                    state.completed += 1
+                    nextCommit += 1
+                    await progress(state)
                     try Task.checkCancellation()
-                    guard group.addTaskUnlessCancelled(operation: {
-                        try await Self.prepare(next, library: library, store: store,
-                                               cacheVersion: cacheVersion, networkAllowed: networkAllowed)
-                    }) else { throw CancellationError() }
-                }
-                let outcome = try await indexPrepared(item, resolver: resolver, cacheVersion: cacheVersion,
-                                                      store: store, networkAllowed: networkAllowed)
-                // No counters for speculative preparation or an uncommitted save.
-                state.record(outcome.place)
-                if outcome.reused { state.reused += 1 }
-                if outcome.placeUpdated { state.placeUpdated += 1 }
-                if outcome.cloudSkipped { state.cloudSkipped += 1 }
-                if let failure = outcome.failure {
-                    state.failed += 1
-                    state.lastFailure = failure
-                }
-                if let source = outcome.source {
-                    state.encoded += 1
-                    switch source {
-                    case .localPreview: state.localPreviews += 1
-                    case .localReducedPreview: state.reducedPreviews += 1
-                    case .networkPreview: state.networkPreviews += 1
+                    if nextSubmit < snapshot.count, nextSubmit < nextCommit + Self.indexingWorkerCount {
+                        let snapshotIndex = nextSubmit
+                        let revision = snapshot[snapshotIndex]
+                        // A slot is reused only after its previous item's commit;
+                        // the four-item window prevents overlapping slot owners.
+                        let imageEncoder = imageEncoders[snapshotIndex % Self.indexingWorkerCount]
+                        guard group.addTaskUnlessCancelled(operation: {
+                            try await Self.prepare(revision, snapshotIndex: snapshotIndex,
+                                                   imageEncoder: imageEncoder, library: library, store: store,
+                                                   cacheVersion: cacheVersion, networkAllowed: networkAllowed)
+                        }) else { throw CancellationError() }
+                        nextSubmit += 1
                     }
                 }
-                state.completed += 1
-                await progress(state)
             }
             try Task.checkCancellation()
         }
@@ -186,11 +217,12 @@ actor PhotoIndexWorker: PhotoWorkServicing {
 
     private enum PreparedImage: Sendable {
         case reused([Float])
-        case preview(IndexingImage)
+        case encoded(embedding: [Float], source: IndexingImage.Source)
         case failed(Error)
     }
 
     private struct PreparedIndexItem: Sendable {
+        let snapshotIndex: Int
         let revision: PhotoRevision
         let old: CachedPhoto?
         let image: PreparedImage
@@ -205,9 +237,11 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         var failure: String?
     }
 
-    /// No encoder, location lookup, write or progress here. Capture the exact
-    /// snapshot revision and old row, including its model/input-policy identity.
-    private nonisolated static func prepare(_ revision: PhotoRevision, library: any PhotoLibraryIndexing,
+    /// Child-only PhotoKit reading, preprocessing and image encoding. Cache hits
+    /// bypass both PhotoKit and the image encoder. No location/text work, writes
+    /// or progress here; return the exact snapshot position/revision and old row.
+    private nonisolated static func prepare(_ revision: PhotoRevision, snapshotIndex: Int,
+                                             imageEncoder: any PhotoImageEncoding, library: any PhotoLibraryIndexing,
                                              store: SQLitePhotoStore, cacheVersion: String,
                                              networkAllowed: Bool) async throws -> PreparedIndexItem {
         try Task.checkCancellation()
@@ -215,21 +249,27 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         let old = try await store.record(id: revision.id)
         try Task.checkCancellation()
         if let old, old.photo.modificationTime == revision.modificationTime, old.photo.modelVersion == cacheVersion {
-            return PreparedIndexItem(revision: revision, old: old, image: .reused(old.photo.imageEmbedding))
+            return PreparedIndexItem(snapshotIndex: snapshotIndex, revision: revision, old: old,
+                                     image: .reused(old.photo.imageEmbedding))
         }
         guard library.canReadImages else { throw AppFailure.permission }
         let image: PreparedImage
         do {
             try Task.checkCancellation()
-            image = .preview(try await library.indexImage(id: revision.id, networkAllowed: networkAllowed))
+            let preview = try await library.indexImage(id: revision.id, networkAllowed: networkAllowed)
+            try Task.checkCancellation()
+            let embedding = try await imageEncoder.image(preview: preview)
+            try Task.checkCancellation()
+            image = .encoded(embedding: embedding, source: preview.source)
         } catch {
             try Task.checkCancellation()
             if PhotoImageRequestInfo.isCancellation(error) { throw CancellationError() }
-            // Preserve recoverable errors in snapshot order, not completion order.
+            // Let the parent classify preview/encoder errors in snapshot order,
+            // retaining its fatal-versus-skip rules and place observations.
             image = .failed(error)
         }
         try Task.checkCancellation()
-        return PreparedIndexItem(revision: revision, old: old, image: image)
+        return PreparedIndexItem(snapshotIndex: snapshotIndex, revision: revision, old: old, image: image)
     }
 
     private func indexPrepared(_ item: PreparedIndexItem, resolver: OfflinePlaceResolver, cacheVersion: String,
@@ -255,9 +295,9 @@ actor PhotoIndexWorker: PhotoWorkServicing {
             case .reused(let vector):
                 image = vector
                 reusable = true
-            case .preview(let preview):
-                image = try await encoders.image(preview: preview)
-                source = preview.source
+            case .encoded(let embedding, let imageSource):
+                image = embedding
+                source = imageSource
                 reusable = false
             case .failed(let error): throw error
             }

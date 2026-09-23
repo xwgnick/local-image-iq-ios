@@ -3,11 +3,23 @@ import CoreML
 import ImageIO
 import ImageIQCore
 
-protocol PhotoEncoding: Sendable {
+protocol PhotoImageEncoding: Sendable {
+    func image(preview: IndexingImage) async throws -> [Float]
+}
+
+protocol PhotoEncoding: PhotoImageEncoding {
     func prepare() async throws -> ModelManifest
     func image(data: Data, orientation: CGImagePropertyOrientation) async throws -> [Float]
-    func image(preview: IndexingImage) async throws -> [Float]
     func text(_ text: String) async throws -> [Float]
+    func makeIndexingImageEncoders() async throws -> [any PhotoImageEncoding]
+}
+
+extension PhotoEncoding {
+    /// Compatibility for injected mocks; production encoders must supply independent actors.
+    func makeIndexingImageEncoders() async throws -> [any PhotoImageEncoding] {
+        try Task.checkCancellation()
+        return [self, self, self, self]
+    }
 }
 
 /// Model loading, preprocessing and synchronous predictions never run on MainActor.
@@ -18,7 +30,8 @@ actor CoreMLEncoders: PhotoEncoding {
 
     private struct Loaded {
         let manifest: ModelManifest
-        let image: MLModel
+        let imageURL: URL
+        let image: CoreMLImageEncoder
         let text: MLModel
         let tokenizer: SigLIPTokenizer
     }
@@ -30,25 +43,34 @@ actor CoreMLEncoders: PhotoEncoding {
     func image(data: Data, orientation: CGImagePropertyOrientation) async throws -> [Float] {
         try Task.checkCancellation()
         let models = try await load()
-        let tensor = try autoreleasepool { try ImagePreprocessor.tensor(data: data, orientation: orientation) }
+        let embedding = try await models.image.image(data: data, orientation: orientation)
         try Task.checkCancellation()
-        let input = try MLDictionaryFeatureProvider(dictionary: [models.manifest.imageInput: tensor])
-        let output = try predict(model: models.image, input: input)
-        try Task.checkCancellation()
-        return try projection(output, name: models.manifest.output)
+        return embedding
     }
 
     func image(preview: IndexingImage) async throws -> [Float] {
         try Task.checkCancellation()
         let models = try await load()
-        let tensor = try autoreleasepool {
-            try ImagePreprocessor.tensor(image: preview.cgImage, orientation: preview.orientation)
-        }
+        let embedding = try await models.image.image(preview: preview)
         try Task.checkCancellation()
-        let input = try MLDictionaryFeatureProvider(dictionary: [models.manifest.imageInput: tensor])
-        let output = try predict(model: models.image, input: input)
+        return embedding
+    }
+
+    func makeIndexingImageEncoders() async throws -> [any PhotoImageEncoding] {
         try Task.checkCancellation()
-        return try projection(output, name: models.manifest.output)
+        let models = try await load()
+        try Task.checkCancellation()
+        // Reuse the primary model rather than creating a fifth image instance.
+        // Only the returned worker array owns the additional actors. Their models
+        // load on first use, so cache-only indexing does not load three more models.
+        let encoders: [any PhotoImageEncoding] = [
+            models.image,
+            CoreMLImageEncoder(modelURL: models.imageURL, manifest: models.manifest),
+            CoreMLImageEncoder(modelURL: models.imageURL, manifest: models.manifest),
+            CoreMLImageEncoder(modelURL: models.imageURL, manifest: models.manifest)
+        ]
+        try Task.checkCancellation()
+        return encoders
     }
 
     func text(_ text: String) async throws -> [Float] {
@@ -63,7 +85,7 @@ actor CoreMLEncoders: PhotoEncoding {
         let input = try MLDictionaryFeatureProvider(dictionary: ["input_ids": ids])
         let output = try predict(model: models.text, input: input)
         try Task.checkCancellation()
-        return try projection(output, name: models.manifest.output)
+        return try Self.projection(output, name: models.manifest.output)
     }
 
     static func int32Tensor(_ values: [Int32]) throws -> MLMultiArray {
@@ -78,14 +100,14 @@ actor CoreMLEncoders: PhotoEncoding {
         try model.prediction(from: input)
     }
 
-    private func projection(_ output: MLFeatureProvider, name: String) throws -> [Float] {
+    fileprivate nonisolated static func projection(_ output: MLFeatureProvider, name: String) throws -> [Float] {
         guard let array = output.featureValue(for: name)?.multiArrayValue else {
             throw AppFailure.modelContract("Prediction did not contain its embedding output.")
         }
         return try Self.normalizedProjection(array)
     }
 
-    static func normalizedProjection(_ array: MLMultiArray) throws -> [Float] {
+    nonisolated static func normalizedProjection(_ array: MLMultiArray) throws -> [Float] {
         guard array.dataType == .float32, array.shape.map(\.intValue) == [1, 768] else {
             throw AppFailure.modelContract("Prediction output must be Float32 [1,768].")
         }
@@ -131,14 +153,15 @@ actor CoreMLEncoders: PhotoEncoding {
             let manifest = try JSONDecoder().decode(ModelManifest.self, from: Data(contentsOf: manifestURL))
             try manifest.validate()
             let tokenizer = try await SigLIPTokenizer.load(directory: tokenizerDirectory)
+            let image = CoreMLImageEncoder(modelURL: imageURL, manifest: manifest)
+            try await image.prepare()
             let configuration = MLModelConfiguration()
             configuration.computeUnits = .all
-            let image = try MLModel(contentsOf: imageURL, configuration: configuration)
             let text = try MLModel(contentsOf: textURL, configuration: configuration)
-            try Self.validate(model: image, inputs: ["pixel_values": ([1, 3, 224, 224], .float32)])
             try Self.validate(model: text, inputs: ["input_ids": ([1, 64], .int32)])
             try Task.checkCancellation()
-            loaded = Loaded(manifest: manifest, image: image, text: text, tokenizer: tokenizer)
+            loaded = Loaded(manifest: manifest, imageURL: imageURL, image: image,
+                            text: text, tokenizer: tokenizer)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as AppFailure {
@@ -148,7 +171,7 @@ actor CoreMLEncoders: PhotoEncoding {
         }
     }
 
-    private static func validate(model: MLModel, inputs: [String: ([Int], MLMultiArrayDataType)]) throws {
+    fileprivate nonisolated static func validate(model: MLModel, inputs: [String: ([Int], MLMultiArrayDataType)]) throws {
         let description = model.modelDescription
         guard Set(description.inputDescriptionsByName.keys) == Set(inputs.keys),
               Set(description.outputDescriptionsByName.keys) == ["output_embedding"] else {
@@ -162,12 +185,73 @@ actor CoreMLEncoders: PhotoEncoding {
                      name: "output_embedding", shape: [1, 768], type: .float32)
     }
 
-    private static func validate(feature: MLFeatureDescription?, name: String,
-                                 shape: [Int], type: MLMultiArrayDataType) throws {
+    private nonisolated static func validate(feature: MLFeatureDescription?, name: String,
+                                            shape: [Int], type: MLMultiArrayDataType) throws {
         guard let feature, !feature.isOptional, feature.type == .multiArray,
               let constraint = feature.multiArrayConstraint,
               constraint.shape.map(\.intValue) == shape, constraint.dataType == type else {
             throw AppFailure.modelContract("Wrong shape or type for \(name).")
+        }
+    }
+}
+
+/// Each actor owns one image model. No prediction or preprocessing suspends, and
+/// separate indexing actors can predict without serializing through the coordinator.
+private actor CoreMLImageEncoder: PhotoImageEncoding {
+    private let modelURL: URL
+    private let manifest: ModelManifest
+    private var model: MLModel?
+
+    init(modelURL: URL, manifest: ModelManifest) {
+        self.modelURL = modelURL
+        self.manifest = manifest
+    }
+
+    func prepare() throws {
+        _ = try load()
+    }
+
+    func image(data: Data, orientation: CGImagePropertyOrientation) throws -> [Float] {
+        let model = try load()
+        let tensor = try autoreleasepool {
+            try ImagePreprocessor.tensor(data: data, orientation: orientation)
+        }
+        try Task.checkCancellation()
+        let input = try MLDictionaryFeatureProvider(dictionary: [manifest.imageInput: tensor])
+        let output = try model.prediction(from: input)
+        try Task.checkCancellation()
+        return try CoreMLEncoders.projection(output, name: manifest.output)
+    }
+
+    func image(preview: IndexingImage) throws -> [Float] {
+        let model = try load()
+        let tensor = try autoreleasepool {
+            try ImagePreprocessor.tensor(image: preview.cgImage, orientation: preview.orientation)
+        }
+        try Task.checkCancellation()
+        let input = try MLDictionaryFeatureProvider(dictionary: [manifest.imageInput: tensor])
+        let output = try model.prediction(from: input)
+        try Task.checkCancellation()
+        return try CoreMLEncoders.projection(output, name: manifest.output)
+    }
+
+    private func load() throws -> MLModel {
+        try Task.checkCancellation()
+        if let model { return model }
+        do {
+            let configuration = MLModelConfiguration()
+            configuration.computeUnits = .all
+            let model = try MLModel(contentsOf: modelURL, configuration: configuration)
+            try CoreMLEncoders.validate(model: model, inputs: ["pixel_values": ([1, 3, 224, 224], .float32)])
+            try Task.checkCancellation()
+            self.model = model
+            return model
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as AppFailure {
+            throw error
+        } catch {
+            throw AppFailure.modelContract(error.localizedDescription)
         }
     }
 }

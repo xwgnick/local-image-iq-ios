@@ -1,5 +1,6 @@
 import XCTest
 import CoreML
+import ImageIO
 import ImageIQCore
 @testable import LocalImageIQ
 
@@ -251,6 +252,27 @@ final class ModelBoundaryTests: XCTestCase {
         }
     }
 
+    func testInjectedDefaultIndexingImageFactoryReturnsFourAndHonorsPreCancellation() async throws {
+        let injected: any PhotoEncoding = DefaultFactoryEncoders()
+        let encoders = try await injected.makeIndexingImageEncoders()
+        XCTAssertEqual(encoders.count, 4, "Injected encoders must retain the four-slot default factory.")
+
+        // Cancel inside a separate task before the call, without a scheduling race
+        // or cancelling the XCTest task. The mock's model APIs all throw if called.
+        let cancelled = Task { [injected] in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await injected.makeIndexingImageEncoders()
+        }
+        do {
+            _ = try await cancelled.value
+            XCTFail("A pre-cancelled default factory must not return encoders.")
+        } catch is CancellationError {
+            // Expected; cancellation is not a model-resource skip.
+        } catch {
+            XCTFail("Expected CancellationError before any model API call, got \(error)")
+        }
+    }
+
     private func assertRejectedManifest(_ mutate: (inout [String: Any]) -> Void,
                                         file: StaticString = #filePath, line: UInt = #line) throws {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(TestFixtures.manifest.utf8)) as? [String: Any])
@@ -262,4 +284,17 @@ final class ModelBoundaryTests: XCTestCase {
             }
         }
     }
+}
+
+/// Test-only injection: use the protocol's default factory, with no model loading
+/// or prediction implementation that could accidentally make this test pass.
+private struct DefaultFactoryEncoders: PhotoEncoding {
+    private enum Failure: Error { case unexpectedModelCall }
+
+    func prepare() async throws -> ModelManifest { throw Failure.unexpectedModelCall }
+    func image(data: Data, orientation: CGImagePropertyOrientation) async throws -> [Float] {
+        throw Failure.unexpectedModelCall
+    }
+    func image(preview: IndexingImage) async throws -> [Float] { throw Failure.unexpectedModelCall }
+    func text(_ text: String) async throws -> [Float] { throw Failure.unexpectedModelCall }
 }
