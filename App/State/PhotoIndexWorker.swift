@@ -11,6 +11,17 @@ struct IndexProgress: Sendable, Equatable {
     var localPreviews = 0
     var reducedPreviews = 0
     var networkPreviews = 0
+    // Last-scan observations, not persisted GPS or a count of place embeddings.
+    // A resolved label still counts when that photo's preview/encoding fails.
+    var placeChecked = 0
+    var gpsCount = 0
+    var placeResolved = 0
+    var noGPS = 0
+    var noPlacePack = 0
+    var outsidePlaceCoverage = 0
+    var placeUnavailable = 0
+    // Committed label changes/removals or geography refreshes of existing rows.
+    var placeUpdated = 0
     var lastFailure: String?
 
     var fraction: Double { total == 0 ? 0 : Double(completed) / Double(total) }
@@ -112,100 +123,200 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         let store = try storage()
         var state = IndexProgress(total: snapshot.count)
         await progress(state)
-        for revision in snapshot {
-            try Task.checkCancellation()
-            let old = try await store.record(id: revision.id)
-            let reusable = old?.photo.modificationTime == revision.modificationTime && old?.photo.modelVersion == cacheVersion
-            if reusable, old?.geographyVersion == resolver.version {
-                state.reused += 1
-            } else {
-                let image: [Float]
-                var source: IndexingImage.Source? = nil
-                if reusable, let old { image = old.photo.imageEmbedding }
-                else {
-                    do {
-                        // Preview pixels live for ONE asset only; no original-data fallback.
-                        let encoded = try await encodeImage(id: revision.id, networkAllowed: networkAllowed)
-                        image = encoded.embedding
-                        source = encoded.source
-                    } catch is CancellationError { throw CancellationError() }
-                    catch AppFailure.cloudOnly where !networkAllowed {
-                        try Task.checkCancellation()
-                        state.cloudSkipped += 1
-                        state.completed += 1
-                        await progress(state)
-                        continue
-                    } catch let error as AppFailure {
-                        try Task.checkCancellation()
-                        if case .modelContract = error { throw error }
-                        if case .modelsMissing = error { throw error }
-                        state.failed += 1
-                        state.lastFailure = error.localizedDescription
-                        state.completed += 1
-                        await progress(state)
-                        continue
-                    } catch {
-                        try Task.checkCancellation()
-                        // Also classify raw PhotoKit errors from an injected library.
-                        if !networkAllowed, PhotoImageRequestInfo.requiresNetwork(error) {
-                            state.cloudSkipped += 1
-                        } else {
-                            state.failed += 1
-                            state.lastFailure = error.localizedDescription
-                        }
-                        state.completed += 1
-                        await progress(state)
-                        continue
-                    }
-                }
-                let location = try await location(id: revision.id, resolver: resolver, cacheVersion: cacheVersion, store: store)
+        // One child owns the following item; only this parent calls the encoders
+        // and saves. Consuming that child before adding another preserves array
+        // order and bounds live pixels to the current preview plus one ahead.
+        // Cached following rows return without any PhotoKit preview request.
+        try await withThrowingTaskGroup(of: PreparedIndexItem.self) { group in
+            // Structured scope exit awaits ALL children, including late success
+            // from a cancelled request. This covers success, errors and cancel;
+            // No Swift child can escape into the next serialized job. PhotoKit's
+            // cancel API has no acknowledgement; its late callbacks are ignored
+            // by PhotoRequestGate rather than claimed to have already stopped.
+            defer { group.cancelAll() }
+            let library = self.library
+            if let first = snapshot.first {
                 try Task.checkCancellation()
-                guard library.currentRevision(id: revision.id) == revision else {
-                    state.failed += 1
-                    state.lastFailure = "A photo changed or became inaccessible during indexing; refresh and retry."
-                    state.completed += 1
-                    await progress(state)
-                    continue
+                guard group.addTaskUnlessCancelled(operation: {
+                    try await Self.prepare(first, library: library, store: store,
+                                           cacheVersion: cacheVersion, networkAllowed: networkAllowed)
+                }) else { throw CancellationError() }
+            }
+            for currentIndex in snapshot.indices {
+                try Task.checkCancellation()
+                guard let item = try await group.next() else { throw CancellationError() }
+                try Task.checkCancellation()
+                guard library.canReadImages else { throw AppFailure.permission }
+                let nextIndex = currentIndex + 1
+                if nextIndex < snapshot.count {
+                    let next = snapshot[nextIndex]
+                    try Task.checkCancellation()
+                    guard group.addTaskUnlessCancelled(operation: {
+                        try await Self.prepare(next, library: library, store: store,
+                                               cacheVersion: cacheVersion, networkAllowed: networkAllowed)
+                    }) else { throw CancellationError() }
                 }
-                let photo = IndexedPhoto(id: revision.id, modificationTime: revision.modificationTime,
-                                         modelVersion: cacheVersion, imageEmbedding: image, location: location,
-                                         creationTime: revision.creationTime)
-                try await store.save(CachedPhoto(photo: photo, geographyVersion: resolver.version))
-                if reusable { state.reused += 1 } else { state.encoded += 1 }
-                // Only committed, newly encoded records contribute source counts.
-                if let source {
+                let outcome = try await indexPrepared(item, resolver: resolver, cacheVersion: cacheVersion,
+                                                      store: store, networkAllowed: networkAllowed)
+                // No counters for speculative preparation or an uncommitted save.
+                state.record(outcome.place)
+                if outcome.reused { state.reused += 1 }
+                if outcome.placeUpdated { state.placeUpdated += 1 }
+                if outcome.cloudSkipped { state.cloudSkipped += 1 }
+                if let failure = outcome.failure {
+                    state.failed += 1
+                    state.lastFailure = failure
+                }
+                if let source = outcome.source {
+                    state.encoded += 1
                     switch source {
                     case .localPreview: state.localPreviews += 1
                     case .localReducedPreview: state.reducedPreviews += 1
                     case .networkPreview: state.networkPreviews += 1
                     }
                 }
+                state.completed += 1
+                await progress(state)
             }
-            state.completed += 1
-            await progress(state)
+            try Task.checkCancellation()
         }
         let current = try await reconcile()
         return try await summary(snapshot: current, manifest: manifest, resolver: resolver)
     }
 
-    private func encodeImage(id: String, networkAllowed: Bool) async throws -> (embedding: [Float], source: IndexingImage.Source) {
-        let preview = try await library.indexImage(id: id, networkAllowed: networkAllowed)
-        let source = preview.source
-        try Task.checkCancellation()
-        let embedding = try await encoders.image(preview: preview)
-        try Task.checkCancellation()
-        return (embedding, source)
+    private enum PreparedImage: Sendable {
+        case reused([Float])
+        case preview(IndexingImage)
+        case failed(Error)
     }
 
-    private func location(id: String, resolver: OfflinePlaceResolver, cacheVersion: String,
+    private struct PreparedIndexItem: Sendable {
+        let revision: PhotoRevision
+        let old: CachedPhoto?
+        let image: PreparedImage
+    }
+
+    private struct IndexOutcome {
+        let place: PhotoPlaceResult
+        var reused = false
+        var source: IndexingImage.Source?
+        var placeUpdated = false
+        var cloudSkipped = false
+        var failure: String?
+    }
+
+    /// No encoder, location lookup, write or progress here. Capture the exact
+    /// snapshot revision and old row, including its model/input-policy identity.
+    private nonisolated static func prepare(_ revision: PhotoRevision, library: any PhotoLibraryIndexing,
+                                             store: SQLitePhotoStore, cacheVersion: String,
+                                             networkAllowed: Bool) async throws -> PreparedIndexItem {
+        try Task.checkCancellation()
+        guard library.canReadImages else { throw AppFailure.permission }
+        let old = try await store.record(id: revision.id)
+        try Task.checkCancellation()
+        if let old, old.photo.modificationTime == revision.modificationTime, old.photo.modelVersion == cacheVersion {
+            return PreparedIndexItem(revision: revision, old: old, image: .reused(old.photo.imageEmbedding))
+        }
+        guard library.canReadImages else { throw AppFailure.permission }
+        let image: PreparedImage
+        do {
+            try Task.checkCancellation()
+            image = .preview(try await library.indexImage(id: revision.id, networkAllowed: networkAllowed))
+        } catch {
+            try Task.checkCancellation()
+            if PhotoImageRequestInfo.isCancellation(error) { throw CancellationError() }
+            // Preserve recoverable errors in snapshot order, not completion order.
+            image = .failed(error)
+        }
+        try Task.checkCancellation()
+        return PreparedIndexItem(revision: revision, old: old, image: image)
+    }
+
+    private func indexPrepared(_ item: PreparedIndexItem, resolver: OfflinePlaceResolver, cacheVersion: String,
+                               store: SQLitePhotoStore, networkAllowed: Bool) async throws -> IndexOutcome {
+        try Task.checkCancellation()
+        guard library.canReadImages else { throw AppFailure.permission }
+        let revision = item.revision
+        // Every checked asset, including image-cache hits and failed previews.
+        // Passing the resolved label onward avoids a second PHAsset/GPS read.
+        let place = library.placeResult(id: revision.id, resolver: resolver)
+        var outcome = IndexOutcome(place: place)
+        let label: String?
+        if case .resolved(let value) = place { label = value } else { label = nil }
+        let desiredText = label.map { "Photo taken in \($0)." }
+        let placeChanged = item.old?.photo.location?.text != desiredText
+            || (item.old != nil && item.old?.geographyVersion != resolver.version)
+        let image: [Float]
+        let reusable: Bool
+        var source: IndexingImage.Source?
+        do {
+            try Task.checkCancellation()
+            switch item.image {
+            case .reused(let vector):
+                image = vector
+                reusable = true
+            case .preview(let preview):
+                image = try await encoders.image(preview: preview)
+                source = preview.source
+                reusable = false
+            case .failed(let error): throw error
+            }
+            try Task.checkCancellation()
+        } catch {
+            try Task.checkCancellation()
+            if PhotoImageRequestInfo.isCancellation(error) { throw CancellationError() }
+            guard library.canReadImages else { throw AppFailure.permission }
+            if let failure = error as? AppFailure {
+                switch failure {
+                case .modelContract, .modelsMissing, .storage, .permission: throw failure
+                case .cloudOnly where !networkAllowed:
+                    outcome.cloudSkipped = true
+                    return outcome
+                default: break
+                }
+            }
+            if !networkAllowed, PhotoImageRequestInfo.requiresNetwork(error) { outcome.cloudSkipped = true }
+            else { outcome.failure = error.localizedDescription }
+            return outcome
+        }
+        guard library.canReadImages else { throw AppFailure.permission }
+        let needsSave = !reusable || placeChanged
+        let location: PlaceEmbedding?
+        if needsSave {
+            location = try await self.location(label: label, cacheVersion: cacheVersion, store: store)
+        } else { location = item.old?.photo.location }
+        try Task.checkCancellation()
+        guard library.canReadImages else { throw AppFailure.permission }
+        guard library.currentRevision(id: revision.id) == revision else {
+            outcome.failure = "A photo changed or became inaccessible during indexing; refresh and retry."
+            return outcome
+        }
+        if needsSave {
+            let photo = IndexedPhoto(id: revision.id, modificationTime: revision.modificationTime,
+                                     modelVersion: cacheVersion, imageEmbedding: image, location: location,
+                                     creationTime: revision.creationTime)
+            try await store.save(CachedPhoto(photo: photo, geographyVersion: resolver.version))
+            outcome.placeUpdated = placeChanged
+        }
+        outcome.reused = reusable
+        outcome.source = source
+        return outcome
+    }
+
+    private func location(label: String?, cacheVersion: String,
                           store: SQLitePhotoStore) async throws -> PlaceEmbedding? {
-        guard let label = library.placeLabel(id: id, resolver: resolver) else { return nil }
+        try Task.checkCancellation()
+        guard let label else { return nil }
         let text = "Photo taken in \(label)."
         let key = Data((cacheVersion + "\n" + text).utf8)
         if let vector = placeVectors[key] { return PlaceEmbedding(text: text, vector: vector) }
         let vector: [Float]
         if let cached = try await store.place(text: text, modelVersion: cacheVersion) { vector = cached }
-        else { vector = try await encoders.text(text) }
+        else {
+            try Task.checkCancellation()
+            vector = try await encoders.text(text)
+        }
+        try Task.checkCancellation()
         placeVectors[key] = vector
         return PlaceEmbedding(text: text, vector: vector)
     }
@@ -379,5 +490,24 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                        locatedCount: photos.filter { $0.location != nil }.count,
                        modelVersion: IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion),
                        placesDescription: resolver.coverageDescription)
+    }
+}
+
+private extension IndexProgress {
+    mutating func record(_ result: PhotoPlaceResult) {
+        placeChecked += 1
+        switch result {
+        case .resolved:
+            gpsCount += 1
+            placeResolved += 1
+        case .noGPS: noGPS += 1
+        case .noPack:
+            gpsCount += 1
+            noPlacePack += 1
+        case .outsideCoverage:
+            gpsCount += 1
+            outsidePlaceCoverage += 1
+        case .unavailable: placeUnavailable += 1
+        }
     }
 }

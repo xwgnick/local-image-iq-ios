@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync, writeFileSync,
   mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { validatePlaces } from './check_places.mjs';
 
 function run(executable, args) {
   const result = spawnSync(executable, args, { encoding: 'utf8' });
@@ -42,6 +43,8 @@ if (process.argv[2] === '--self-test') {
   assert.ok(!existsSync(path.join(app, 'PlugIns')), 'Do not include test bundles in the device App');
   assert.ok(!existsSync(path.join(app, 'embedded.mobileprovision')), 'This workflow does not create signed provisioned builds');
   assert.ok(!existsSync(path.join(app, '_CodeSignature')), 'Unexpected signature; produce unsigned output for local signing');
+  // Validate the actual device App, not source resources or the simulator/test bundle.
+  const places = validatePlaces(app, { appBundle: true });
   const resource = name => [app, path.join(app, 'Models'), path.join(app, 'Resources', 'Models')]
     .map(folder => path.join(folder, name)).find(existsSync);
   const manifestPath = resource('model-manifest.json');
@@ -109,6 +112,9 @@ if (process.argv[2] === '--self-test') {
     run('ditto', ['-c', '-k', '--keepParent', '--norsrc', path.join(staging, 'Payload'), ipa]);
     const entries = run('unzip', ['-Z1', ipa]).split('\n').filter(Boolean);
     assert.ok(entries.includes('Payload/LocalImageIQ.app/Info.plist'));
+    for (const relative of [places.file, places.manifest]) {
+      assert.ok(entries.includes(`Payload/LocalImageIQ.app/${relative}`), `IPA is missing verified Places resource: ${relative}`);
+    }
     assert.ok(entries.every(name => name.startsWith('Payload/')));
     assert.ok(!entries.some(name => /\.xctest(?:\/|$)|embedded\.mobileprovision$/.test(name)));
   } finally { rmSync(staging, { recursive: true, force: true }); }
@@ -118,7 +124,8 @@ if (process.argv[2] === '--self-test') {
   const report = { platform: 'iphoneos', architectures: ['arm64'], configuration: 'Release', signed: false,
     installableWithoutResigning: false, deviceTested: false, minimumOS: info.MinimumOSVersion,
     bundleIdentifier: info.CFBundleIdentifier, buildSDK: info.DTSDKName, xcode: info.DTXcode,
-    modelVersion: manifest.modelVersion, modelDimension: manifest.dimension,
+    appVersion: info.CFBundleShortVersionString, appBuild: info.CFBundleVersion,
+    modelVersion: manifest.modelVersion, modelDimension: manifest.dimension, places,
     ipa: path.basename(ipa), bytes: statSync(ipa).size, sha256,
     nextStep: 'Re-sign locally on Windows using the user-approved tool and their own Apple account. No account secret is used by CI.' };
   writeFileSync(path.join(output, 'device-build.json'), JSON.stringify(report, null, 2) + '\n');

@@ -52,10 +52,20 @@ jobs:
         run: |
           node scripts/check_project.mjs --self-test
           node scripts/check_project.mjs
+          node scripts/check_places.mjs --self-test
+          node scripts/check_places.mjs
           node scripts/package_device.mjs --self-test
           python scripts/test_static.py
           plutil -lint App/Info.plist
           swift test --package-path Packages/ImageIQCore
+      - name: Generate and validate required public offline Places pack
+        # Unconditional: include_models=false still ships the four-country pack.
+        # Use setup-python's isolated runner Python, never the Core ML conversion venv.
+        run: |
+          python -m pip install shapely==2.1.2
+          python scripts/test_places.py
+          python scripts/build_places.py --download
+          node scripts/check_places.mjs --pack-dir Resources/Places
       - name: Convert and check pinned model pair
         if: inputs.include_models
         run: |
@@ -86,6 +96,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             IMAGEIQ_REQUIRE_MODELS="$IMAGEIQ_REQUIRE_MODELS" \
             IMAGEIQ_TEST_ALL_COMPUTE_UNITS="$IMAGEIQ_TEST_ALL_COMPUTE_UNITS"
+          node scripts/check_places.mjs --app-dir build/DerivedData/Build/Products/Debug-iphonesimulator/LocalImageIQ.app
       - name: Package simulator app (not an installable iPhone IPA)
         if: ${{ !inputs.build_device_ipa }}
         run: |
@@ -137,9 +148,11 @@ jobs:
             build/LocalImageIQ-Simulator.zip
             Resources/Models/parity-report.json
             Resources/Models/provenance.json
+            Resources/Places/places-manifest.json
       - name: Summarize validation boundary
         if: always()
         run: |
           echo '### Native iOS milestone' >> "$GITHUB_STEP_SUMMARY"
           echo 'This run does not sign, publish, upload to TestFlight, or prove physical-iPhone performance.' >> "$GITHUB_STEP_SUMMARY"
           echo "Models requested: $IMAGEIQ_REQUIRE_MODELS. Model-free tests skip generated numerical parity; read xcresult for actual test outcomes." >> "$GITHUB_STEP_SUMMARY"
+          echo 'All runs require the pinned CHN/FRA/DEU/NLD ADM1/ADM2 Places pack and bundled manifest. Check step outcomes; coverage is historical administrative boundaries, not global addresses or a phone-speed measurement.' >> "$GITHUB_STEP_SUMMARY"

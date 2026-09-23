@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 import Photos
 import UIKit
 import ImageIO
@@ -158,8 +159,33 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
 
     /// Coordinates exist only during this call; neither snapshots nor SQLite store GPS.
     func placeLabel(id: String, resolver: OfflinePlaceResolver) -> String? {
-        guard let location = asset(id: id)?.location else { return nil }
-        return resolver.label(longitude: location.coordinate.longitude, latitude: location.coordinate.latitude)
+        guard case let .resolved(label) = placeResult(id: id, resolver: resolver) else { return nil }
+        return label
+    }
+
+    func placeResult(id: String, resolver: OfflinePlaceResolver) -> PhotoPlaceResult {
+        // One fetch; an inaccessible/deleted asset is not evidence of missing GPS.
+        guard let asset = asset(id: id) else { return .unavailable }
+        return Self.classify(location: asset.location, resolver: resolver)
+    }
+
+    /// Pure metadata classification, also usable with synthetic locations and no PhotoKit access.
+    static func classify(location: CLLocation?, resolver: OfflinePlaceResolver?,
+                         isAvailable: Bool = true) -> PhotoPlaceResult {
+        guard isAvailable else { return .unavailable }
+        guard let location else { return .noGPS }
+        let coordinate = location.coordinate
+        guard coordinate.latitude.isFinite, coordinate.longitude.isFinite,
+              CLLocationCoordinate2DIsValid(coordinate) else {
+            return .unavailable
+        }
+          // A historical photo may have coordinates but no accuracy estimate.
+          // Preserve the existing coordinate-only lookup, not a new accuracy filter.
+        guard let resolver, resolver.featureCount > 0 else { return .noPack }
+        guard let label = resolver.label(longitude: coordinate.longitude, latitude: coordinate.latitude) else {
+            return .outsideCoverage
+        }
+        return .resolved(label)
     }
 
     private func asset(id: String) -> PHAsset? {

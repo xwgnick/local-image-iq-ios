@@ -12,8 +12,13 @@ struct LibrarySheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                accessSection
-                coverageSection
+                if state.canRead {
+                    coverageSection
+                    accessSection
+                } else {
+                    accessSection
+                    coverageSection
+                }
                 errorSection
                 cloudSection
                 detailsSection
@@ -77,10 +82,12 @@ struct LibrarySheet: View {
             if state.canRead {
                 if state.activity == .refreshing || state.activity == .clearing {
                     ProgressView(state.activity == .clearing ? "Clearing local index…" : "Checking authorized photos…")
+                } else if state.activity == .indexing {
+                    scanProgress
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("\(state.summary.indexedCount.formatted()) / \(state.summary.authorizedCount.formatted())")
-                            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                            .font(.system(.title2, design: .rounded, weight: .bold))
                             .monospacedDigit()
                             .foregroundStyle(IQStyle.accent)
                             .fixedSize(horizontal: false, vertical: true)
@@ -96,10 +103,12 @@ struct LibrarySheet: View {
                 }
             }
 
-            Text(coverageDescription)
-                .font(.subheadline)
-                .foregroundStyle(IQStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if state.activity != .indexing {
+                Text(coverageDescription)
+                    .font(.subheadline)
+                    .foregroundStyle(IQStyle.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if modelProblem != nil {
                 VStack(alignment: .leading, spacing: 6) {
@@ -112,23 +121,23 @@ struct LibrarySheet: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
 
-            Button { state.index() } label: {
-                Label("Index / resume", systemImage: "play.fill")
-                    .frame(maxWidth: .infinity, minHeight: 44)
-            }
-            .buttonStyle(.borderedProminent)
-            .foregroundStyle(IQStyle.background)
-            .disabled(!state.canIndex)
-            .accessibilityIdentifier("index-photos")
-
             if state.activity == .indexing {
                 Button("Stop", systemImage: "stop.fill") { state.cancel() }
                     .buttonStyle(.bordered)
                     .frame(minHeight: 44)
                     .accessibilityHint("Stops indexing and keeps completed work")
+            } else {
+                Button { state.index() } label: {
+                    Label("Index / resume", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .foregroundStyle(IQStyle.background)
+                .disabled(!state.canIndex)
+                .accessibilityIdentifier("index-photos")
             }
 
-            if state.canRead && (state.activity == .indexing || state.progress.total > 0) {
+            if state.canRead && state.activity != .indexing && state.progress.total > 0 {
                 scanProgress
             }
         } header: {
@@ -140,9 +149,10 @@ struct LibrarySheet: View {
     }
 
     private var scanProgress: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(state.activity == .indexing ? "Current scan" : "Last scan")
+        VStack(alignment: .leading, spacing: 10) {
+            Label(state.activity == .indexing ? "Current scan" : "Last scan", systemImage: "photo.stack")
                 .font(.subheadline.weight(.semibold))
+                .foregroundStyle(IQStyle.accent)
             if state.activity == .indexing {
                 if state.progress.total > 0 {
                     ProgressView(value: state.progress.fraction)
@@ -152,21 +162,27 @@ struct LibrarySheet: View {
                     ProgressView("Preparing photos…")
                 }
             }
-            Text("\(state.progress.completed.formatted()) of \(state.progress.total.formatted()) checked")
-                .font(.caption)
-                .foregroundStyle(IQStyle.secondary)
+            if state.progress.total > 0 {
+                Text("\(state.progress.completed.formatted()) of \(state.progress.total.formatted()) checked")
+                    .font(.subheadline.weight(.medium))
+            }
             LabeledContent("Ready", value: (state.progress.encoded + state.progress.reused).formatted())
-            LabeledContent("Missing previews", value: state.progress.cloudSkipped.formatted())
-            LabeledContent("Read errors", value: state.progress.failed.formatted())
             if state.progress.cloudSkipped > 0 {
+                LabeledContent("Missing previews", value: state.progress.cloudSkipped.formatted())
                 Text("Missing previews need iCloud access; those photos are not searchable yet.")
                     .font(.caption)
                     .foregroundStyle(IQStyle.secondary)
             }
+            if state.progress.failed > 0 {
+                LabeledContent("Read errors", value: state.progress.failed.formatted())
+            }
+            placeProgress
+            Text(state.activity == .indexing
+                 ? "This scan only; saved index totals update when it finishes."
+                 : "Last scan only, including any work completed before stopping. Not whole-library totals.")
+                .font(.caption)
+                .foregroundStyle(IQStyle.secondary)
             if state.activity != .indexing {
-                Text("These counts describe the last scan, not the whole index. Refresh to check saved coverage.")
-                    .font(.caption)
-                    .foregroundStyle(IQStyle.secondary)
                 Button("Refresh coverage", systemImage: "arrow.clockwise") { state.refresh() }
                     .buttonStyle(.bordered)
                     .disabled(state.isBusy)
@@ -176,6 +192,41 @@ struct LibrarySheet: View {
         .monospacedDigit()
         .fixedSize(horizontal: false, vertical: true)
         .padding(.vertical, 4)
+    }
+
+    private var placeProgress: some View {
+        DisclosureGroup {
+            if state.progress.placeChecked > 0 {
+                LabeledContent("Locations checked", value: state.progress.placeChecked.formatted())
+                LabeledContent("With GPS", value: state.progress.gpsCount.formatted())
+                LabeledContent("Place labels found", value: state.progress.placeResolved.formatted())
+                LabeledContent("No GPS", value: state.progress.noGPS.formatted())
+                LabeledContent("No usable place pack", value: state.progress.noPlacePack.formatted())
+                LabeledContent("Outside pack coverage", value: state.progress.outsidePlaceCoverage.formatted())
+                LabeledContent("Location unavailable", value: state.progress.placeUnavailable.formatted())
+                LabeledContent("Saved place updates", value: state.progress.placeUpdated.formatted())
+                Text("Location observations include photos whose images couldn't be indexed. Unavailable means the photo's location couldn't be read or used, not that it has no GPS.")
+                    .font(.caption)
+                    .foregroundStyle(IQStyle.secondary)
+                Text("Saved place updates can add, change or remove labels, or refresh their coverage information.")
+                    .font(.caption)
+                    .foregroundStyle(IQStyle.secondary)
+            } else {
+                Text("GPS and place-label counts are unknown until photo locations are checked. Saved labels are separate, in Details.")
+                    .font(.caption)
+                    .foregroundStyle(IQStyle.secondary)
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(state.activity == .indexing ? "Places · current scan" : "Places · last scan")
+                    .font(.subheadline.weight(.medium))
+                Text(state.progress.placeChecked > 0
+                     ? "\(state.progress.gpsCount.formatted()) with GPS · \(state.progress.placeResolved.formatted()) labels found"
+                     : "Photo locations not checked")
+                    .font(.caption)
+                    .foregroundStyle(IQStyle.secondary)
+            }
+        }
     }
 
     @ViewBuilder private var errorSection: some View {
@@ -218,7 +269,10 @@ struct LibrarySheet: View {
                 diagnostic("Status", state.status)
                 LabeledContent("Authorized photos", value: state.summary.authorizedCount.formatted())
                 LabeledContent("Current index at last check", value: state.summary.indexedCount.formatted())
-                LabeledContent("Offline place labels", value: state.summary.locatedCount.formatted())
+                LabeledContent("Saved place labels at last check", value: state.summary.locatedCount.formatted())
+                Text("Labels saved on indexed photos, not a GPS count or last-scan observations.")
+                    .font(.footnote)
+                    .foregroundStyle(IQStyle.secondary)
                 if state.progress.total > 0 {
                     diagnostic(state.activity == .indexing ? "Current scan" : "Last scan", state.progress.summary)
                 }
@@ -229,6 +283,10 @@ struct LibrarySheet: View {
                 if let error = state.errorMessage, error != modelProblem {
                     diagnostic("Last operation issue", error)
                 }
+                Text("Prepares the next photo while encoding the current one")
+                    .font(.footnote)
+                    .foregroundStyle(IQStyle.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text("Unchanged completed records are reused. Source counts describe newly encoded photos in that scan; online-fallback counts are not download or byte counts. Reduced previews can affect matches and are reused until the photo or index version changes.")
                     .font(.footnote)
                     .foregroundStyle(IQStyle.secondary)
@@ -277,7 +335,6 @@ struct LibrarySheet: View {
 
     private var coverageDescription: String {
         if !state.canRead { return "Connect Photos to see what is ready to search." }
-        if state.activity == .indexing { return "Building your index on this device. Live scan counts appear below." }
         if state.activity == .refreshing || state.activity == .clearing { return "Updating search coverage…" }
         if !state.modelsReady { return "Indexing and search are not ready yet." }
         if state.summary.authorizedCount == 0 { return "No images are available with the current Photos access." }

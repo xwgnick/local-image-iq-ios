@@ -31,6 +31,11 @@ Resources/**/*.mlmodel
 Resources/**/*.safetensors
 Resources/**/pytorch_model*.bin
 Resources/**/weights/
+# Generated public Places outputs only; keep README, attribution and pinned source configuration tracked.
+Resources/Places/Places.geojson
+Resources/Places/places-manifest.json
+# Optional local public source cache; never ignore scripts/place_sources.json.
+Resources/Places/Sources/
 # Never place personal images or desktop artifacts inside this standalone repo.
 *.heic
 *.HEIC

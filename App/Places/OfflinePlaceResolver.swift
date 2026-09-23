@@ -7,10 +7,14 @@ struct OfflinePlaceResolver: Sendable {
     let version: String
     let coverageDescription: String
     let featureCount: Int
+    let coverageCountries: [String]
+    let sourceNote: String?
     private let regions: [Region]
 
     static func bundled(bundle: Bundle = .main) -> OfflinePlaceResolver {
-        guard let url = BundleResources.url("Places", extension: "geojson", bundle: bundle) else {
+        guard let url = BundleResources.url("Places", extension: "geojson", bundle: bundle)
+            ?? bundle.url(forResource: "Places", withExtension: "geojson", subdirectory: "Places")
+            ?? bundle.url(forResource: "Places", withExtension: "geojson", subdirectory: "Resources/Places") else {
             return unavailable("No offline boundary pack bundled; location labels are unavailable.")
         }
         do { return try OfflinePlaceResolver(data: Data(contentsOf: url)) }
@@ -21,10 +25,13 @@ struct OfflinePlaceResolver: Sendable {
         OfflinePlaceResolver(version: "places-unavailable", coverageDescription: reason, featureCount: 0, regions: [])
     }
 
-    private init(version: String, coverageDescription: String, featureCount: Int, regions: [Region]) {
+    private init(version: String, coverageDescription: String, featureCount: Int,
+                 coverageCountries: [String] = [], sourceNote: String? = nil, regions: [Region]) {
         self.version = version
         self.coverageDescription = coverageDescription
         self.featureCount = featureCount
+        self.coverageCountries = coverageCountries
+        self.sourceNote = sourceNote
         self.regions = regions
     }
 
@@ -33,9 +40,13 @@ struct OfflinePlaceResolver: Sendable {
         guard collection.type == "FeatureCollection" else { throw AppFailure.places("Expected a FeatureCollection.") }
         var regions: [Region] = []
         var skipped = 0
-        for feature in collection.features {
-            guard feature.type == "Feature", !feature.properties.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  !feature.properties.level.isEmpty, let shapes = feature.geometry.polygons else {
+        for entry in collection.features {
+            guard let feature = entry.feature, let shapes = feature.geometry.polygons else {
+                skipped += 1
+                continue
+            }
+            let hasLabel = !feature.properties.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            guard feature.type == "Feature", hasLabel, !feature.properties.level.isEmpty else {
                 skipped += 1
                 continue
             }
@@ -46,9 +57,13 @@ struct OfflinePlaceResolver: Sendable {
         }
         // Stable cache identity, not a security/signature hash. Includes all pack bytes.
         let fingerprint = data.reduce(UInt64(14695981039346656037)) { ($0 ^ UInt64($1)) &* 1099511628211 }
+        let countries = collection.coverageCountries ?? []
+        let coverage = countries.isEmpty ? "Offline coverage: this pack only."
+            : "Offline country coverage: \(countries.joined(separator: ", "))."
         self.init(version: "raycast-v1-\(String(fingerprint, radix: 16))",
-                  coverageDescription: "\(regions.count) offline administrative features; \(skipped) unsupported/invalid features skipped. Only GPS inside this pack receives a label; coverage and names may be incomplete or historical.",
-                  featureCount: regions.count, regions: regions)
+                  coverageDescription: "\(coverage) Administrative boundaries may be incomplete or historical; not live GPS or global coverage. \(regions.count) features; \(skipped) unsupported/invalid features skipped.",
+                  featureCount: regions.count, coverageCountries: countries,
+                  sourceNote: collection.sourceNote, regions: regions)
     }
 
     func label(longitude: Double, latitude: Double) -> String? {
@@ -72,7 +87,16 @@ struct OfflinePlaceResolver: Sendable {
 
     private struct Collection: Decodable {
         let type: String
-        let features: [Feature]
+        let coverageCountries: [String]?
+        let sourceNote: String?
+        let features: [FeatureEntry]
+    }
+    private struct FeatureEntry: Decodable {
+        let feature: Feature?
+        init(from decoder: Decoder) throws {
+            // A malformed feature is counted as skipped, not a reason to discard valid siblings.
+            feature = try? Feature(from: decoder)
+        }
     }
     private struct Feature: Decodable {
         let type: String

@@ -60,13 +60,16 @@ struct SettingsSheet: View {
                     }
                     .accessibilityValue(state.locationWeight.formatted(.percent.precision(.fractionLength(0))))
                     .accessibilityIdentifier("location-weight")
-                    Text("0% uses image similarity only; 100% uses place similarity only. This changes ranking, not which locations are allowed.")
+                    Text("0% uses image similarity; 100% uses place-label similarity. This changes ranking, not which places are allowed.")
+                        .font(.footnote)
+                        .foregroundStyle(IQStyle.secondary)
+                    Text("Labels use GPS saved with a photo, not your live location. Raw coordinates aren't used for ranking.")
                         .font(.footnote)
                         .foregroundStyle(IQStyle.secondary)
                     Text(placeAvailability)
                         .font(.footnote)
                         .foregroundStyle(IQStyle.secondary)
-                    Text("\(state.summary.locatedCount.formatted()) of \(state.summary.indexedCount.formatted()) indexed photos have offline place labels at the last library check.")
+                    Text("Saved index: \(state.summary.locatedCount.formatted()) of \(state.summary.indexedCount.formatted()) photos had place labels at the last library check. This is not a GPS count; scan observations are in Library.")
                         .font(.footnote)
                         .foregroundStyle(IQStyle.secondary)
                 }
@@ -172,6 +175,11 @@ struct SettingsSheet: View {
         }
         if description.hasPrefix("Checking optional offline boundaries") {
             return "Offline place availability has not been checked yet."
+        }
+        if description.hasPrefix("Offline country coverage:") || description.hasPrefix("Offline coverage:") {
+            // Keep the resolver's metadata-derived countries, not its feature diagnostics.
+            let coverage = description.components(separatedBy: " Administrative boundaries")[0]
+            return "\(coverage) Boundaries may be incomplete or historical; not global coverage."
         }
         return "Place labels depend on the offline pack's coverage and each photo's available location."
     }

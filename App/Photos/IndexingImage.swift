@@ -35,6 +35,11 @@ enum IndexImagePolicy {
     }
 }
 
+/// Only a resolved administrative label leaves the lookup; never raw GPS.
+enum PhotoPlaceResult: Sendable, Equatable {
+    case resolved(String), noGPS, noPack, outsideCoverage, unavailable
+}
+
 protocol PhotoLibraryIndexing: Sendable {
     var canReadImages: Bool { get }
     /// Optional for existing test libraries; production also detects full/limited
@@ -43,11 +48,18 @@ protocol PhotoLibraryIndexing: Sendable {
     func enumerateAuthorizedImages() throws -> [PhotoRevision]
     func currentRevision(id: String) -> PhotoRevision?
     func placeLabel(id: String, resolver: OfflinePlaceResolver) -> String?
+    func placeResult(id: String, resolver: OfflinePlaceResolver) -> PhotoPlaceResult
     func indexImage(id: String, networkAllowed: Bool) async throws -> IndexingImage
 }
 
 extension PhotoLibraryIndexing {
     var authorizationStatusRawValue: Int? { nil }
+
+    func placeResult(id: String, resolver: OfflinePlaceResolver) -> PhotoPlaceResult {
+        // Legacy/test libraries cannot distinguish missing GPS from other causes.
+        guard let label = placeLabel(id: id, resolver: resolver) else { return .unavailable }
+        return .resolved(label)
+    }
 }
 
 extension PhotoLibraryClient {
