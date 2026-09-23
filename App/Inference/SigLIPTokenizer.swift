@@ -24,10 +24,35 @@ struct SigLIPTokenizer: Sendable {
         return SigLIPTokenizer(tokenizer: tokenizer)
     }
 
+    /// Locale-independent default lowercase, including Python str.lower's Final_Sigma rule.
+    /// Leave normalization and accent handling to the pinned tokenizer unchanged.
+    static func normalizedQuery(_ text: String) -> String {
+        let scalars = Array(text.unicodeScalars)
+        var normalized = ""
+        var precededByCased = false
+        for (index, scalar) in scalars.enumerated() {
+            if scalar.value == 0x03A3 {
+                // Context is evaluated on the original input, skipping Case_Ignorable
+                // before checking Cased: a scalar such as U+0345 has both properties.
+                var nextIndex = index + 1
+                while nextIndex < scalars.count && scalars[nextIndex].properties.isCaseIgnorable {
+                    nextIndex += 1
+                }
+                let followedByCased = nextIndex < scalars.count && scalars[nextIndex].properties.isCased
+                normalized += precededByCased && !followedByCased ? "\u{03C2}" : "\u{03C3}"
+            } else {
+                // Keep full, potentially multi-scalar mappings, e.g. İ -> i + U+0307.
+                normalized += String(scalar).lowercased()
+            }
+            if !scalar.properties.isCaseIgnorable {
+                precededByCased = scalar.properties.isCased
+            }
+        }
+        return normalized
+    }
+
     func encode(_ text: String) throws -> TokenizedText {
-        // Swift's Unicode lowercasing still requires exact multilingual parity fixtures
-        // against the exporter's reference tokenizer; do not claim blanket equivalence.
-        let encoded = tokenizer.encode(text: text.lowercased(), addSpecialTokens: false)
+        let encoded = tokenizer.encode(text: Self.normalizedQuery(text), addSpecialTokens: false)
         guard encoded.allSatisfy({ (0..<256_000).contains($0) }) else {
             throw AppFailure.modelContract("Tokenizer IDs must be in 0..<256000.")
         }

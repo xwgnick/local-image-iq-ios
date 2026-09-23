@@ -4,6 +4,64 @@ import ImageIQCore
 @testable import LocalImageIQ
 
 final class ModelBoundaryTests: XCTestCase {
+    func testQueryNormalizationMatchesPythonGreekSigmaContexts() {
+        // Literal CPython str.lower expectations; no model resources or Swift-derived oracle.
+        let cases: [(String, String)] = [
+            ("ΟΣ ΟΣΑ Σ σ ς ΟΣ\u{0301} Ελληνικά", "ος οσα σ σ ς ος\u{0301} ελληνικά"),
+            ("ΣΣ ΣΣΣ ΑΣΣΑ ςΣ", "σς σσς ασσα ςς"),
+            ("ΣΑ ΑΣΑ ΑΣ", "σα ασα ας"),
+            ("A Σ AΣ B", "a σ aς b"),
+            ("A1Σ AΣ1B", "a1σ aς1b"),
+            ("A-Σ AΣ-B", "a-σ aς-b"),
+            ("A😀Σ AΣ😀B", "a😀σ aς😀b"),
+        ]
+        for (input, expected) in cases {
+            XCTAssertEqual(SigLIPTokenizer.normalizedQuery(input).unicodeScalars.map(\.value),
+                           expected.unicodeScalars.map(\.value), "Input: \(input.debugDescription)")
+        }
+    }
+
+    func testQueryNormalizationSkipsCaseIgnorableScalarsForFinalSigma() {
+        let cases: [(String, String)] = [
+            ("Ο\u{0301}Σ", "ο\u{0301}ς"),
+            ("ΟΣ\u{0301}", "ος\u{0301}"),
+            ("ΟΣ\u{0301}Α", "οσ\u{0301}α"),
+            ("\u{0301}Σ", "\u{0301}σ"),
+            ("A'Σ AΣ' AΣ'B 'Σ", "a'ς aς' aσ'b 'σ"),
+            ("A\u{2019}Σ AΣ\u{2019}B", "a\u{2019}ς aσ\u{2019}b"),
+            ("A\u{200C}Σ", "a\u{200C}ς"),
+            ("AΣ\u{200C}", "aς\u{200C}"),
+            ("AΣ\u{200C}B", "aσ\u{200C}b"),
+            ("\u{200C}Σ", "\u{200C}σ"),
+            // U+0345 is both Cased and Case_Ignorable; ignoring it must take priority.
+            ("\u{0345}Σ", "\u{0345}σ"),
+            ("A\u{0345}Σ", "a\u{0345}ς"),
+            ("AΣ\u{0345}", "aς\u{0345}"),
+            ("AΣ\u{0345}B", "aσ\u{0345}b"),
+            ("A\u{0301}'\u{200C}Σ\u{0301}'\u{200C}B", "a\u{0301}'\u{200C}σ\u{0301}'\u{200C}b"),
+        ]
+        for (input, expected) in cases {
+            XCTAssertEqual(SigLIPTokenizer.normalizedQuery(input).unicodeScalars.map(\.value),
+                           expected.unicodeScalars.map(\.value), "Input: \(input.debugDescription)")
+        }
+    }
+
+    func testQueryNormalizationPreservesFullMappingsAccentsAndOtherScalars() {
+        let cases: [(String, String)] = [
+            ("", ""),
+            ("ABC I İ i ı", "abc i i\u{0307} i ı"),
+            ("İΣ İΣΑ", "i\u{0307}ς i\u{0307}σα"),
+            ("É E\u{0301} A\u{030A} I\u{0301}", "é e\u{0301} a\u{030A} i\u{0301}"),
+            ("ẞ ß ﬃ", "ß ß ﬃ"), // Lowercase, not casefold.
+            (" \tHELLO\n世界👩\u{200D}💻 ", " \thello\n世界👩\u{200D}💻 "),
+        ]
+        for (input, expected) in cases {
+            // String equality accepts canonical equivalence; compare exact scalar sequences.
+            XCTAssertEqual(SigLIPTokenizer.normalizedQuery(input).unicodeScalars.map(\.value),
+                           expected.unicodeScalars.map(\.value), "Input: \(input.debugDescription)")
+        }
+    }
+
     func testManifestAcceptsContractAndAdditionalProvenance() throws {
         let manifest = try JSONDecoder().decode(ModelManifest.self, from: Data(TestFixtures.manifest.utf8))
         try manifest.validate()

@@ -111,6 +111,224 @@ final class ImagePreprocessorTests: XCTestCase {
         XCTAssertThrowsError(try ImagePreprocessor.values(data: Data([0, 1, 2])))
     }
 
+    func testBilinearPixelsAreIndependentOfCGImageInterpolationHint() throws {
+        func image(_ hint: Bool) throws -> CGImage {
+            try TestFixtures.image(width: 2, height: 2, shouldInterpolate: hint) { x, y in
+                (x == 1 ? 255 : 0, y == 1 ? 255 : 0, x == y ? 255 : 0)
+            }
+        }
+        let withoutHint = try ImagePreprocessor.values(image: image(false))
+        let withHint = try ImagePreprocessor.values(image: image(true))
+        XCTAssertTrue(withoutHint.elementsEqual(withHint), "CG interpolation hints must not change resize pixels")
+
+        // Independent four-pixel calculation: interpolate/round each source row,
+        // then interpolate/round those bytes vertically. No production filters.
+        let positions = [0, 55, 56, 70, 98, 111, 112, 126, 154, 167, 168, 223]
+        for y in positions {
+            let wy = min(1, max(0, (Double(y) + 0.5) / 112 - 0.5))
+            for x in positions {
+                let wx = min(1, max(0, (Double(x) + 0.5) / 112 - 0.5))
+                let red = floor(255 * wx + 0.5)
+                let green = floor(255 * wy + 0.5)
+                let topBlue = floor(255 * (1 - wx) + 0.5)
+                let bottomBlue = floor(255 * wx + 0.5)
+                let blue = floor(topBlue * (1 - wy) + bottomBlue * wy + 0.5)
+                assertExactPixel(withoutHint, x: x, y: y, rgb: [Float(red), Float(green), Float(blue)])
+            }
+        }
+    }
+
+    func testThumbnailSizedRampsMatchIndependentBilinearPixels() throws {
+        // The two native-image dimensions that failed the SigLIP embedding gate.
+        // Linear ramps give a closed-form pixel oracle without reimplementing
+        // the production tap builder. Both use shouldInterpolate == false.
+        let positions = [0, 1, 17, 55, 70, 98, 111, 112, 126, 154, 198, 222, 223]
+        for (width, height) in [(68, 120), (112, 199)] {
+            let source = try TestFixtures.image(width: width, height: height) { x, y in
+                (UInt8(2 * x), UInt8(y), 127)
+            }
+            let values = try ImagePreprocessor.values(image: source)
+            for y in positions {
+                let sy = min(Double(height - 1), max(0, (Double(y) + 0.5) * Double(height) / 224 - 0.5))
+                for x in positions {
+                    let sx = min(Double(width - 1), max(0, (Double(x) + 0.5) * Double(width) / 224 - 0.5))
+                    assertExactPixel(values, x: x, y: y,
+                                     rgb: [Float(floor(2 * sx + 0.5)), Float(floor(sy + 0.5)), 127])
+                }
+            }
+        }
+    }
+
+    func testIdentityResizePreservesEveryRGBByte() throws {
+        let image = try TestFixtures.image(width: 224, height: 224) { x, y in
+            (UInt8((3 * x + y) % 256), UInt8((x + 5 * y) % 256), UInt8((7 * x + 11 * y) % 256))
+        }
+        let values = try ImagePreprocessor.values(image: image)
+        let pixels = 224 * 224
+        XCTAssertEqual(values.count, 3 * pixels)
+        for channel in 0..<3 {
+            XCTAssertTrue((0..<pixels).allSatisfy { pixel in
+                let x = pixel % 224
+                let y = pixel / 224
+                let rgb = [(3 * x + y) % 256, (x + 5 * y) % 256, (7 * x + 11 * y) % 256]
+                let expected = (Float(rgb[channel]) / 255 - 0.5) / 0.5
+                return values[channel * pixels + pixel] == expected
+            }, "Identity must preserve every byte in RGB plane \(channel)")
+        }
+    }
+
+    func testSinglePixelAndSingletonAxesHaveExactClampedBilinearValues() throws {
+        let solid = try TestFixtures.image(width: 1, height: 1) { _, _ in (1, 128, 254) }
+        let solidValues = try ImagePreprocessor.values(image: solid)
+        let rgb: [Float] = [1, 128, 254]
+        for channel in 0..<3 {
+            let expected = (rgb[channel] / 255 - 0.5) / 0.5
+            XCTAssertTrue(solidValues[(channel * 224 * 224)..<((channel + 1) * 224 * 224)]
+                .allSatisfy { $0 == expected })
+        }
+
+        // Analytic 2 -> 224 half-pixel ramp, including both clamped borders.
+        let samples: [(Int, Float)] = [(0, 0), (55, 0), (56, 1), (70, 33), (98, 97),
+                                      (111, 126), (112, 129), (126, 161), (154, 224),
+                                      (167, 254), (168, 255), (223, 255)]
+        for (width, height) in [(2, 1), (1, 2)] {
+            let source = try TestFixtures.image(width: width, height: height) { x, y in
+                x + y == 0 ? (0, 255, 37) : (255, 0, 37)
+            }
+            let values = try ImagePreprocessor.values(image: source)
+            for (position, red) in samples {
+                for other in [0, 111, 223] {
+                    assertExactPixel(values, x: width == 2 ? position : other,
+                                     y: height == 2 ? position : other, rgb: [red, 255 - red, 37])
+                }
+            }
+        }
+    }
+
+    func testPillow22BitCoefficientRoundingAtHalfByteTies() throws {
+        let source = try TestFixtures.image(width: 2, height: 2) { x, y in
+            (UInt8(x * 112), UInt8(y * 112), UInt8((x + y) * 112))
+        }
+        let values = try ImagePreprocessor.values(image: source)
+        // Pinned from Pillow 11.1.0's published integer arithmetic, not a
+        // floating-point bilinear oracle. At x=60 the right weight is 9/224:
+        // round(2^22 * 9/224) = 168521, and
+        // (112 * 168521 + 2^21) >> 22 = 4 (unquantized 4.5 rounds to 5).
+        let samples: [(Int, Float)] = [(56, 1), (57, 2), (58, 3), (59, 4),
+                                      (60, 4), (61, 5), (62, 6), (63, 8)]
+        for (y, green) in samples {
+            for (x, red) in samples {
+                assertExactPixel(values, x: x, y: y, rgb: [red, green, red + green])
+            }
+        }
+    }
+
+    func testBilinearRoundsHorizontalBytesBeforeVerticalPass() throws {
+        let source = try TestFixtures.image(width: 2, height: 2) { x, y in
+            let value = UInt8(x + y)
+            return (value, value, value)
+        }
+        let values = try ImagePreprocessor.values(image: source)
+        // Source [[0, 1], [1, 2]]: at 111 the horizontal rows round to
+        // [0, 1]; at 112 they round to [1, 2]. Rounding only once after a
+        // floating-point 2-D blend would incorrectly produce 1 at both corners.
+        assertExactPixel(values, x: 111, y: 111, rgb: [0, 0, 0])
+        assertExactPixel(values, x: 112, y: 111, rgb: [1, 1, 1])
+        assertExactPixel(values, x: 111, y: 112, rgb: [1, 1, 1])
+        assertExactPixel(values, x: 112, y: 112, rgb: [2, 2, 2])
+    }
+
+    func testDownscaleCheckerboardUsesWidenedTriangleAndRenormalizedEdges() throws {
+        let source = try TestFixtures.image(width: 448, height: 448) { x, y in
+            (x.isMultiple(of: 2) ? 0 : 255, y.isMultiple(of: 2) ? 0 : 255,
+             (x + y).isMultiple(of: 2) ? 0 : 255)
+        }
+        let values = try ImagePreprocessor.values(image: source)
+        // Scale 2: interior taps [1,3,3,1]/8; left/top [3,3,1]/7,
+        // right/bottom reversed. Pin bytes after EACH pass. A box filter,
+        // nearest neighbor, or un-widened bilinear kernel fails the borders.
+        for y in [0, 1, 111, 222, 223] {
+            for x in [0, 1, 111, 222, 223] {
+                let red: Float = x == 0 ? 109 : (x == 223 ? 146 : 128)
+                let green: Float = y == 0 ? 109 : (y == 223 ? 146 : 128)
+                let isCorner = (x == 0 || x == 223) && (y == 0 || y == 223)
+                let blue: Float = isCorner ? (x == y ? 125 : 130) : 128
+                assertExactPixel(values, x: x, y: y, rgb: [red, green, blue])
+            }
+        }
+    }
+
+    func testThreefoldDownscaleAntialiasesStepAndSinglePixelEdgeImpulses() throws {
+        // Scale 3: interior [1,2,3,2,1]/9, first edge [2,3,2,1]/8.
+        // The zero-valued endpoint tap has been omitted in this explanation.
+        // A hard step leaks 1/9 into the preceding output, while an impulse
+        // at the first/last input contributes 2/8 at the corresponding edge.
+        let samples: [(Int, [Float])] = [
+            (0, [0, 64, 0]), (1, [0, 0, 0]), (110, [0, 0, 0]),
+            (111, [28, 0, 0]), (112, [227, 0, 0]), (113, [255, 0, 0]),
+            (222, [255, 0, 0]), (223, [255, 0, 64]),
+        ]
+        for (width, height) in [(672, 1), (1, 672)] {
+            let source = try TestFixtures.image(width: width, height: height) { x, y in
+                let position = x + y
+                return (position < 336 ? 0 : 255, position == 0 ? 255 : 0, position == 671 ? 255 : 0)
+            }
+            let values = try ImagePreprocessor.values(image: source)
+            for (position, rgb) in samples {
+                for other in [0, 112, 223] {
+                    assertExactPixel(values, x: width == 672 ? position : other,
+                                     y: height == 672 ? position : other, rgb: rgb)
+                }
+            }
+        }
+    }
+
+    func testPremultipliedAlphaIsCompositedOverBlackBeforeBilinearResize() throws {
+        // Premultiplied sRGB bytes: transparent, half-alpha, quarter-alpha, opaque.
+        // Their RGB bytes are exactly the black-composited colors, NOT unpremultiplied.
+        let bytes: [UInt8] = [0, 0, 0, 0, 32, 64, 96, 128, 1, 17, 63, 64, 13, 129, 251, 255]
+        let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let source = try XCTUnwrap(CGImage(width: 2, height: 2, bitsPerComponent: 8, bitsPerPixel: 32,
+                                         bytesPerRow: 8, space: space,
+                                         bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue |
+                                            CGBitmapInfo.byteOrder32Big.rawValue),
+                                         provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let opaque = try TestFixtures.image(width: 2, height: 2) { x, y in
+            let offset = (y * 2 + x) * 4
+            return (bytes[offset], bytes[offset + 1], bytes[offset + 2])
+        }
+        let values = try ImagePreprocessor.values(image: source)
+        let expected = try ImagePreprocessor.values(image: opaque)
+        XCTAssertTrue(values.elementsEqual(expected), "Composite native pixels over black before filtering RGB")
+        assertExactPixel(values, x: 0, y: 0, rgb: [0, 0, 0])
+        assertExactPixel(values, x: 223, y: 0, rgb: [32, 64, 96])
+        assertExactPixel(values, x: 0, y: 223, rgb: [1, 17, 63])
+        assertExactPixel(values, x: 223, y: 223, rgb: [13, 129, 251])
+    }
+
+    func testEXIFReordersNativePixelsBeforeRoundedResizePasses() throws {
+        // Independent explicit row-major permutations of a non-square 3x2 image.
+        let cases: [(CGImagePropertyOrientation, Int, Int, [Int])] = [
+            (.up, 3, 2, [0, 1, 2, 3, 4, 5]), (.upMirrored, 3, 2, [2, 1, 0, 5, 4, 3]),
+            (.down, 3, 2, [5, 4, 3, 2, 1, 0]), (.downMirrored, 3, 2, [3, 4, 5, 0, 1, 2]),
+            (.leftMirrored, 2, 3, [0, 3, 1, 4, 2, 5]), (.right, 2, 3, [3, 0, 4, 1, 5, 2]),
+            (.rightMirrored, 2, 3, [5, 2, 4, 1, 3, 0]), (.left, 2, 3, [2, 5, 1, 4, 0, 3]),
+        ]
+        let colors: [(UInt8, UInt8, UInt8)] = [
+            (0, 1, 253), (112, 127, 5), (7, 201, 91), (239, 3, 128), (17, 255, 31), (81, 61, 223),
+        ]
+        let source = try TestFixtures.image(width: 3, height: 2) { x, y in colors[y * 3 + x] }
+        for (orientation, width, height, order) in cases {
+            let reordered = try TestFixtures.image(width: width, height: height) { x, y in
+                colors[order[y * width + x]]
+            }
+            let actual = try ImagePreprocessor.values(image: source, orientation: orientation)
+            let expected = try ImagePreprocessor.values(image: reordered)
+            XCTAssertTrue(actual.elementsEqual(expected), "All pixels after EXIF \(orientation.rawValue)")
+        }
+    }
+
     func testDirectPreviewTensorMatchesOriginalDataForAllEXIFOrientations() throws {
         let orientations: [CGImagePropertyOrientation] = [
             .up, .upMirrored, .down, .downMirrored, .leftMirrored, .right, .rightMirrored, .left,
@@ -226,6 +444,15 @@ final class ImagePreprocessorTests: XCTestCase {
         for channel in 0..<3 {
             let expected = (rgb[channel] / 255 - 0.5) / 0.5
             XCTAssertEqual(values[channel * 224 * 224 + y * 224 + x], expected, accuracy: 0.02, file: file, line: line)
+        }
+    }
+
+    private func assertExactPixel(_ values: [Float], x: Int, y: Int, rgb: [Float],
+                                  file: StaticString = #filePath, line: UInt = #line) {
+        for channel in 0..<3 {
+            let expected = (rgb[channel] / 255 - 0.5) / 0.5
+            XCTAssertEqual(values[channel * 224 * 224 + y * 224 + x], expected, accuracy: 1e-6,
+                           "Pixel (\(x), \(y)), RGB channel \(channel)", file: file, line: line)
         }
     }
 }
