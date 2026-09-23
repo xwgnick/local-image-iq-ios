@@ -1,4 +1,49 @@
-# Cloud build status — 2026-09-22
+# Cloud build status — 2026-09-23
+
+## Read-only single-photo check · 0.2.1 (5)
+
+User confirmed the target is absent from Top 12 for `Dog eat my apple pen`, but
+appears first for `a hand holding a broken white pen`. It is therefore indexed;
+the cause of the ranking difference is still unproven. The user approved a simple
+check button and screenshot workflow, not a new retrieval model or index rebuild.
+
+The full-screen viewer now offers **Check this photo**. The check page accepts the
+missed query and compares full-gallery cached rank with the rank after replacing
+only this photo's vector using the existing local preview/encoder path. Request
+dimensions, actual CGImage dimensions, raw degraded flag and vector cosine appear
+on the screenshot card. Historical cached dimensions remain unknown.
+
+Dedicated SQLite read-only handle; no cache reconciliation, schema writes, vector
+updates, original-data requests or network fallback in this operation. The existing
+AppState task chain serializes it with other work and rejects late cancelled
+results. Current photo selection, query and gallery survive the check.
+
+New tests: 18 worker/storage plus 20 state/render tests (five native screenshots).
+Synthetic inputs and temporary databases only. No private photos, database or GPS
+uploaded. See [PHOTO_CHECK.md](PHOTO_CHECK.md) for the test contract and phone steps.
+
+[Run 35817552815](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35817552815)
+at `36b4a7fa43fd5dd8d47cda8332fbaef4be0630ec`: **SUCCESS**, first attempt.
+
+- Core: 79 passed. App: 152 total, 151 passed, one physical-protection skip.
+  All 18 PhotoDiagnosticTests and 20 PhotoCheckPresentationTests passed, including
+  actual temporary SQLite byte/hash invariance and cancellation/serialization.
+- All seven existing UI navigation/keyboard tests passed. These tests do not
+  exercise the new check button on a real photo; that remains a device test.
+- Five new native screenshots reviewed in one 960×1360 contact sheet. Idle,
+  result, unavailable-preview and large-type layouts are readable/scrollable;
+  the viewer button is visible and correctly disabled for a nonexistent test ID.
+  The example ranks/pixels are explicitly synthetic, not private-library findings.
+- iPhoneOS arm64 Release build passed with unchanged model version and cache policy.
+- [Unsigned IPA artifact](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35817552815/artifacts/10732805206):
+  **709,826,214 bytes**, SHA-256
+  `a96c377ae0562022215daeffe75be778ba620137f32d2c4f43e573964b8f6465`.
+- Downloaded with bounded-memory streaming and verified size/SHA-256 locally at
+  `build/device-download/35817552815/LocalImageIQ-iphoneos-unsigned.ipa`.
+  Review contact: `build/ui-review/35817552815/photo-check-contact.jpg`.
+
+Overwrite with the same Sideloadly identity/effective Bundle ID. Do not uninstall,
+clear or rebuild the index. Phone steps are in [PHOTO_CHECK.md](PHOTO_CHECK.md).
 
 ## Photo-first UI redesign · 0.2.0 (4)
 
