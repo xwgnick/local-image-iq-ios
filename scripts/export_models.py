@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Explicit macOS-only FP32 export and measured parity; no import-time execution.
 
-Default: cached pinned public snapshots only. --download explicitly permits fetching
-those two revisions. All reference inputs are generated, never user photos or GPS.
+Default: one cached pinned public snapshot only. --download explicitly permits
+fetching that revision. All reference inputs are generated, never user photos or GPS.
 """
 
 from __future__ import annotations
@@ -21,56 +21,51 @@ import sys
 import tempfile
 
 from model_contract import (
-    FEATURES, IMAGE_MODEL, MEAN, PREPROCESS, ROOT, STD, TEXT_MODEL,
+    DIMENSION, FEATURES, IMAGE_MODEL, MAX_ABS_LIMITS, MEAN, PREPROCESS, ROOT,
+    SCHEMA_VERSION, SEQUENCE_LENGTH, STD, TEXT_MODEL, TOKENIZER_FILES, VOCAB_SIZE,
     base_manifest, model_version, query_cases, require, sha256_file,
-    validate_document, validate_snapshot_configs, write_json,
+    validate_document, validate_snapshot_configs, validate_tokenization, write_json,
 )
 
-# Only files needed by the two verified snapshot layouts, plus license evidence.
-SNAPSHOT_FILES = {
-    "image": [
-        "modules.json", "config_sentence_transformers.json", "README.md", "LICENSE*", "NOTICE*",
-        "0_CLIPModel/config.json", "0_CLIPModel/preprocessor_config.json",
-        "0_CLIPModel/tokenizer_config.json", "0_CLIPModel/special_tokens_map.json",
-        "0_CLIPModel/vocab.json", "0_CLIPModel/merges.txt", "0_CLIPModel/model.safetensors",
-        "0_CLIPModel/LICENSE*", "0_CLIPModel/NOTICE*",
-    ],
-    "text": [
-        "modules.json", "config_sentence_transformers.json", "README.md", "LICENSE*", "NOTICE*",
-        "config.json", "sentence_bert_config.json", "model.safetensors",
-        "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "vocab.txt",
-        "1_Pooling/config.json", "2_Dense/config.json", "2_Dense/model.safetensors",
-        "1_Pooling/LICENSE*", "2_Dense/LICENSE*", "1_Pooling/NOTICE*", "2_Dense/NOTICE*",
-    ],
-}
+# One shared checkpoint and one weight file; never download/hash it twice by role.
+# The standard fast-tokenizer JSON avoids the slow SentencePiece conversion path.
+SNAPSHOT_FILES = [
+    "config.json", "preprocessor_config.json", "model.safetensors", *TOKENIZER_FILES,
+    "README.md", "LICENSE*", "NOTICE*",
+]
 OWNED_OUTPUTS = (
-    "ImageEncoder.mlpackage", "TextEncoder.mlpackage", "vocab.txt",
+    "ImageEncoder.mlpackage", "TextEncoder.mlpackage", *TOKENIZER_FILES,
     "tokenizer-parity.json", "image-preprocess-parity.json", "parity-report.json",
     "provenance.json", "licenses", "fixtures",
 )
+# Cleanup only; never publish or require this obsolete exporter-owned artifact.
+RETIRED_OUTPUTS = ("vocab.txt",)
+TOKENIZER_OPTIONS = {"padding": "max_length", "truncation": True, "max_length": SEQUENCE_LENGTH,
+                     "add_special_tokens": True, "return_attention_mask": True,
+                     "return_token_type_ids": False}
 
 
 def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--download", action="store_true",
-                        help="Explicitly fetch only the pinned public model snapshots; no token")
+                        help="Explicitly fetch only the pinned public shared checkpoint; no token")
     parser.add_argument("--output", type=Path, default=ROOT / "Resources" / "Models")
     parser.add_argument("--min-cosine", type=float, default=0.999,
                         help="Each raw-vector comparison must exceed this cosine (FP32 floor .999)")
     parser.add_argument("--conversion-max-abs", type=float, default=1e-3,
                         help="Maximum per-component error for saved Core ML vs eager Torch")
     parser.add_argument("--torch-max-abs", type=float, default=1e-5,
-                        help="Maximum raw error for ST vs wrapper and eager vs trace")
+                        help="Maximum raw error for HF reference vs wrapper and eager vs trace")
     parser.add_argument("--similarity-max-abs", type=float, default=1e-4,
-                        help="Maximum text/image cosine matrix difference vs original ST")
+                        help="Maximum text/image cosine matrix difference vs HF reference")
     parser.add_argument("--preprocess-max-abs", type=float, default=1e-6,
                         help="Maximum independent PIL/NumPy vs HF preprocessing error")
     args = parser.parse_args(argv)
     if not math.isfinite(args.min_cosine) or not 0.999 <= args.min_cosine < 1:
         parser.error("--min-cosine must be finite and in [0.999, 1); the comparison is strict >")
-    for name in ("conversion_max_abs", "torch_max_abs", "similarity_max_abs", "preprocess_max_abs"):
-        if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
-            parser.error(f"--{name.replace('_', '-')} must be finite and positive")
+    for name, ceiling in MAX_ABS_LIMITS.items():
+        if not math.isfinite(getattr(args, name)) or not 0 < getattr(args, name) <= ceiling:
+            parser.error(f"--{name.replace('_', '-')} must be finite, positive and <= {ceiling}")
     return args
 
 
@@ -91,59 +86,55 @@ def check_environment() -> dict:
             "machine": platform.machine(), "packages": versions}
 
 
-def snapshots(download: bool) -> tuple[Path, Path]:
+def snapshots(download: bool) -> Path:
     # Set BEFORE importing Hugging Face; never use a cached private credential.
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     os.environ["DO_NOT_TRACK"] = "1"
+    os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
     if not download:
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
     from huggingface_hub import snapshot_download
 
-    paths = []
-    for role, spec in (("image", IMAGE_MODEL), ("text", TEXT_MODEL)):
-        path = Path(snapshot_download(repo_id=spec["id"], revision=spec["revision"], token=False,
-                                      local_files_only=not download, allow_patterns=SNAPSHOT_FILES[role]))
-        require(path.name == spec["revision"], f"Unexpected resolved {role} snapshot revision")
-        for relative in SNAPSHOT_FILES[role]:
-            # Model cards/license files are evidence if present, not invented prerequisites.
-            if "*" not in relative and relative != "README.md":
-                require((path / relative).is_file(), f"Incomplete pinned {role} cache: {relative}")
-        paths.append(path)
-    return paths[0], paths[1]
+    require(IMAGE_MODEL == TEXT_MODEL, "Both encoders must use the same pinned checkpoint")
+    path = Path(snapshot_download(repo_id=IMAGE_MODEL["id"], revision=IMAGE_MODEL["revision"], token=False,
+                                  local_files_only=not download, allow_patterns=SNAPSHOT_FILES))
+    require(path.name == IMAGE_MODEL["revision"], "Unexpected resolved shared snapshot revision")
+    for relative in SNAPSHOT_FILES:
+        # Model cards/license files are evidence if present, not invented prerequisites.
+        if "*" not in relative and relative != "README.md":
+            require((path / relative).is_file(), f"Incomplete pinned shared cache: {relative}")
+    return path
 
 
-def source_provenance(stage: Path, paths: tuple[Path, Path], configs: dict, environment: dict) -> dict:
-    sources = {}
-    for role, path, spec in zip(("image", "text"), paths, (IMAGE_MODEL, TEXT_MODEL)):
-        selected = sorted({file for pattern in SNAPSHOT_FILES[role] for file in path.glob(pattern)
-                           if file.is_file()})
-        # Hash at export time only, streaming bytes; never an editor read of weights.
-        hashes = {file.relative_to(path).as_posix(): sha256_file(file) for file in selected}
-        evidence = []
-        declared_license = None
-        for file in selected:
-            if file.name == "README.md" or file.name.upper().startswith(("LICENSE", "NOTICE")):
-                target = stage / "licenses" / role / file.relative_to(path)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(file, target)
-                evidence.append(target.relative_to(stage).as_posix())
-                if file.name == "README.md":
-                    card = file.read_text(encoding="utf-8")
-                    # Report card declarations as declarations, NOT legal conclusions.
-                    frontmatter = re.match(r"\A---\s*\n(.*?)\n---", card, re.DOTALL)
-                    if frontmatter:
-                        match = re.search(r"^license:\s*([^\r\n]+)$", frontmatter.group(1), re.MULTILINE)
-                        if match:
-                            declared_license = match.group(1).strip().strip("\"'")
-        (stage / "licenses" / role).mkdir(parents=True, exist_ok=True)
-        sources[role] = {**spec, "sha256": hashes, "licenseEvidence": evidence,
-                         "modelCardDeclaredLicense": declared_license,
-                         "redistributionApproved": False,
-                         "licenseStatus": "manual review required; missing/unknown terms are not permission"}
+def source_provenance(stage: Path, path: Path, configs: dict, environment: dict) -> dict:
+    selected = sorted({file for pattern in SNAPSHOT_FILES for file in path.glob(pattern) if file.is_file()})
+    # Exactly one streaming source hash per selected file, including the shared weights.
+    hashes = {file.relative_to(path).as_posix(): sha256_file(file) for file in selected}
+    evidence = []
+    declared_license = None
+    for file in selected:
+        if file.name == "README.md" or file.name.upper().startswith(("LICENSE", "NOTICE")):
+            target = stage / "licenses" / "shared" / file.relative_to(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(file, target)
+            evidence.append(target.relative_to(stage).as_posix())
+            if file.name == "README.md":
+                card = file.read_text(encoding="utf-8")
+                # Report card declarations as declarations, NOT legal conclusions.
+                frontmatter = re.match(r"\A---\s*\n(.*?)\n---", card, re.DOTALL)
+                if frontmatter:
+                    match = re.search(r"^license:\s*([^\r\n]+)$", frontmatter.group(1), re.MULTILINE)
+                    if match:
+                        declared_license = match.group(1).strip().strip("\"'")
+    (stage / "licenses" / "shared").mkdir(parents=True, exist_ok=True)
+    sources = {"shared": {**IMAGE_MODEL, "roles": ["image", "text"], "sha256": hashes,
+                          "licenseEvidence": evidence, "modelCardDeclaredLicense": declared_license,
+                          "redistributionApproved": False,
+                          "licenseStatus": "manual review required; missing/unknown terms are not permission"}}
     script_files = sorted(Path(__file__).parent.glob("*.py")) + [Path(__file__).parent / "requirements-coreml.txt"]
     result = {
-        "schemaVersion": 1, "modelVersion": model_version(),
+        "schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(),
         "createdUTC": datetime.now(timezone.utc).isoformat(), "environment": environment,
         "sources": sources, "validatedConfigs": configs,
         "implementationContractSHA256": sha256_file(ROOT / "docs" / "IMPLEMENTATION_CONTRACT.md"),
@@ -154,8 +145,10 @@ def source_provenance(stage: Path, paths: tuple[Path, Path], configs: dict, envi
     }
     write_json(stage / "provenance.json", result)
     write_json(stage / "licenses" / "review-required.json", {
+        "schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(),
         "redistributionApproved": False,
-        "note": "Review both pinned model cards, upstream model/data obligations and dependency licenses. "
+        "note": "The public SigLIP 2 model card declares Apache-2.0; preserve actual evidence and review "
+                "checkpoint/tokenizer, upstream model/data obligations and dependency licenses. "
                 "Do not publish packages or unknown-license material based on this numerical export.",
         "sources": {role: {k: v for k, v in entry.items() if k != "sha256"}
                     for role, entry in sources.items()},
@@ -163,91 +156,89 @@ def source_provenance(stage: Path, paths: tuple[Path, Path], configs: dict, envi
     return result
 
 
-def load_pair(paths: tuple[Path, Path]):
+def load_pair(snapshot: Path, configs: dict):
     import numpy as np
     import torch
-    from sentence_transformers import SentenceTransformer
-    from transformers import CLIPModel, DistilBertModel
+    from transformers import AutoTokenizer, GemmaTokenizerFast, SiglipConfig, SiglipImageProcessor, SiglipModel
 
-    image = SentenceTransformer(str(paths[0]), device="cpu", local_files_only=True,
-                                trust_remote_code=False, token=False)
-    # ST 3.4.1's legacy CLIP module loader need not forward model_kwargs. Replace
-    # ONLY its CLIP model using the same local weights and an explicit eager load.
-    # The original SentenceTransformer processor/forward/encode pipeline remains.
-    del image[0].model
-    image[0].model = CLIPModel.from_pretrained(str(paths[0] / "0_CLIPModel"),
-                                              attn_implementation="eager", torch_dtype=torch.float32,
-                                              local_files_only=True, trust_remote_code=False, token=False)
-    text = SentenceTransformer(str(paths[1]), device="cpu", local_files_only=True, token=False,
-                               trust_remote_code=False, model_kwargs={"attn_implementation": "eager"})
-    image.eval().float().cpu()
-    text.eval().float().cpu()
-    for model in (image, text):
-        model.requires_grad_(False)
-    require(len(image) == 1 and type(image[0]).__name__ == "CLIPModel", "Unexpected image modules")
-    require([type(m).__name__ for m in text] == ["Transformer", "Pooling", "Dense"],
-            "Unexpected text modules (normalization or other unused module must not be skipped)")
-    require(isinstance(image[0].model, CLIPModel), "Image model is not transformers.CLIPModel")
-    require(isinstance(text[0].auto_model, DistilBertModel), "Text model is not DistilBERT")
-    require(image[0].model.config.vision_config._attn_implementation == "eager", "CLIP is not eager")
-    require(text[0].auto_model.config._attn_implementation == "eager", "DistilBERT is not eager")
-    for model in (image[0].model, text[0].auto_model):
-        require(not any("sdpa" in type(m).__name__.lower() or "flash" in type(m).__name__.lower()
-                        for m in model.modules()), "Fused attention cannot be traced in this exporter")
-    require(text.max_seq_length == 128 and text[0].do_lower_case is False, "ST tokenization changed")
-    pool = text[1]
-    require(pool.pooling_mode_mean_tokens is True, "Expected mean pooling")
-    for name in ("pooling_mode_cls_token", "pooling_mode_max_tokens", "pooling_mode_mean_sqrt_len_tokens",
-                 "pooling_mode_weightedmean_tokens", "pooling_mode_lasttoken"):
-        require(getattr(pool, name, False) is False, f"Unexpected pooling: {name}")
-    require(text[2].linear.in_features == 768 and text[2].linear.out_features == 512 and
-            text[2].linear.bias is None and isinstance(text[2].activation_function, torch.nn.Identity),
-            "Dense projection changed")
-    require(image[0].model.visual_projection.out_features == 512, "Visual projection changed")
-    processor = image[0].processor.image_processor
-    require(processor.size == {"shortest_edge": 224} and processor.crop_size == {"height": 224, "width": 224},
-            "Effective CLIP resize/crop changed")
-    require(processor.do_resize and processor.do_center_crop and processor.do_normalize and
-            processor.do_rescale and int(processor.resample) == 3, "Effective CLIP preprocessing changed")
+    local = {"local_files_only": True, "trust_remote_code": False, "token": False}
+    config = SiglipConfig.from_pretrained(str(snapshot), **local)
+    # Check resolved library defaults BEFORE allocating/loading the shared weights.
+    for role, expected in (("vision", configs["effectiveVisionArchitecture"]),
+                           ("text", configs["effectiveTextArchitecture"])):
+        effective = getattr(config, f"{role}_config")
+        for key, value in expected.items():
+            # vision_use_head is optional in 4.48.3; absent means True in its forward.
+            actual = getattr(effective, key, True if key == "vision_use_head" else None)
+            require(actual == value, f"Effective Siglip {role} {key} changed")
+    model, loading = SiglipModel.from_pretrained(
+        str(snapshot), config=config, attn_implementation="eager", torch_dtype=torch.float32,
+        use_safetensors=True, output_loading_info=True, **local)
+    for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs"):
+        require(not loading.get(key), f"Checkpoint loading mismatch: {key}: {loading.get(key)}")
+    model.eval().float().cpu().requires_grad_(False)
+    require(isinstance(model, SiglipModel), "Expected built-in transformers.SiglipModel")
+    for tower in (model.vision_model, model.text_model):
+        require(tower.config._attn_implementation == "eager", "Siglip tower is not eager")
+    require(not any("sdpa" in type(m).__name__.lower() or "flash" in type(m).__name__.lower()
+                    for m in model.modules()), "Fused attention cannot be traced in this exporter")
+    require(model.vision_model.use_head, "Missing learned vision pooling head")
+    require(model.text_model.head.in_features == DIMENSION and
+            model.text_model.head.out_features == DIMENSION, "Text pooling head width changed")
+    processor = SiglipImageProcessor.from_pretrained(str(snapshot), **local)
+    require(processor.size == {"height": 224, "width": 224}, "Effective Siglip warp size changed")
+    require(processor.do_resize and processor.do_normalize and processor.do_rescale and
+            int(processor.resample) == 2 and not getattr(processor, "do_center_crop", False),
+            "Effective Siglip preprocessing changed")
     require(np.array_equal(processor.image_mean, MEAN) and np.array_equal(processor.image_std, STD) and
-            processor.rescale_factor == 1 / 255, "Effective CLIP normalization changed")
-    return image, text
-
-
-def tokenizer_cases(stage: Path, snapshot: Path, text_model) -> list[dict]:
-    import numpy as np
-
-    fast = text_model[0].tokenizer
-    require(fast.is_fast, "Expected the original SentenceTransformer HF fast tokenizer")
+            processor.rescale_factor == 1 / 255, "Effective Siglip normalization changed")
+    fast = AutoTokenizer.from_pretrained(str(snapshot), use_fast=True, **local)
+    require(isinstance(fast, GemmaTokenizerFast) and fast.is_fast, "Expected built-in GemmaTokenizerFast")
+    require(fast.add_bos_token is False and fast.add_eos_token is True and
+            fast.num_special_tokens_to_add(pair=False) == 1, "Expected EOS only, no automatic BOS")
+    require((fast.pad_token_id, fast.eos_token_id, fast.bos_token_id, fast.unk_token_id) == (0, 1, 2, 3),
+            "Effective Gemma special token IDs changed")
+    require(fast.padding_side == fast.truncation_side == "right", "Tokenization side changed")
+    require(fast.model_input_names == ["input_ids"] and len(fast) == VOCAB_SIZE,
+            "Effective Gemma vocabulary/model inputs changed")
     backend = json.loads(fast.backend_tokenizer.to_str())
-    normalizer = backend["normalizer"]
-    require(normalizer["type"] == "BertNormalizer" and normalizer["lowercase"] is False and
-        normalizer["strip_accents"] in (None, False) and normalizer["handle_chinese_chars"] is True,
-        "Effective cased/Chinese-preserving WordPiece normalization changed")
-    require(backend["model"]["type"] == "WordPiece" and
-        backend["model"]["continuing_subword_prefix"] == "##", "Effective WordPiece model changed")
-    require(fast.padding_side == "right" and fast.truncation_side == "right", "Tokenization side changed")
-    vocabulary = (snapshot / "vocab.txt").read_text(encoding="utf-8").splitlines()
-    mapping = {word: index for index, word in enumerate(vocabulary)}
-    require(len(vocabulary) == len(mapping) == 119547, "Vocabulary length or uniqueness changed")
-    require(fast.get_vocab() == mapping, "Vocabulary ID order/added tokens changed")
-    (stage / "vocab.txt").write_text("\n".join(vocabulary) + "\n", encoding="utf-8")
+    require(backend["model"]["type"] == "BPE" and backend["model"].get("byte_fallback") is True,
+            "Expected Gemma BPE with byte fallback")
+    return model, processor, fast
+
+
+def tokenize_query(fast, text: str) -> dict:
+    # GemmaTokenizerFast 4.48.3 does not implement do_lower_case itself.
+    # Do not strip, casefold, normalize Unicode or remove literal special tokens.
+    encoded = fast(text.lower(), **TOKENIZER_OPTIONS)
+    validate_tokenization(encoded)
+    return encoded
+
+
+def tokenizer_cases(stage: Path, snapshot: Path, fast) -> list[dict]:
+    import numpy as np
+    from transformers import AutoTokenizer
+
+    for name in TOKENIZER_FILES:
+        shutil.copyfile(snapshot / name, stage / name)
+    # Prove that the two bundled runtime JSONs suffice, without tokenizer.model
+    # or special_tokens_map.json. No second model/weight load is performed.
+    bundled = AutoTokenizer.from_pretrained(str(stage), use_fast=True, local_files_only=True,
+                                            trust_remote_code=False, token=False)
     result = []
     for case in query_cases():
-        options = dict(padding="max_length", truncation=True, max_length=128,
-                       add_special_tokens=True, return_attention_mask=True, return_token_type_ids=False)
-        encoded = fast(case["text"], **options)
-        for name in ("input_ids", "attention_mask"):
-            require(len(encoded[name]) == 128, "Tokenizer fixture not fixed length")
-        st_tokens = text_model.tokenize([case["text"]])
-        valid = sum(encoded["attention_mask"])
-        require(st_tokens["input_ids"][0].tolist() == encoded["input_ids"][:valid] and
-                st_tokens["attention_mask"][0].tolist() == encoded["attention_mask"][:valid],
-                f"Original ST preprocessing differs: {case['id']}")
+        encoded = tokenize_query(fast, case["text"])
+        copied = tokenize_query(bundled, case["text"])
+        require(all(encoded[name] == copied[name] for name in ("input_ids", "attention_mask")),
+                f"Bundled tokenizer differs from pinned reference: {case['id']}")
+        if case["id"] == "empty":
+            require(encoded["input_ids"] == [1] + [0] * 63, "Empty query must be EOS then PAD")
+        if case["id"] == "long-truncation":
+            require(sum(encoded["attention_mask"]) == SEQUENCE_LENGTH, "Fixture did not exercise truncation")
         result.append({
-            "metadata": {**case, "inputIDs": encoded["input_ids"], "attentionMask": encoded["attention_mask"]},
+            "metadata": {**case, "lowercasedText": case["text"].lower(),
+                         "inputIDs": encoded["input_ids"], "attentionMask": encoded["attention_mask"]},
             "input_ids": np.asarray([encoded["input_ids"]], dtype=np.int32),
-            "attention_mask": np.asarray([encoded["attention_mask"]], dtype=np.int32),
         })
     return result
 
@@ -256,7 +247,8 @@ def raw_vector(array, label: str):
     import numpy as np
 
     result = np.asarray(array)
-    require(result.shape == (1, 512) and result.dtype == np.float32, f"{label}: expected float32 [1,512]")
+    require(result.shape == (1, DIMENSION) and result.dtype == np.float32,
+            f"{label}: expected float32 [1,{DIMENSION}]")
     require(bool(np.isfinite(result).all()), f"{label}: non-finite output")
     require(float(np.linalg.norm(result.astype(np.float64))) > 0, f"{label}: zero vector")
     return result
@@ -309,7 +301,7 @@ def convert_and_reload(traced, role: str, stage: Path):
                        outputs=[ct.TensorType(name="output_embedding", dtype=np.float32)],
                        compute_precision=ct.precision.FLOAT32, compute_units=ct.ComputeUnit.CPU_ONLY,
                        minimum_deployment_target=ct.target.iOS17)
-    model.short_description = f"Pinned paired CLIP {role} encoder; raw 512D, no L2 normalization"
+    model.short_description = f"Pinned SigLIP 2 {role} encoder; raw 768D, no L2 normalization or logits"
     model.user_defined_metadata["modelVersion"] = model_version()
     model.user_defined_metadata["sourceModelID"] = (IMAGE_MODEL if role == "image" else TEXT_MODEL)["id"]
     model.user_defined_metadata["sourceRevision"] = (IMAGE_MODEL if role == "image" else TEXT_MODEL)["revision"]
@@ -348,27 +340,27 @@ def cosine_matrix(text_vectors, image_vectors):
 
 
 def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> None:
-    paths = snapshots(args.download)
-    configs = validate_snapshot_configs(*paths)
-    source_provenance(stage, paths, configs, environment)
+    snapshot = snapshots(args.download)
+    configs = validate_snapshot_configs(snapshot)
+    provenance = source_provenance(stage, snapshot, configs, environment)
 
     import numpy as np
     import torch
     from encoder_wrappers import ImageEncoder, TextEncoder
     from synthetic_fixtures import image_cases
 
-    image, text = load_pair(paths)
-    images = image_cases(stage, image[0].processor.image_processor, args.preprocess_max_abs)
-    queries = tokenizer_cases(stage, paths[1], text)
-    image_wrapper, text_wrapper = ImageEncoder(image), TextEncoder(text)
+    model, processor, fast = load_pair(snapshot, configs)
+    images = image_cases(stage, processor, args.preprocess_max_abs)
+    queries = tokenizer_cases(stage, snapshot, fast)
+    image_wrapper, text_wrapper = ImageEncoder(model), TextEncoder(model)
     image_inputs = [(torch.from_numpy(case["pixels"]),) for case in images]
-    text_inputs = [(torch.from_numpy(case["input_ids"]), torch.from_numpy(case["attention_mask"]))
-                   for case in queries]
+    text_inputs = [(torch.from_numpy(case["input_ids"]),) for case in queries]
     image_trace = trace_wrapper(image_wrapper, image_inputs[0], image_inputs[1])
-    text_trace = trace_wrapper(text_wrapper, text_inputs[0], text_inputs[-1])
+    truncation_index = next(i for i, case in enumerate(queries) if case["metadata"]["id"] == "long-truncation")
+    text_trace = trace_wrapper(text_wrapper, text_inputs[0], text_inputs[truncation_index])
     converted_image = convert_and_reload(image_trace, "image", stage)
     converted_text = convert_and_reload(text_trace, "text", stage)
-    report = {"schemaVersion": 1, "modelVersion": model_version(), "precision": "float32",
+    report = {"schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(), "precision": "float32",
               "computeUnits": "CPU_ONLY", "thresholds": {
                   "minCosineExclusive": args.min_cosine, "conversionMaxAbsInclusive": args.conversion_max_abs,
                   "torchMaxAbsInclusive": args.torch_max_abs, "similarityMaxAbsInclusive": args.similarity_max_abs,
@@ -377,33 +369,34 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
               "nativeModelRuntimeParity": "not-run", "semanticRetrievalQuality": "not-evaluated"}
     originals, predictions = {"image": [], "text": []}, {"image": [], "text": []}
     with torch.inference_mode():
-        for role, cases, inputs, original, wrapper, traced, coreml in (
-            ("image", images, image_inputs, image, image_wrapper, image_trace, converted_image),
-            ("text", queries, text_inputs, text, text_wrapper, text_trace, converted_text),
+        for role, cases, inputs, wrapper, traced, coreml in (
+            ("image", images, image_inputs, image_wrapper, image_trace, converted_image),
+            ("text", queries, text_inputs, text_wrapper, text_trace, converted_text),
         ):
             for case, tensors in zip(cases, inputs):
                 name = case["metadata"]["id"]
-                original_input = case["image"] if role == "image" else case["metadata"]["text"]
-                st_raw = raw_vector(original.encode([original_input], batch_size=1, show_progress_bar=False,
-                                                    convert_to_numpy=True, normalize_embeddings=False,
-                                                    device="cpu"), f"{role}/{name}/ST")
+                # Transformers 4.48.3 get_*_features returns a raw Tensor, NOT
+                # a ModelOutput or normalized paired-forward embedding.
+                reference_tensor = (model.get_image_features(pixel_values=tensors[0]) if role == "image"
+                                    else model.get_text_features(input_ids=tensors[0].to(dtype=torch.long)))
+                reference_raw = raw_vector(reference_tensor.detach().cpu().numpy(), f"{role}/{name}/reference")
                 wrapped_raw = raw_vector(wrapper(*tensors).detach().cpu().numpy(), "wrapper")
                 traced_raw = raw_vector(traced(*tensors).detach().cpu().numpy(), "trace")
                 feed = ({"pixel_values": case["pixels"]} if role == "image" else
-                        {key: case[key] for key in ("input_ids", "attention_mask")})
+                        {"input_ids": case["input_ids"]})
                 cm_raw = raw_vector(coreml.predict(feed)["output_embedding"], "saved Core ML")
                 stages = {}
                 for label, left, right, tolerance in (
-                    ("sentenceTransformerVsWrapper", st_raw, wrapped_raw, args.torch_max_abs),
+                    ("referenceVsWrapper", reference_raw, wrapped_raw, args.torch_max_abs),
                     ("wrapperVsTrace", wrapped_raw, traced_raw, args.torch_max_abs),
                     ("traceVsCoreML", traced_raw, cm_raw, args.conversion_max_abs),
-                    ("sentenceTransformerVsCoreML", st_raw, cm_raw, args.conversion_max_abs),
+                    ("referenceVsCoreML", reference_raw, cm_raw, args.conversion_max_abs),
                 ):
                     stages[label] = compare(left, right, f"{role}/{name}/{label}", tolerance, args.min_cosine)
                 report["cases"].append({"role": role, "id": name, "comparisons": stages})
-                case["metadata"]["sentenceTransformerRaw"] = st_raw[0].tolist()
+                case["metadata"]["referenceRaw"] = reference_raw[0].tolist()
                 case["metadata"]["coreMLRaw"] = cm_raw[0].tolist()
-                originals[role].append(st_raw)
+                originals[role].append(reference_raw)
                 predictions[role].append(cm_raw)
     reference = cosine_matrix(originals["text"], originals["image"])
     converted = cosine_matrix(predictions["text"], predictions["image"])
@@ -412,18 +405,22 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
     report["pairedCosines"] = {
         "queryIDs": [c["metadata"]["id"] for c in queries],
         "imageIDs": [c["metadata"]["id"] for c in images],
-        "sentenceTransformer": reference.tolist(), "coreML": converted.tolist(), "maxAbs": delta,
+        "reference": reference.tolist(), "coreML": converted.tolist(), "maxAbs": delta,
     }
     report["passed"] = True
     write_json(stage / "parity-report.json", report)
-    shared = {"schemaVersion": 1, "modelVersion": model_version(),
-              "embeddingDimension": 512, "embeddingsAreRaw": True}
+    shared = {"schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(),
+              "embeddingDimension": DIMENSION, "embeddingsAreRaw": True}
+    source_hashes = provenance["sources"]["shared"]["sha256"]
     write_json(stage / "tokenizer-parity.json", {
-        **shared, "sequenceLength": 128, "textModel": TEXT_MODEL,
-        "vocabularySHA256": sha256_file(stage / "vocab.txt"),
-        "reference": "pinned original SentenceTransformer HF fast tokenizer; checked against ST.tokenize",
-        "tokenizerClass": type(text[0].tokenizer).__name__,
-        "backendNormalizer": json.loads(text[0].tokenizer.backend_tokenizer.to_str())["normalizer"],
+        **shared, "sequenceLength": SEQUENCE_LENGTH, "textModel": TEXT_MODEL,
+        "tokenizerFile": TOKENIZER_FILES[0], "tokenizerConfigFile": TOKENIZER_FILES[1],
+        "tokenizerSHA256": source_hashes[TOKENIZER_FILES[0]],
+        "configSHA256": source_hashes[TOKENIZER_FILES[1]],
+        "reference": "explicit str.lower then pinned HF GemmaTokenizerFast; bundled JSON reload checked",
+        "tokenizerClass": type(fast).__name__, "tokenizerOptions": TOKENIZER_OPTIONS,
+        "preprocessing": PREPROCESS["text"],
+        "backendNormalizer": json.loads(fast.backend_tokenizer.to_str())["normalizer"],
         "nativeParity": "not-run", "cases": [c["metadata"] for c in queries],
     })
     write_json(stage / "image-preprocess-parity.json", {
@@ -431,14 +428,18 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
         "reference": "HF processor checked against independent Pillow/NumPy implementation",
         "nativeParity": "not-run", "cases": [c["metadata"] for c in images],
     })
+    artifact_hashes = {p.relative_to(stage).as_posix(): sha256_file(p)
+                       for p in sorted(stage.rglob("*")) if p.is_file()}
+    for name in TOKENIZER_FILES:
+        require(artifact_hashes[name] == source_hashes[name],
+                f"Bundled tokenizer bytes differ from the pinned source: {name}")
     manifest = base_manifest()
     manifest.update({
         "parity": {"status": "passed", "report": "parity-report.json", "precision": "float32",
                    "computeUnits": "CPU_ONLY", "nativeTokenizer": "not-run",
                    "nativePreprocessing": "not-run", "nativeRuntime": "not-run"},
         "provenance": "provenance.json", "redistributionApproved": False,
-        "artifactsSHA256": {p.relative_to(stage).as_posix(): sha256_file(p)
-                            for p in sorted(stage.rglob("*")) if p.is_file()},
+        "artifactsSHA256": artifact_hashes,
     })
     # Not yet public: this file remains inside the staging directory until commit.
     write_json(stage / "model-manifest.json", manifest)
@@ -446,6 +447,9 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
 
 def publish(stage: Path, output: Path) -> None:
     """Commit marker last; only replace exporter-owned resources, not README/Places."""
+    (output / "model-manifest.json").unlink(missing_ok=True)
+    for name in RETIRED_OUTPUTS:
+        (output / name).unlink(missing_ok=True)
     for name in OWNED_OUTPUTS:
         target = output / name
         if target.is_dir():

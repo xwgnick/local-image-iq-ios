@@ -91,9 +91,7 @@ actor SQLitePhotoStore {
             try db.bind(text, at: 1, to: statement)
             try db.bind(modelVersion, at: 2, to: statement)
             guard try db.next(statement) else { return nil }
-            let vector = try JSONDecoder().decode([Float].self, from: db.blob(statement, at: 0))
-            try EmbeddingValidation.validateUnit(vector)
-            return vector
+            return try Self.decodeEmbedding(db.blob(statement, at: 0))
         }
     }
 
@@ -185,14 +183,23 @@ actor SQLitePhotoStore {
         FROM photos p LEFT JOIN places l ON p.place_text = l.text AND p.model_version = l.model_version
         """
 
+    /// Old records must decode before the worker can reject their model version
+    /// and replace them. This compatibility path is read-only; save still requires 768.
+    private static func decodeEmbedding(_ data: Data) throws -> [Float] {
+        let vector = try JSONDecoder().decode([Float].self, from: data)
+        guard vector.count == 512 || vector.count == 768 else {
+            throw AppFailure.modelContract("Cached embeddings must have 512 legacy or 768 active values.")
+        }
+        try EmbeddingValidation.validateUnit(vector, dimension: vector.count)
+        return vector
+    }
+
     private func decode(_ statement: OpaquePointer) throws -> CachedPhoto {
         let db = try database()
-        let image = try JSONDecoder().decode([Float].self, from: db.blob(statement, at: 3))
-        try EmbeddingValidation.validateUnit(image)
+        let image = try Self.decodeEmbedding(db.blob(statement, at: 3))
         var place: PlaceEmbedding?
         if sqlite3_column_type(statement, 5) != SQLITE_NULL {
-            let vector = try JSONDecoder().decode([Float].self, from: db.blob(statement, at: 7))
-            try EmbeddingValidation.validateUnit(vector)
+            let vector = try Self.decodeEmbedding(db.blob(statement, at: 7))
             place = PlaceEmbedding(text: try db.string(statement, at: 5), vector: vector)
         }
         let photo = IndexedPhoto(id: try db.string(statement, at: 0), modificationTime: sqlite3_column_double(statement, 1),

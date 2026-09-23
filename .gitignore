@@ -7,6 +7,7 @@ xcuserdata/
 build/
 .model-env/
 .venv/
+.venv-coreml/
 __pycache__/
 *.pyc
 *.sqlite*
@@ -17,6 +18,19 @@ __pycache__/
 # Keep generated model binaries, public conversion fixtures and reports out of Git.
 Resources/Models/*
 !Resources/Models/README.md
+# Includes tokenizer.json, tokenizer_config.json, parity JSON, packages and weights.
+# Failed exports may leave sibling staging data; it is generated, not source.
+Resources/.coreml-stage-*/
+# Keep alternate generated resources scoped here: never ignore scripts/fixtures
+# or source JSON with a repository-wide tokenizer*.json, *.json or fixtures/ rule.
+Resources/**/tokenizer*.json
+Resources/**/tokenizer.model
+Resources/**/*.mlpackage/
+Resources/**/*.mlmodelc/
+Resources/**/*.mlmodel
+Resources/**/*.safetensors
+Resources/**/pytorch_model*.bin
+Resources/**/weights/
 # Never place personal images or desktop artifacts inside this standalone repo.
 *.heic
 *.HEIC

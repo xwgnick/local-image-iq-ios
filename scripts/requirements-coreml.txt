@@ -3,9 +3,12 @@
 coremltools==8.3.0
 torch==2.5.1
 transformers==4.48.3
-sentence-transformers==3.4.1
 numpy==1.26.4
 Pillow==11.1.0
 huggingface-hub==0.28.1
 tokenizers==0.21.0
 safetensors==0.5.2
+# GemmaTokenizerFast loads the required tokenizer.json directly; no slow
+# tokenizer.model conversion and no sentencepiece dependency in this exporter.
+# Core ML itself requires protobuf; pin it independently of the tokenizer path.
+protobuf==4.25.6

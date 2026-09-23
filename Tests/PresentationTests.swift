@@ -15,6 +15,8 @@ final class PresentationTests: XCTestCase {
 
     func testThreeResultHeroSnapshot() async throws {
         let hits = PresentationFixtures.hits(count: 3)
+        XCTAssertTrue(hits.allSatisfy { $0.photo.imageEmbedding.count == 768 })
+        for hit in hits { try EmbeddingValidation.validateUnit(hit.photo.imageEmbedding) }
         try await snapshot(PresentationGridReview(hits: hits, compact: false),
                            id: "hero-3", size: phone)
     }
@@ -405,8 +407,7 @@ private enum PresentationFixtures {
     }
 
     static func hits(count: Int) -> [SearchHit] {
-        var vector = [Float](repeating: 0, count: 512)
-        vector[0] = 1
+        let vector = TestFixtures.vector()
         return (0..<count).map { index in
             let photo = IndexedPhoto(id: "presentation-test-fixture-\(index + 1)", modificationTime: 123,
                                      modelVersion: modelVersion, imageEmbedding: vector, creationTime: 100)

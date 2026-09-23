@@ -7,12 +7,17 @@ options:
 packages:
   ImageIQCore:
     path: Packages/ImageIQCore
+  swift-transformers:
+    url: https://github.com/huggingface/swift-transformers.git
+    # 1.3.4: c21fdcde390313a6d98d8e33a346f2c3486c3ab0 (root tools 5.9).
+    # Minimum dependencies support Xcode 16.4; upstream transitive ranges are not locked here.
+    exactVersion: "1.3.4"
 settings:
   base:
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-    MARKETING_VERSION: "0.2.1"
-    CURRENT_PROJECT_VERSION: "5"
+    MARKETING_VERSION: "0.3.0"
+    CURRENT_PROJECT_VERSION: "6"
     TARGETED_DEVICE_FAMILY: "1,2"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 targets:
@@ -31,6 +36,8 @@ targets:
         COREML_CODEGEN_LANGUAGE: None
     dependencies:
       - package: ImageIQCore
+      - package: swift-transformers
+        product: Tokenizers
       - sdk: libsqlite3.tbd
   LocalImageIQTests:
     type: bundle.unit-test

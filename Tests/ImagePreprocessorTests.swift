@@ -9,9 +9,11 @@ final class ImagePreprocessorTests: XCTestCase {
         let image = try TestFixtures.image(width: 29, height: 17) { _, _ in (255, 128, 0) }
         let values = try ImagePreprocessor.values(image: image)
         XCTAssertEqual(values.count, 3 * 224 * 224)
+        XCTAssertEqual(ImagePreprocessor.mean, [0.5, 0.5, 0.5])
+        XCTAssertEqual(ImagePreprocessor.standardDeviation, [0.5, 0.5, 0.5])
         for channel in 0..<3 {
             let raw: [Float] = [255, 128, 0]
-            let expected = (raw[channel] / 255 - ImagePreprocessor.mean[channel]) / ImagePreprocessor.standardDeviation[channel]
+            let expected = (raw[channel] / 255 - 0.5) / 0.5
             for position in [0, 100, 224 * 112 + 112, 224 * 224 - 1] {
                 XCTAssertEqual(values[channel * 224 * 224 + position], expected, accuracy: 0.02)
             }
@@ -33,14 +35,25 @@ final class ImagePreprocessorTests: XCTestCase {
         assertPixel(values, x: 180, y: 40, rgb: [255, 0, 0])
     }
 
-    func testNonSquareImageIsCenterCroppedNotStretched() throws {
-        let source = try TestFixtures.image(width: 448, height: 224) { x, _ in
-            if x < 112 { return (255, 0, 0) }
-            if x >= 336 { return (0, 0, 255) }
-            return (0, 255, 0)
+    func testNonSquareFullImageWarpPreservesDistinctPixelsOnAllFourSides() throws {
+        for (width, height) in [(448, 224), (224, 448)] {
+            let source = try TestFixtures.image(width: width, height: height) { x, y in
+                if x < width / 4 { return (255, 0, 0) }
+                if x >= 3 * width / 4 { return (0, 0, 255) }
+                if y < height / 4 { return (255, 255, 0) }
+                if y >= 3 * height / 4 { return (255, 0, 255) }
+                return (0, 255, 0)
+            }
+            let values = try ImagePreprocessor.values(image: source)
+            XCTAssertEqual(values.count, 3 * 224 * 224)
+            // Center-cropping loses the red/blue sides in landscape and the
+            // yellow/magenta sides in portrait; letterboxing also fails here.
+            assertPixel(values, x: 5, y: 112, rgb: [255, 0, 0])
+            assertPixel(values, x: 218, y: 112, rgb: [0, 0, 255])
+            assertPixel(values, x: 112, y: 5, rgb: [255, 255, 0])
+            assertPixel(values, x: 112, y: 218, rgb: [255, 0, 255])
+            assertPixel(values, x: 112, y: 112, rgb: [0, 255, 0])
         }
-        let values = try ImagePreprocessor.values(image: source)
-        for x in [5, 112, 218] { assertPixel(values, x: x, y: 112, rgb: [0, 255, 0]) }
     }
 
     @MainActor
@@ -50,17 +63,48 @@ final class ImagePreprocessorTests: XCTestCase {
         let tensor = try ImagePreprocessor.tensor(data: data, orientation: .up)
         XCTAssertEqual(tensor.shape.map(\.intValue), [1, 3, 224, 224])
         XCTAssertEqual(tensor.dataType, .float32)
-        XCTAssertEqual(tensor[0].floatValue, (1 - ImagePreprocessor.mean[0]) / ImagePreprocessor.standardDeviation[0], accuracy: 0.02)
+        XCTAssertEqual(tensor[0].floatValue, 1, accuracy: 0.02)
     }
 
-    func testOddCropRemainderUsesFloorLikeHFProcessor() throws {
-        // width 227 -> left floor((227 - 224) / 2) = 1, not rounded-to-even 2.
-        let image = try TestFixtures.image(width: 227, height: 224) { x, _ in
-            x == 1 ? (255, 0, 0) : (0, 0, 0)
+    func testOddNonSquareDimensionsPreserveOppositeEdgeBands() throws {
+        // Odd extents are warped in full, not assigned a floor/rounded crop offset.
+        let image = try TestFixtures.image(width: 451, height: 227) { x, y in
+            if x < 56 { return (255, 0, 0) }
+            if x >= 395 { return (0, 0, 255) }
+            if y < 28 { return (255, 255, 0) }
+            if y >= 199 { return (0, 255, 255) }
+            return (0, 0, 0)
         }
         let values = try ImagePreprocessor.values(image: image)
         assertPixel(values, x: 0, y: 100, rgb: [255, 0, 0])
-        assertPixel(values, x: 1, y: 100, rgb: [0, 0, 0])
+        assertPixel(values, x: 223, y: 100, rgb: [0, 0, 255])
+        assertPixel(values, x: 112, y: 0, rgb: [255, 255, 0])
+        assertPixel(values, x: 112, y: 223, rgb: [0, 255, 255])
+        assertPixel(values, x: 112, y: 100, rgb: [0, 0, 0])
+    }
+
+    func testSquareWarpInterpolatesBothAxesWithBilinearWeights() throws {
+        // Permit interpolation on this CGImage; other pixel fixtures keep their
+        // existing hint so this test does not silently alter their rendering.
+        let source = try TestFixtures.image(width: 2, height: 2, shouldInterpolate: true) { x, y in
+            (x == 1 ? 255 : 0, y == 1 ? 255 : 0, x == y ? 255 : 0)
+        }
+        let values = try ImagePreprocessor.values(image: source)
+        for y in [70, 98, 126, 154] {
+            for x in [70, 98, 126, 154] {
+                // Independent half-pixel, separable bilinear interpolation of
+                // four known source pixels, sampled away from clamped borders.
+                let wx = (Float(x) + 0.5) * 2 / 224 - 0.5
+                let wy = (Float(y) + 0.5) * 2 / 224 - 0.5
+                let rgb = [wx, wy, (1 - wx) * (1 - wy) + wx * wy]
+                for channel in 0..<3 {
+                    XCTAssertEqual(values[channel * 224 * 224 + y * 224 + x],
+                                   (rgb[channel] - 0.5) / 0.5, accuracy: 0.02)
+                }
+            }
+        }
+        // This is a native interpolation contract, not a claim of pixel-identical
+        // Pillow antialiased downsampling; real-model parity is tested separately.
     }
 
     func testInvalidImageDataThrows() {
@@ -108,8 +152,8 @@ final class ImagePreprocessorTests: XCTestCase {
         // Exercise the default .up argument; pin expectations independently of production constants.
         let values = try tensorValues(ImagePreprocessor.tensor(image: source))
         let rgb: [Float] = [31, 127, 223]
-        let mean: [Float] = [0.48145466, 0.4578275, 0.40821073]
-        let std: [Float] = [0.26862954, 0.26130258, 0.27577711]
+        let mean: [Float] = [0.5, 0.5, 0.5]
+        let std: [Float] = [0.5, 0.5, 0.5]
         let pixels = 224 * 224
         for channel in 0..<3 {
             let expected = (rgb[channel] / 255 - mean[channel]) / std[channel]
@@ -118,20 +162,27 @@ final class ImagePreprocessorTests: XCTestCase {
         }
     }
 
-    func testDirectPreviewTensorOrientsBeforeNonSquareCenterCrop() throws {
-        let source = try TestFixtures.image(width: 448, height: 224) { x, y in
-            // Both side strips must be cropped out, not squeezed into the square.
-            if x < 112 { return (255, 0, 255) }
-            if x >= 336 { return (0, 0, 0) }
-            if y < 112 { return x < 224 ? (255, 0, 0) : (0, 255, 0) }
-            return x < 224 ? (0, 0, 255) : (255, 255, 255)
+    func testDirectPreviewTensorOrientsNonSquareQuadrantsForEveryEXIFOrientation() throws {
+        // Independent expected TL/TR/BL/BR source quadrant indices, not production
+        // transforms. Both landscape and portrait exercise axis-swapping EXIF.
+        let cases: [(CGImagePropertyOrientation, [Int])] = [
+            (.up, [0, 1, 2, 3]), (.upMirrored, [1, 0, 3, 2]),
+            (.down, [3, 2, 1, 0]), (.downMirrored, [2, 3, 0, 1]),
+            (.leftMirrored, [0, 2, 1, 3]), (.right, [2, 0, 3, 1]),
+            (.rightMirrored, [3, 1, 2, 0]), (.left, [1, 3, 0, 2]),
+        ]
+        let colors: [[Float]] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]]
+        let positions = [(40, 40), (180, 40), (40, 180), (180, 180)]
+        for (width, height) in [(448, 224), (224, 448)] {
+            let source = try quadrants(width: width, height: height)
+            for (orientation, expected) in cases {
+                let preview = IndexingImage(cgImage: source, orientation: orientation, source: .localReducedPreview)
+                let values = try tensorValues(ImagePreprocessor.tensor(image: preview.cgImage, orientation: preview.orientation))
+                for (position, colorIndex) in zip(positions, expected) {
+                    assertPixel(values, x: position.0, y: position.1, rgb: colors[colorIndex])
+                }
+            }
         }
-        let preview = IndexingImage(cgImage: source, orientation: .right, source: .localReducedPreview)
-        let values = try tensorValues(ImagePreprocessor.tensor(image: preview.cgImage, orientation: preview.orientation))
-        assertPixel(values, x: 40, y: 40, rgb: [0, 0, 255])
-        assertPixel(values, x: 180, y: 40, rgb: [255, 0, 0])
-        assertPixel(values, x: 40, y: 180, rgb: [255, 255, 255])
-        assertPixel(values, x: 180, y: 180, rgb: [0, 255, 0])
     }
 
     private func pngData(_ image: CGImage, orientation: CGImagePropertyOrientation) throws -> Data {
@@ -164,16 +215,16 @@ final class ImagePreprocessorTests: XCTestCase {
         return values
     }
 
-    private func quadrants() throws -> CGImage {
-        try TestFixtures.image(width: 224, height: 224) { x, y in
-            if y < 112 { return x < 112 ? (255, 0, 0) : (0, 255, 0) }
-            return x < 112 ? (0, 0, 255) : (255, 255, 255)
+    private func quadrants(width: Int = 448, height: Int = 224) throws -> CGImage {
+        try TestFixtures.image(width: width, height: height) { x, y in
+            if y < height / 2 { return x < width / 2 ? (255, 0, 0) : (0, 255, 0) }
+            return x < width / 2 ? (0, 0, 255) : (255, 255, 255)
         }
     }
 
     private func assertPixel(_ values: [Float], x: Int, y: Int, rgb: [Float], file: StaticString = #filePath, line: UInt = #line) {
         for channel in 0..<3 {
-            let expected = (rgb[channel] / 255 - ImagePreprocessor.mean[channel]) / ImagePreprocessor.standardDeviation[channel]
+            let expected = (rgb[channel] / 255 - 0.5) / 0.5
             XCTAssertEqual(values[channel * 224 * 224 + y * 224 + x], expected, accuracy: 0.02, file: file, line: line)
         }
     }

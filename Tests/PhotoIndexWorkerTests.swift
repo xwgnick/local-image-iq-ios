@@ -20,7 +20,7 @@ final class PhotoIndexWorkerTests: XCTestCase {
         let library = WorkerTestLibrary(records)
         let encoders = try supplied ?? WorkerTestEncoders()
         let worker = PhotoIndexWorker(library: library, encoders: encoders, directory: directory, resolver: resolver)
-        return WorkerTestContext(worker: worker, library: library, encoders: encoders, store: store)
+        return WorkerTestContext(worker: worker, library: library, encoders: encoders, store: store, directory: directory)
     }
 
     private func seed(_ context: WorkerTestContext, id: String, model: String, geography: String? = nil,
@@ -241,6 +241,153 @@ final class PhotoIndexWorkerTests: XCTestCase {
         XCTAssertTrue(afterSearch.hits.allSatisfy { $0.photo.modelVersion == cacheVersion })
         let manifest = try await context.encoders.prepare()
         XCTAssertEqual(manifest.modelVersion, "test-model", "Policy versioning must not mutate the model manifest.")
+    }
+
+    func testLegacy512CacheIsIgnoredThenReplacedBy768OnModelVersionChange() async throws {
+        let preview = try WorkerPreviewFactory.make(.localPreview)
+        let context = try makeWorker([
+            WorkerTestRecord("legacy-a", .preview(preview), label: "Shared Place"),
+            WorkerTestRecord("legacy-b", .preview(preview), label: "Shared Place"),
+            WorkerTestRecord("current", .preview(preview))
+        ])
+        // Keep preview policy, revisions and geography identical. A modelVersion
+        // change alone must trigger re-encoding, with no clear/recovery operation.
+        let oldVersion = IndexImagePolicy.cacheVersion(modelVersion: TestFixtures.legacyModelVersion)
+        XCTAssertNotEqual(oldVersion, cacheVersion)
+        let text = "Photo taken in Shared Place."
+        let oldPlace = PlaceEmbedding(text: text, vector: TestFixtures.vector(axis: 511, dimension: 512))
+        let oldRows = ["legacy-a", "legacy-b"].map { id in
+            CachedPhoto(photo: IndexedPhoto(id: id, modificationTime: 123, modelVersion: oldVersion,
+                                             imageEmbedding: TestFixtures.vector(axis: 510, dimension: 512),
+                                             location: oldPlace, creationTime: 100), geographyVersion: resolver.version)
+        }
+        try TestFixtures.seedRawCache(oldRows, directory: context.directory)
+        try await seed(context, id: "current", model: cacheVersion)
+
+        let before = try await context.worker.refresh()
+        XCTAssertEqual(before.authorizedCount, 3)
+        XCTAssertEqual(before.indexedCount, 1)
+        XCTAssertEqual(before.locatedCount, 0)
+        XCTAssertNil(before.modelIssue)
+        let beforeSearch = try await context.worker.search(text: "query", limit: 10, locationWeight: 0.6)
+        XCTAssertEqual(beforeSearch.hits.map(\.id), ["current"])
+        XCTAssertEqual(beforeSearch.summary.indexedCount, 1)
+        XCTAssertTrue(context.library.requests.isEmpty)
+        let retained = try await context.store.records(modelVersion: oldVersion)
+        XCTAssertEqual(retained.map(\.photo.id), ["legacy-a", "legacy-b"])
+        XCTAssertTrue(retained.allSatisfy { $0.photo.imageEmbedding.count == 512 && $0.photo.location?.vector.count == 512 })
+
+        let trace = WorkerProgressTrace()
+        let summary = try await context.worker.index(networkAllowed: false) { await trace.append($0) }
+        let final = try await trace.last()
+        XCTAssertEqual(summary.authorizedCount, 3)
+        XCTAssertEqual(summary.indexedCount, 3)
+        XCTAssertEqual(summary.locatedCount, 2)
+        XCTAssertEqual(summary.modelVersion, cacheVersion)
+        XCTAssertNil(summary.modelIssue)
+        XCTAssertEqual(final.completed, 3)
+        XCTAssertEqual(final.encoded, 2)
+        XCTAssertEqual(final.reused, 1)
+        XCTAssertEqual(final.failed, 0)
+        XCTAssertEqual(final.cloudSkipped, 0)
+        XCTAssertNil(final.lastFailure)
+        assertSources(final, local: 2)
+        XCTAssertEqual(context.library.requests.map(\.id), ["legacy-a", "legacy-b"])
+        XCTAssertTrue(context.library.requests.allSatisfy { !$0.networkAllowed })
+
+        let saved = try await context.store.records(modelVersion: cacheVersion)
+        XCTAssertEqual(saved.count, 3)
+        for row in saved {
+            XCTAssertEqual(row.photo.modelVersion, cacheVersion)
+            XCTAssertEqual(row.photo.modificationTime, 123)
+            XCTAssertEqual(row.photo.creationTime, 100)
+            XCTAssertEqual(row.geographyVersion, resolver.version)
+            XCTAssertEqual(row.photo.imageEmbedding.count, 768)
+            XCTAssertEqual(row.photo.imageEmbedding, TestFixtures.vector(axis: row.photo.id == "current" ? 1 : 0))
+            try EmbeddingValidation.validateUnit(row.photo.imageEmbedding)
+            if row.photo.id != "current" {
+                let place = try XCTUnwrap(row.photo.location)
+                XCTAssertEqual(place.text, text)
+                XCTAssertEqual(place.vector, TestFixtures.vector(axis: 2))
+                try EmbeddingValidation.validateUnit(place.vector)
+            }
+        }
+        let obsolete = try await context.store.records(modelVersion: oldVersion)
+        let obsoletePlace = try await context.store.place(text: text, modelVersion: oldVersion)
+        let activePlace = try await context.store.place(text: text, modelVersion: cacheVersion)
+        XCTAssertTrue(obsolete.isEmpty)
+        XCTAssertNil(obsoletePlace)
+        XCTAssertEqual(activePlace, TestFixtures.vector(axis: 2))
+        let encodedTexts = await context.encoders.texts
+        XCTAssertEqual(encodedTexts.filter { $0.hasPrefix("Photo taken in ") }, [text],
+                       "The old 512-D place must not be reused; the fresh 768-D place is encoded once.")
+        let afterSearch = try await context.worker.search(text: "query", limit: 10, locationWeight: 0.6)
+        XCTAssertEqual(Set(afterSearch.hits.map(\.id)), Set(["legacy-a", "legacy-b", "current"]))
+        XCTAssertTrue(afterSearch.hits.allSatisfy { $0.photo.modelVersion == cacheVersion && $0.photo.imageEmbedding.count == 768 })
+
+        let reusedTrace = WorkerProgressTrace()
+        let reused = try await context.worker.index(networkAllowed: false) { await reusedTrace.append($0) }
+        let reusedFinal = try await reusedTrace.last()
+        XCTAssertEqual(reused.indexedCount, 3)
+        XCTAssertEqual(reusedFinal.reused, 3)
+        XCTAssertEqual(reusedFinal.encoded, 0)
+        XCTAssertEqual(reusedFinal.failed, 0)
+        assertSources(reusedFinal)
+        XCTAssertEqual(context.library.requests.count, 2)
+        let previews = await context.encoders.previews
+        let dataCalls = await context.encoders.dataCalls
+        XCTAssertEqual(previews.count, 2)
+        XCTAssertEqual(dataCalls, 0)
+    }
+
+    func testFailedLegacy512UpgradeRetainsRowAndRetriesWithoutManualClear() async throws {
+        let failure = NSError(domain: "WorkerTestLegacyUpgrade", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Synthetic preview unavailable"])
+        let context = try makeWorker([WorkerTestRecord("legacy", .failure(failure), label: "Retained Place")])
+        let oldVersion = IndexImagePolicy.cacheVersion(modelVersion: TestFixtures.legacyModelVersion)
+        let place = PlaceEmbedding(text: "Photo taken in Retained Place.", vector: TestFixtures.vector(axis: 511, dimension: 512))
+        let old = IndexedPhoto(id: "legacy", modificationTime: 123, modelVersion: oldVersion,
+                               imageEmbedding: TestFixtures.vector(axis: 510, dimension: 512), location: place, creationTime: 100)
+        try TestFixtures.seedRawCache([CachedPhoto(photo: old, geographyVersion: resolver.version)], directory: context.directory)
+        let trace = WorkerProgressTrace()
+        let summary = try await context.worker.index(networkAllowed: false) { await trace.append($0) }
+        let final = try await trace.last()
+        XCTAssertEqual(summary.indexedCount, 0)
+        XCTAssertEqual(summary.locatedCount, 0)
+        XCTAssertNil(summary.modelIssue)
+        XCTAssertEqual(final.completed, 1)
+        XCTAssertEqual(final.failed, 1)
+        XCTAssertEqual(final.lastFailure, failure.localizedDescription)
+        XCTAssertEqual(final.reused, 0)
+        XCTAssertEqual(final.cloudSkipped, 0)
+        assertSources(final)
+        let retained = try await context.store.record(id: "legacy")
+        XCTAssertEqual(retained?.photo.modelVersion, oldVersion)
+        XCTAssertEqual(retained?.photo.imageEmbedding, old.imageEmbedding)
+        XCTAssertEqual(retained?.photo.location?.vector, place.vector)
+        let beforeSearch = try await context.worker.search(text: "query", limit: 10, locationWeight: 0.6)
+        XCTAssertTrue(beforeSearch.hits.isEmpty)
+
+        context.library.replace([WorkerTestRecord("legacy", .preview(try WorkerPreviewFactory.make(.localReducedPreview)),
+                                                  label: "Retained Place")])
+        let retryTrace = WorkerProgressTrace()
+        let retried = try await context.worker.index(networkAllowed: false) { await retryTrace.append($0) }
+        let retryFinal = try await retryTrace.last()
+        XCTAssertEqual(retried.indexedCount, 1)
+        XCTAssertEqual(retried.locatedCount, 1)
+        XCTAssertEqual(retryFinal.encoded, 1)
+        XCTAssertEqual(retryFinal.reused, 0)
+        XCTAssertEqual(retryFinal.failed, 0)
+        XCTAssertNil(retryFinal.lastFailure)
+        assertSources(retryFinal, reduced: 1)
+        let replaced = try await context.store.record(id: "legacy")
+        XCTAssertEqual(replaced?.photo.modelVersion, cacheVersion)
+        XCTAssertEqual(replaced?.photo.imageEmbedding, TestFixtures.vector())
+        XCTAssertEqual(replaced?.photo.location?.vector, TestFixtures.vector(axis: 2))
+        XCTAssertEqual(context.library.requests.map(\.id), ["legacy", "legacy"])
+        XCTAssertTrue(context.library.requests.allSatisfy { !$0.networkAllowed })
+        let afterSearch = try await context.worker.search(text: "query", limit: 10, locationWeight: 0.6)
+        XCTAssertEqual(afterSearch.hits.map(\.id), ["legacy"])
     }
 
     func testFailedUpgradeKeepsOldRowButNeverReusesOrSearchesItsVector() async throws {
@@ -511,6 +658,7 @@ private struct WorkerTestContext {
     let library: WorkerTestLibrary
     let encoders: WorkerTestEncoders
     let store: SQLitePhotoStore
+    let directory: URL
 }
 
 private enum WorkerPreviewFactory {

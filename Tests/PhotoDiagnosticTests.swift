@@ -236,6 +236,53 @@ final class PhotoDiagnosticTests: XCTestCase {
         }
     }
 
+    func testLegacy512TargetIsStaleAndExcludedWithoutRewritingItsDatabase() async throws {
+        let image = try preview()
+        let context = try makeContext([DiagnosticRecord("legacy", .preview(image)), DiagnosticRecord("peer", .preview(image))])
+        try await seed(context, [row("peer")])
+        let oldVersion = IndexImagePolicy.cacheVersion(modelVersion: TestFixtures.legacyModelVersion)
+        let place = PlaceEmbedding(text: "Photo taken in Legacy Place.", vector: TestFixtures.vector(axis: 511, dimension: 512))
+        let legacy = row("legacy", image: TestFixtures.vector(axis: 510, dimension: 512), model: oldVersion, place: place)
+        // The regular seed helper intentionally uses today's save API. Only raw
+        // SQLite can construct a genuine old-dimension row for this migration test.
+        try TestFixtures.seedRawCache([legacy], directory: context.directory)
+        let before = try DiagnosticDiskSnapshot(root: context.root)
+
+        let report = try await context.worker.checkPhoto(id: "legacy", query: "query", locationWeight: 0.6)
+        XCTAssertEqual(report.cachedStatus, "stale")
+        XCTAssertEqual(report.modelVersion, cacheVersion)
+        XCTAssertEqual(report.galleryCount, 1)
+        assertNoRanks(report)
+        XCTAssertNil(report.freshIssue)
+        XCTAssertEqual(report.pixelWidth, 7, "Fresh 768-D encoding is allowed, but must not insert the stale target.")
+        let peerReport = try await context.worker.checkPhoto(id: "peer", query: "query", locationWeight: 0.6)
+        XCTAssertEqual(peerReport.cachedStatus, "current")
+        try assertRanks(peerReport, photos: [row("peer").photo], fresh: TestFixtures.vector())
+
+        let reader = SQLitePhotoStore(directory: context.directory, readOnly: true)
+        do {
+            let retained = try await reader.record(id: "legacy")
+            XCTAssertEqual(retained?.photo.modelVersion, oldVersion)
+            XCTAssertEqual(retained?.photo.imageEmbedding, legacy.photo.imageEmbedding)
+            XCTAssertEqual(retained?.photo.imageEmbedding.count, 512)
+            XCTAssertEqual(retained?.photo.location?.vector, place.vector)
+            let retainedPlace = try await reader.place(text: place.text, modelVersion: oldVersion)
+            let current = try await reader.records(modelVersion: cacheVersion)
+            XCTAssertEqual(retainedPlace, place.vector)
+            XCTAssertEqual(current.map(\.photo.id), ["peer"])
+            XCTAssertEqual(current.first?.photo.imageEmbedding.count, 768)
+        } catch {
+            await reader.close()
+            throw error
+        }
+        await reader.close()
+        let after = try DiagnosticDiskSnapshot(root: context.root)
+        XCTAssertEqual(after, before, "Checking must not migrate, prune or rewrite legacy photo/place rows.")
+        let previews = await context.encoders.previews
+        XCTAssertEqual(previews.count, 2)
+        assertOffline(context, count: 2)
+    }
+
     func testMissingTargetIsNotInsertedIntoAnExistingComparisonGalleryOrSQLite() async throws {
         let image = try preview()
         let context = try makeContext([DiagnosticRecord("target", .preview(image)), DiagnosticRecord("peer", .preview(image))])
@@ -678,7 +725,7 @@ private actor DiagnosticLatch {
 }
 
 /// Implements the real encoder protocol, not an empty PhotoWorkServicing replacement.
-/// Fixtures are validated 512-D unit vectors; no model bundle is opened.
+/// Fixtures are validated 768-D unit vectors; no model bundle is opened.
 private actor DiagnosticEncoders: PhotoEncoding {
     private let manifest: ModelManifest
     private let fresh: [Float]

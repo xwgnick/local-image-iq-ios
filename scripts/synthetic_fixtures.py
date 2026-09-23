@@ -9,25 +9,30 @@ from PIL import Image, ImageOps
 
 from model_contract import IMAGE_SIZE, MEAN, STD, require, sha256_file
 
+# Dimensions are original source (width, height), not a retrieval-quality test.
+IMAGE_CASE_SPECS = (
+    ("solid-rgb", 224, 224, 1, "solid"),
+    ("checker-nonsquare", 319, 231, 1, "checker"),
+    ("exif-rotate-6", 321, 197, 6, "gradient"),
+    ("exif-mirror-2", 197, 321, 2, "gradient"),
+    ("lowres-68x120", 68, 120, 1, "gradient"),
+    ("lowres-112-portrait", 112, 199, 1, "checker"),
+)
+
 
 def pillow_pixels(image: Image.Image) -> tuple[np.ndarray, dict]:
     """Independent PIL/NumPy reference, checked against the pinned HF processor."""
     rgb = ImageOps.exif_transpose(image).convert("RGB")
     width, height = rgb.size
-    if width <= height:
-        resized = (IMAGE_SIZE, int(IMAGE_SIZE * height / width))
-    else:
-        resized = (int(IMAGE_SIZE * width / height), IMAGE_SIZE)
-    rgb = rgb.resize(resized, resample=Image.Resampling.BICUBIC)
-    left, top = (resized[0] - IMAGE_SIZE) // 2, (resized[1] - IMAGE_SIZE) // 2
-    rgb = rgb.crop((left, top, left + IMAGE_SIZE, top + IMAGE_SIZE))
+    resized = (IMAGE_SIZE, IMAGE_SIZE)
+    rgb = rgb.resize(resized, resample=Image.Resampling.BILINEAR)
     # HF rescales with NumPy then casts to float32 before normalization.
     scaled = (np.asarray(rgb).astype(np.float64) / 255.0).astype(np.float32)
     pixels = ((scaled - np.asarray(MEAN, dtype=np.float32)) /
               np.asarray(STD, dtype=np.float32)).transpose(2, 0, 1)[None]
     return np.ascontiguousarray(pixels), {
         "orientedSize": [width, height], "resizedSize": list(resized),
-        "cropXYWH": [left, top, IMAGE_SIZE, IMAGE_SIZE],
+        "cropXYWH": [0, 0, IMAGE_SIZE, IMAGE_SIZE],
     }
 
 
@@ -46,14 +51,10 @@ def pattern(width: int, height: int, checker: bool) -> Image.Image:
 def image_cases(stage: Path, processor, max_abs: float) -> list[dict]:
     directory = stage / "fixtures"
     directory.mkdir()
-    sources = [
-        ("solid-rgb", Image.new("RGB", (224, 224), (31, 127, 223)), 1),
-        ("checker-nonsquare", pattern(319, 231, True), 1),
-        ("exif-rotate-6", pattern(321, 197, False), 6),
-        ("exif-mirror-2", pattern(197, 321, False), 2),
-    ]
     result = []
-    for name, source, orientation in sources:
+    for name, width, height, orientation, kind in IMAGE_CASE_SPECS:
+        source = (Image.new("RGB", (width, height), (31, 127, 223)) if kind == "solid"
+                  else pattern(width, height, kind == "checker"))
         path = directory / f"{name}.png"
         exif = Image.Exif()
         exif[274] = orientation

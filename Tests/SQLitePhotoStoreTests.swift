@@ -29,8 +29,104 @@ final class SQLitePhotoStoreTests: XCTestCase {
         XCTAssertEqual(cached.photo.modelVersion, "test-model")
         XCTAssertEqual(cached.photo.imageEmbedding, TestFixtures.vector())
         XCTAssertEqual(cached.photo.location?.vector, place.vector)
+        XCTAssertEqual(cached.photo.imageEmbedding.count, 768)
+        XCTAssertEqual(cached.photo.location?.vector.count, 768)
+        try EmbeddingValidation.validateUnit(cached.photo.imageEmbedding)
+        try EmbeddingValidation.validateUnit(try XCTUnwrap(cached.photo.location).vector)
         XCTAssertEqual(cached.geographyVersion, "test-places")
         await reopened.close()
+    }
+
+    func testRawLegacy512PhotosAndPlacesRemainReadableButAreExcludedFromCurrentModel() async throws {
+        let (store, directory) = try makeStore()
+        let oldVersion = IndexImagePolicy.cacheVersion(modelVersion: TestFixtures.legacyModelVersion)
+        let text = "Photo taken in Shared Synthetic Place."
+        let legacyPlace = PlaceEmbedding(text: text, vector: TestFixtures.vector(axis: 511, dimension: 512))
+        let legacyPhoto = IndexedPhoto(id: "legacy-'quote-照片", modificationTime: 123, modelVersion: oldVersion,
+                                        imageEmbedding: TestFixtures.vector(axis: 510, dimension: 512),
+                                        location: legacyPlace, creationTime: 100)
+        try TestFixtures.seedRawCache([CachedPhoto(photo: legacyPhoto, geographyVersion: "test-places")], directory: directory)
+        let currentPlace = PlaceEmbedding(text: text, vector: TestFixtures.vector(axis: 767))
+        try await store.save(TestFixtures.photo(id: "current", location: currentPlace))
+        await store.close()
+
+        for readOnly in [false, true] {
+            let reader = SQLitePhotoStore(directory: directory, readOnly: readOnly)
+            do {
+                let result = try await reader.record(id: legacyPhoto.id)
+                let retained = try XCTUnwrap(result)
+                XCTAssertEqual(retained.photo.modificationTime, 123)
+                XCTAssertEqual(retained.photo.creationTime, 100)
+                XCTAssertEqual(retained.photo.modelVersion, oldVersion)
+                XCTAssertEqual(retained.photo.imageEmbedding, legacyPhoto.imageEmbedding)
+                XCTAssertEqual(retained.photo.imageEmbedding.count, 512)
+                XCTAssertEqual(retained.photo.location?.text, legacyPlace.text)
+                XCTAssertEqual(retained.photo.location?.vector, legacyPlace.vector)
+                XCTAssertEqual(retained.geographyVersion, "test-places")
+                let oldRows = try await reader.records(modelVersion: oldVersion)
+                let currentRows = try await reader.records(modelVersion: "test-model")
+                let oldPlace = try await reader.place(text: text, modelVersion: oldVersion)
+                let activePlace = try await reader.place(text: text, modelVersion: "test-model")
+                XCTAssertEqual(oldRows.map(\.photo.id), [legacyPhoto.id])
+                XCTAssertEqual(currentRows.map(\.photo.id), ["current"])
+                XCTAssertEqual(currentRows.first?.photo.imageEmbedding.count, 768)
+                XCTAssertEqual(oldPlace, legacyPlace.vector)
+                XCTAssertEqual(activePlace, currentPlace.vector)
+            } catch {
+                await reader.close()
+                throw error
+            }
+            await reader.close()
+        }
+    }
+
+    func testNewSaveRejectsLegacy512ImageAndPlaceVectorsEvenWithOldModelVersion() async throws {
+        let (store, _) = try makeStore()
+        for model in ["test-model", TestFixtures.legacyModelVersion] {
+            for legacyImage in [true, false] {
+                let id = "rejected-\(model)-\(legacyImage)"
+                let text = "Photo taken in Rejected \(id)."
+                let place = PlaceEmbedding(text: text, vector: TestFixtures.vector(dimension: legacyImage ? 768 : 512))
+                let photo = IndexedPhoto(id: id, modificationTime: 123, modelVersion: model,
+                                         imageEmbedding: TestFixtures.vector(dimension: legacyImage ? 512 : 768),
+                                         location: place, creationTime: 100)
+                do {
+                    try await store.save(CachedPhoto(photo: photo, geographyVersion: "test-places"))
+                    XCTFail("Only legacy reads may accept 512 values; new saves must reject them.")
+                } catch AppFailure.modelContract { }
+                catch { XCTFail("Unexpected error: \(error)") }
+                let rejected = try await store.record(id: id)
+                let rejectedPlace = try await store.place(text: text, modelVersion: model)
+                XCTAssertNil(rejected)
+                XCTAssertNil(rejectedPlace, "Validation must precede both writes.")
+            }
+        }
+    }
+
+    func testCurrentCacheReadsRejectNonUnitAndUnsupportedDimensionBlobs() async throws {
+        let invalidVectors = [[Float](repeating: 0, count: 768), TestFixtures.vector().map { $0 * 2 },
+                              [Float(1)], TestFixtures.vector(dimension: 767), TestFixtures.vector(dimension: 769)]
+        for invalid in invalidVectors {
+            for invalidImage in [true, false] {
+                let (store, directory) = try makeStore()
+                let place = PlaceEmbedding(text: "Photo taken in Invalid Synthetic Place.",
+                                           vector: invalidImage ? TestFixtures.vector() : invalid)
+                let photo = IndexedPhoto(id: "invalid", modificationTime: 123, modelVersion: "test-model",
+                                         imageEmbedding: invalidImage ? invalid : TestFixtures.vector(), location: place)
+                try TestFixtures.seedRawCache([CachedPhoto(photo: photo, geographyVersion: "test-places")], directory: directory)
+                do { _ = try await store.record(id: "invalid"); XCTFail("Malformed cached vectors must not be normalized on read.") }
+                catch AppFailure.modelContract { }
+                catch { XCTFail("Unexpected row error: \(error)") }
+                do { _ = try await store.records(modelVersion: "test-model"); XCTFail("Gallery reads must validate cached vectors.") }
+                catch AppFailure.modelContract { }
+                catch { XCTFail("Unexpected gallery error: \(error)") }
+                if !invalidImage {
+                    do { _ = try await store.place(text: place.text, modelVersion: "test-model"); XCTFail("Place reads must validate cached vectors.") }
+                    catch AppFailure.modelContract { }
+                    catch { XCTFail("Unexpected place error: \(error)") }
+                }
+            }
+        }
     }
 
     func testCompleteAuthorizationReconciliationPrunesMissingAndModifiedAssets() async throws {
@@ -75,14 +171,34 @@ final class SQLitePhotoStoreTests: XCTestCase {
 
     func testInvalidVectorCannotOverwriteCompletedRecord() async throws {
         let (store, _) = try makeStore()
-        try await store.save(TestFixtures.photo())
-        let invalid = IndexedPhoto(id: "synthetic-asset", modificationTime: 999, modelVersion: "test-model", imageEmbedding: [1])
-        do {
-            try await store.save(CachedPhoto(photo: invalid, geographyVersion: "test-places"))
-            XCTFail("Invalid embeddings must be rejected.")
-        } catch { }
-        let kept = try await store.record(id: "synthetic-asset")
-        XCTAssertEqual(kept?.photo.modificationTime, 123)
+        let originalPlace = PlaceEmbedding(text: "Photo taken in Kept Place.", vector: TestFixtures.vector(axis: 767))
+        try await store.save(TestFixtures.photo(location: originalPlace))
+        var invalidVectors = [[Float(1)], TestFixtures.vector(dimension: 512)]
+        for value in [Float(0), 2, .nan, .infinity, -.infinity] {
+            var invalid = [Float](repeating: 0, count: 768)
+            invalid[0] = value
+            invalidVectors.append(invalid)
+        }
+        for vector in invalidVectors {
+            for invalidImage in [true, false] {
+                let invalid = IndexedPhoto(id: "synthetic-asset", modificationTime: 999, modelVersion: "test-model",
+                                           imageEmbedding: invalidImage ? vector : TestFixtures.vector(),
+                                           location: PlaceEmbedding(text: originalPlace.text,
+                                                                    vector: invalidImage ? originalPlace.vector : vector))
+                do {
+                    try await store.save(CachedPhoto(photo: invalid, geographyVersion: "changed-places"))
+                    XCTFail("Invalid embeddings must be rejected, not normalized on save.")
+                } catch AppFailure.modelContract { }
+                catch { XCTFail("Unexpected error: \(error)") }
+                let kept = try await store.record(id: "synthetic-asset")
+                XCTAssertEqual(kept?.photo.modificationTime, 123)
+                XCTAssertEqual(kept?.photo.modelVersion, "test-model")
+                XCTAssertEqual(kept?.photo.imageEmbedding, TestFixtures.vector())
+                XCTAssertEqual(kept?.photo.location?.text, originalPlace.text)
+                XCTAssertEqual(kept?.photo.location?.vector, originalPlace.vector)
+                XCTAssertEqual(kept?.geographyVersion, "test-places")
+            }
+        }
     }
 
     func testCacheIsExcludedFromBackup() async throws {

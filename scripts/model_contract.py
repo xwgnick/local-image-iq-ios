@@ -8,51 +8,61 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_MODEL = {
-    "id": "sentence-transformers/clip-ViT-B-32",
-    "revision": "327ab6726d33c0e22f920c83f2ff9e4bd38ca37f",
+    "id": "google/siglip2-base-patch16-224",
+    "revision": "75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2",
 }
-TEXT_MODEL = {
-    "id": "sentence-transformers/clip-ViT-B-32-multilingual-v1",
-    "revision": "58edf8cada9e398793dca955574a48cbb7f18be2",
-}
-DIMENSION = 512
-SEQUENCE_LENGTH = 128
+TEXT_MODEL = dict(IMAGE_MODEL)
+SCHEMA_VERSION = 2
+DIMENSION = 768
+SEQUENCE_LENGTH = 64
 IMAGE_SIZE = 224
-MEAN = [0.48145466, 0.4578275, 0.40821073]
-STD = [0.26862954, 0.26130258, 0.27577711]
+VOCAB_SIZE = 256000
+TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json")
+MEAN = [0.5, 0.5, 0.5]
+STD = [0.5, 0.5, 0.5]
+# CLI overrides may tighten, never weaken these numerical acceptance gates.
+MAX_ABS_LIMITS = {"conversion_max_abs": 1e-3, "torch_max_abs": 1e-5,
+                  "similarity_max_abs": 1e-4, "preprocess_max_abs": 1e-6}
 FEATURES = {
     "image": {"pixel_values": {"dtype": "float32", "shape": [1, 3, 224, 224]}},
-    "text": {
-        "input_ids": {"dtype": "int32", "shape": [1, 128]},
-        "attention_mask": {"dtype": "int32", "shape": [1, 128]},
-    },
-    "output": {"output_embedding": {"dtype": "float32", "shape": [1, 512]}},
+    "text": {"input_ids": {"dtype": "int32", "shape": [1, 64]}},
+    "output": {"output_embedding": {"dtype": "float32", "shape": [1, 768]}},
 }
 PREPROCESS = {
     "image": {
         "orientation": "apply EXIF before RGB conversion",
         "color": "RGB",
-        "resize": "shortest side 224; other side floor(224 * long / short)",
-        "interpolationReference": "Pillow 11.1.0 BICUBIC",
-        "crop": "224x224 center; top/left floor((resized - 224) / 2)",
+        "resize": "warp directly to 224x224; do not preserve aspect ratio",
+        "interpolationReference": "Pillow 11.1.0 BILINEAR",
+        "resample": 2,
+        "crop": "none; cropXYWH [0,0,224,224] describes the full resized image",
         "rescale": 1.0 / 255.0,
         "mean": MEAN,
         "std": STD,
         "layout": "NCHW",
+        "pooling": "vision_model.pooler_output including learned attention pooling head",
     },
     "text": {
-        "algorithm": "cased WordPiece",
-        "doLowerCase": False,
-        "stripAccents": False,
-        "tokenizeChineseChars": True,
-        "specialTokens": ["[UNK]", "[SEP]", "[PAD]", "[CLS]", "[MASK]"],
-        "sequenceLength": 128,
-        "truncation": "right; reserve CLS and SEP",
-        "padding": "right to 128",
-        "pooling": "attention-mask mean including CLS and SEP",
-        "projection": "768 to 512; bias false; activation Identity",
+        "algorithm": "GemmaTokenizerFast; pinned Hugging Face tokenizer.json BPE with byte fallback",
+        "tokenizerFile": TOKENIZER_FILES[0],
+        "tokenizerConfigFile": TOKENIZER_FILES[1],
+        "doLowerCase": True,
+        "lowercase": "explicit Python str.lower before HF tokenization; not casefold or locale-sensitive",
+        "normalization": "after lowercasing use the pinned tokenizer.json normalizer unchanged",
+        "specialTokens": {"pad": {"token": "<pad>", "id": 0},
+                          "eos": {"token": "<eos>", "id": 1},
+                          "bos": {"token": "<bos>", "id": 2},
+                          "unk": {"token": "<unk>", "id": 3}},
+        "addBOSToken": False,
+        "addEOSToken": True,
+        "sequenceLength": 64,
+        "truncation": "right; at most 63 content tokens plus one appended EOS (id 1)",
+        "padding": "right to 64 with PAD (id 0)",
+        "attentionMask": "fixture checks only; never a model input",
+        "pooling": "text_model.pooler_output: final sequence position then learned head; no mask",
     },
-    "outputNormalization": "none; Swift L2-normalizes each encoder output once",
+    "outputNormalization": "none; raw pooler_output; Swift L2-normalizes each encoder output once",
+    "outputScoring": "no sigmoid, logit scale, logit bias or paired forward in either encoder",
     "computePrecision": "float32",
 }
 
@@ -89,12 +99,12 @@ def model_version() -> str:
     """Semantic identity only: never a timestamp, file path, or report checksum."""
     identity = {"imageModel": IMAGE_MODEL, "textModel": TEXT_MODEL,
                 "features": FEATURES, "preprocessing": PREPROCESS}
-    return "clip-pair-v1-" + hashlib.sha256(canonical_json(identity)).hexdigest()
+    return "siglip2-b16-224-v1-" + hashlib.sha256(canonical_json(identity)).hexdigest()
 
 
 def base_manifest() -> dict:
     return {
-        "schemaVersion": 1,
+        "schemaVersion": SCHEMA_VERSION,
         "modelVersion": model_version(),
         "dimension": DIMENSION,
         "sequenceLength": SEQUENCE_LENGTH,
@@ -102,8 +112,10 @@ def base_manifest() -> dict:
         "imageModel": dict(IMAGE_MODEL),
         "textModel": dict(TEXT_MODEL),
         "imageInput": "pixel_values",
-        "textInputs": ["input_ids", "attention_mask"],
+        "textInputs": ["input_ids"],
         "output": "output_embedding",
+        "tokenizerFile": TOKENIZER_FILES[0],
+        "tokenizerConfigFile": TOKENIZER_FILES[1],
         "features": FEATURES,
         "preprocessing": PREPROCESS,
     }
@@ -115,68 +127,85 @@ def validate_document(path: Path = ROOT / "docs" / "IMPLEMENTATION_CONTRACT.md")
     required = [
         IMAGE_MODEL["id"], IMAGE_MODEL["revision"], TEXT_MODEL["id"], TEXT_MODEL["revision"],
         "`pixel_values`: Float32 `[1,3,224,224]`",
-        "`input_ids`, `attention_mask`: Int32 `[1,128]`",
-        "`output_embedding`: Float32 `[1,512]`", "**raw projection**",
-        "[0.48145466,0.4578275,0.40821073]", "[0.26862954,0.26130258,0.27577711]",
-        "no lowercasing or accent stripping", "bias-free identity dense 768→512",
-        "`schemaVersion:1`", "`sequenceLength:128`", "`imageSize:224`",
+        "`input_ids`: Int32 `[1,64]`",
+        "`output_embedding`: Float32 `[1,768]`", "**raw pooler_output**",
+        "[0.5,0.5,0.5]", "BILINEAR", "resample=2", "warp directly to 224x224",
+        "explicit Python `str.lower()`", "63 content tokens", "no automatic BOS",
+        "`schemaVersion:2`", "`dimension:768`", "`sequenceLength:64`", "`imageSize:224`",
+        '`textInputs:["input_ids"]`', "`siglip2-b16-224-v1-`", *TOKENIZER_FILES,
+        "`tokenizerSHA256`", "`configSHA256`", "`referenceRaw`", "`coreMLRaw`",
+        "`referenceVsWrapper`", "`referenceVsCoreML`", "`reference`",
+        "maxAbs <= 1e-3", "cosine > 0.999", "maxAbs <= 1e-4",
     ]
     for fragment in required:
         require(fragment in text, f"Shared contract changed or is incomplete: {fragment}")
 
 
-def validate_snapshot_configs(image: Path, text: Path) -> dict:
-    """Inspect metadata before loading any weights. Reject extra ST modules."""
-    image_modules = [{"idx": 0, "name": "0", "path": "0_CLIPModel",
-                      "type": "sentence_transformers.models.CLIPModel"}]
-    text_modules = [
-        {"idx": 0, "name": "0", "path": "", "type": "sentence_transformers.models.Transformer"},
-        {"idx": 1, "name": "1", "path": "1_Pooling", "type": "sentence_transformers.models.Pooling"},
-        {"idx": 2, "name": "2", "path": "2_Dense", "type": "sentence_transformers.models.Dense"},
-    ]
-    require(read_json(image / "modules.json") == image_modules, "Image module graph changed")
-    require(read_json(text / "modules.json") == text_modules, "Text module graph changed")
-    clip = read_json(image / "0_CLIPModel" / "config.json")
-    require(clip["model_type"] == "clip" and clip["projection_dim"] == 512,
-            "Expected paired CLIP projection")
-    vision = clip["vision_config"]
-    for key, expected in {"image_size": 224, "patch_size": 32, "hidden_size": 768}.items():
-        require(vision.get(key) == expected, f"CLIP vision {key} changed")
-    processor = read_json(image / "0_CLIPModel" / "preprocessor_config.json")
-    for key, expected in {"crop_size": 224, "size": 224, "do_resize": True,
-                          "do_center_crop": True, "do_normalize": True, "resample": 3,
+def validate_snapshot_configs(snapshot: Path) -> dict:
+    """Inspect the shared public checkpoint before loading weights or custom code.
+
+    The snapshot stores sparse configs; omitted architectural values below are
+    SiglipConfig defaults in pinned Transformers 4.48.3, checked again at load.
+    Token IDs are authoritative in the tokenizer, NOT legacy SiglipTextConfig defaults.
+    """
+    model = read_json(snapshot / "config.json")
+    processor = read_json(snapshot / "preprocessor_config.json")
+    tokenizer = read_json(snapshot / "tokenizer_config.json")
+    for name, config in (("model", model), ("vision", model.get("vision_config", {})),
+                         ("text", model.get("text_config", {})),
+                         ("processor", processor), ("tokenizer", tokenizer)):
+        require(not config.get("auto_map"), f"Remote code mapping is not allowed: {name}")
+    require(model.get("model_type") == "siglip", "Expected built-in SiglipModel, not NaFlex/custom code")
+    common = {"hidden_size": DIMENSION, "intermediate_size": 3072, "num_hidden_layers": 12,
+              "num_attention_heads": 12, "hidden_act": "gelu_pytorch_tanh",
+              "layer_norm_eps": 1e-6, "attention_dropout": 0.0}
+    vision_expected = {**common, "image_size": IMAGE_SIZE, "patch_size": 16, "num_channels": 3,
+                       "vision_use_head": True}
+    text_expected = {**common, "max_position_embeddings": SEQUENCE_LENGTH}
+    for role, expected in (("vision", vision_expected), ("text", text_expected)):
+        config = model.get(f"{role}_config", {})
+        require(config.get("model_type") == f"siglip_{role}_model", f"Unexpected {role} model type")
+        for key, value in expected.items():
+            require(config.get(key, value) == value, f"Siglip {role} {key} changed")
+    require(model["text_config"].get("vocab_size") == VOCAB_SIZE, "Text vocabulary size changed")
+    for key, expected in {"image_processor_type": "SiglipImageProcessor",
+                          "size": {"height": IMAGE_SIZE, "width": IMAGE_SIZE},
+                          "do_resize": True, "do_normalize": True, "do_rescale": True,
+                          "resample": 2, "rescale_factor": 1 / 255,
                           "image_mean": MEAN, "image_std": STD}.items():
         require(processor.get(key) == expected, f"Pinned image processor {key} changed")
-    require(processor.get("do_rescale", True) is True, "Image rescale disabled")
-    require(processor.get("rescale_factor", 1 / 255) == 1 / 255, "Image scale changed")
-    transformer = read_json(text / "config.json")
-    for key, expected in {"model_type": "distilbert", "dim": 768, "vocab_size": 119547,
-                          "max_position_embeddings": 512, "n_layers": 6, "n_heads": 12}.items():
-        require(transformer.get(key) == expected, f"Text transformer {key} changed")
-    st_config = read_json(text / "sentence_bert_config.json")
-    require(st_config.get("max_seq_length") == 128 and st_config.get("do_lower_case") is False,
-            "SentenceTransformer text length/casing changed")
-    pooling = read_json(text / "1_Pooling" / "config.json")
-    require(pooling.get("word_embedding_dimension") == 768, "Pooling width changed")
-    require(pooling.get("pooling_mode_mean_tokens") is True, "Expected attention-mask mean")
-    for key, value in pooling.items():
-        if key.startswith("pooling_mode_") and key != "pooling_mode_mean_tokens":
-            require(value is False, f"Unexpected pooling mode: {key}")
-    dense = read_json(text / "2_Dense" / "config.json")
-    require(dense == {"in_features": 768, "out_features": 512, "bias": False,
-                      "activation_function": "torch.nn.modules.linear.Identity"},
-            "Expected a bias-free linear projection with Identity activation (not identity weights)")
-    tokenizer = read_json(text / "tokenizer_config.json")
-    require(tokenizer.get("do_lower_case") is False, "Tokenizer must preserve case")
-    require(tokenizer.get("strip_accents") in (None, False), "Tokenizer strips accents")
-    require(tokenizer.get("tokenize_chinese_chars") is True, "Chinese splitting disabled")
-    require(tokenizer.get("do_basic_tokenize", True) is True, "Basic tokenization disabled")
-    special = read_json(text / "special_tokens_map.json")
-    require(special == {"unk_token": "[UNK]", "sep_token": "[SEP]", "pad_token": "[PAD]",
-                        "cls_token": "[CLS]", "mask_token": "[MASK]"}, "Special tokens changed")
-    return {"imageModules": image_modules, "textModules": text_modules,
-            "imageProcessor": processor, "pooling": pooling, "dense": dense,
-            "tokenizer": tokenizer, "sentenceTransformer": st_config}
+    require(not processor.get("do_center_crop", False), "Siglip image must not be center cropped")
+    for key, expected in {"tokenizer_class": "GemmaTokenizer", "add_bos_token": False,
+                          "add_eos_token": True, "do_lower_case": True, "padding_side": "right",
+                          "model_input_names": ["input_ids"], "pad_token": "<pad>",
+                          "eos_token": "<eos>", "bos_token": "<bos>", "unk_token": "<unk>"}.items():
+        require(tokenizer.get(key) == expected, f"Pinned tokenizer {key} changed")
+    require(tokenizer.get("truncation_side", "right") == "right", "Tokenizer truncation side changed")
+    added = tokenizer.get("added_tokens_decoder", {})
+    for index, token in enumerate(("<pad>", "<eos>", "<bos>", "<unk>")):
+        entry = added.get(str(index), {})
+        require(entry.get("content") == token and entry.get("special") is True,
+                f"Tokenizer special token {index} changed")
+    return {"model": model, "imageProcessor": processor, "tokenizer": tokenizer,
+            "effectiveVisionArchitecture": vision_expected,
+            "effectiveTextArchitecture": {**text_expected, "vocab_size": VOCAB_SIZE}}
+
+
+def validate_tokenization(encoded: dict) -> None:
+    """Check the HF result without rebuilding tokens or inferring masks from IDs.
+
+    Literal <pad>/<bos>/<eos> in content are allowed; a content PAD has mask=1.
+    """
+    ids, mask = encoded["input_ids"], encoded["attention_mask"]
+    require(len(ids) == len(mask) == SEQUENCE_LENGTH, "Tokenizer fixture not fixed length")
+    require(all(type(value) is int and 0 <= value < VOCAB_SIZE for value in ids),
+            "Tokenizer IDs outside the pinned vocabulary")
+    require(all(type(value) is int and value in (0, 1) for value in mask), "Invalid attention mask")
+    valid = sum(mask)
+    require(1 <= valid <= SEQUENCE_LENGTH and mask == [1] * valid + [0] * (SEQUENCE_LENGTH - valid),
+            "Expected contiguous right padding with at least one EOS")
+    require(ids[valid - 1] == 1, "Missing appended EOS id 1")
+    require(all(value == 0 for value in ids[valid:]), "Right padding must use PAD id 0")
 
 
 def query_cases() -> list[dict]:
@@ -187,11 +216,16 @@ def query_cases() -> list[dict]:
         {"id": "diacritics", "text": "Café naïve résumé Ångström München İstanbul"},
         {"id": "combining", "text": "Cafe\u0301 nai\u0308ve A\u030Angstro\u0308m I\u0307stanbul"},
         {"id": "punctuation", "text": "Hello—world… (a/b), isn't it? ￥１２３！。"},
-        {"id": "special-tokens", "text": "[CLS] red [MASK] [SEP] [UNK] [PAD] blue"},
+        {"id": "special-tokens", "text": "<eos> red <bos> <unk> <pad> <mask> blue"},
         {"id": "empty", "text": ""},
         {"id": "whitespace-controls", "text": " \tred\nblue\r\n绿色\u00a0sky\u0000 "},
         {"id": "unknown-unicode", "text": "🧩 🦄 𠀀"},
-        # Exercises the WordPiece word limit, not an application query limit.
+        # No application word/byte limit: the HF tokenizer owns truncation.
         {"id": "long-word", "text": "a" * 130},
         {"id": "long-truncation", "text": "red square 蓝色天空 café " * 80},
+        {"id": "greek-sigma", "text": "ΟΣ ΟΣΑ Σ σ ς ΟΣ\u0301 Ελληνικά"},
+        {"id": "turkish-unicode-chinese", "text": "I İ ı i I\u0307 İSTANBUL 中文大小写 Straße ẞ"},
+        {"id": "gemma-turn-tokens", "text": "<start_of_turn>USER\n你好<end_of_turn><eos><bos>"},
+        {"id": "literal-pad", "text": "<pad>"},
+        {"id": "whitespace-only", "text": " \t\r\n\u00a0\u2003 "},
     ]

@@ -6,7 +6,7 @@ import ImageIQCore
 @testable import LocalImageIQ
 
 /// Model-free state contracts and five native review captures, not pixel baselines.
-/// The service, 512 candidate hits and 512-dimensional unit vectors are test-only.
+/// The service, 512 candidate hits and 768-dimensional unit vectors are test-only.
 /// No Photos authorization, imports, private images, model inference or index writes.
 /// A fixture's 64-pixel report is NOT evidence about any real PhotoKit preview.
 @MainActor
@@ -21,7 +21,8 @@ final class PhotoCheckPresentationTests: XCTestCase {
         let state = await searchedState(worker: worker)
         let before = GallerySnapshot(state)
         XCTAssertEqual(PhotoCheckFixtures.hits.count, 512)
-        XCTAssertTrue(PhotoCheckFixtures.hits.allSatisfy { $0.photo.imageEmbedding.count == 512 })
+        XCTAssertTrue(PhotoCheckFixtures.hits.allSatisfy { $0.photo.imageEmbedding.count == 768 })
+        for hit in PhotoCheckFixtures.hits { try EmbeddingValidation.validateUnit(hit.photo.imageEmbedding) }
         XCTAssertEqual(state.resultLimit, 3)
         XCTAssertEqual(state.locationWeight, 0.6)
         XCTAssertFalse(state.allowICloudDownload)
@@ -664,8 +665,7 @@ private enum PhotoCheckFixtures {
                                         placesDescription: "TEST FIXTURE: no offline places")
 
     static let hits: [SearchHit] = (0..<512).map { index in
-        var vector = [Float](repeating: 0, count: 512)
-        vector[index] = 1
+        let vector = TestFixtures.vector(axis: index)
         let photo = IndexedPhoto(id: "photo-check-test-only-never-a-PHAsset-\(index)", modificationTime: 123,
                                  modelVersion: modelVersion, imageEmbedding: vector, creationTime: 100)
         return SearchHit(photo: photo, score: Float(512 - index) / 1024)

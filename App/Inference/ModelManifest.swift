@@ -8,6 +8,7 @@ struct ModelManifest: Codable, Sendable, Equatable {
     }
 
     let schemaVersion: Int
+    /// The exporter supplies siglip2-b16-224-v1-<hash>; fixtures may use any nonempty version.
     let modelVersion: String
     let dimension: Int
     let sequenceLength: Int
@@ -19,14 +20,13 @@ struct ModelManifest: Codable, Sendable, Equatable {
     let output: String
 
     func validate() throws {
-        guard schemaVersion == 1, !modelVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              dimension == 512, sequenceLength == 128, imageSize == 224,
-              imageInput == "pixel_values", textInputs == ["input_ids", "attention_mask"],
+        guard schemaVersion == 2, !modelVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              dimension == 768, sequenceLength == 64, imageSize == 224,
+              imageInput == "pixel_values", textInputs == ["input_ids"],
               output == "output_embedding",
-              imageModel.id == "sentence-transformers/clip-ViT-B-32",
-              imageModel.revision == "327ab6726d33c0e22f920c83f2ff9e4bd38ca37f",
-              textModel.id == "sentence-transformers/clip-ViT-B-32-multilingual-v1",
-              textModel.revision == "58edf8cada9e398793dca955574a48cbb7f18be2" else {
+              imageModel.id == "google/siglip2-base-patch16-224",
+              imageModel.revision == "75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2",
+              textModel == imageModel else {
             throw AppFailure.modelContract("The manifest does not match the pinned paired-model contract.")
         }
     }
@@ -44,7 +44,7 @@ enum AppFailure: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .modelsMissing(let detail):
-            return "Models unavailable: \(detail). Install an app build containing both compiled encoders, model-manifest.json and vocab.txt. Photo authorization remains available."
+            return "Models unavailable: \(detail). Install an app build containing both compiled encoders, model-manifest.json, tokenizer.json and tokenizer_config.json. Photo authorization remains available."
         case .modelContract(let detail): return "Model contract mismatch: \(detail) Install a matching model-enabled build."
         case .storage(let detail): return "Local cache error: \(detail) Retry, or clear the local index and rebuild it."
         case .photo(let detail): return "Photo unavailable: \(detail)"
@@ -57,16 +57,17 @@ enum AppFailure: LocalizedError {
 
 enum EmbeddingValidation {
     static func normalizeProjection(_ values: [Float]) throws -> [Float] {
-        guard values.count == 512, values.allSatisfy(\.isFinite) else {
-            throw AppFailure.modelContract("Expected 512 finite projection values.")
+        guard values.count == 768, values.allSatisfy(\.isFinite) else {
+            throw AppFailure.modelContract("Expected 768 finite projection values.")
         }
         let normalized = try EmbeddingMath.normalized(values)
         try validateUnit(normalized)
         return normalized
     }
 
-    static func validateUnit(_ values: [Float]) throws {
-        guard values.count == 512, values.allSatisfy(\.isFinite) else {
+    /// Only legacy cache reads explicitly override the active model dimension.
+    static func validateUnit(_ values: [Float], dimension: Int = 768) throws {
+        guard values.count == dimension, values.allSatisfy(\.isFinite) else {
             throw AppFailure.modelContract("Invalid cached embedding dimensions or values.")
         }
         let normSquared = try EmbeddingMath.dot(values, values)

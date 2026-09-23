@@ -3,12 +3,20 @@ include:
 
 # Generate this variant only AFTER export_models.py completes successfully.
 # Missing generated resources are errors in a model-enabled build, not placeholders.
+# Production resources stay in project.yml's LocalImageIQ Resources/Models source:
+# both model packages, model-manifest.json, tokenizer.json and tokenizer_config.json.
+# Do not duplicate them here or make the app depend on the test bundle's resources.
+# Only generated parity/provenance reports and procedural fixtures belong below.
 targets:
   LocalImageIQTests:
     sources:
       - path: Resources/Models/tokenizer-parity.json
         buildPhase: resources
       - path: Resources/Models/image-preprocess-parity.json
+        buildPhase: resources
+      - path: Resources/Models/parity-report.json
+        buildPhase: resources
+      - path: Resources/Models/provenance.json
         buildPhase: resources
       - path: Resources/Models/fixtures
         type: folder

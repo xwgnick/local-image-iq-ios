@@ -47,12 +47,52 @@ if (process.argv[2] === '--self-test') {
   const manifestPath = resource('model-manifest.json');
   assert.ok(manifestPath, 'Real model manifest is required');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  assert.equal(manifest.dimension, 512);
+  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.dimension, 768);
+  assert.equal(manifest.sequenceLength, 64);
+  assert.equal(manifest.imageSize, 224);
+  assert.match(manifest.modelVersion, /^siglip2-b16-224-v1-[a-f0-9]{64}$/);
+  const source = { id: 'google/siglip2-base-patch16-224',
+    revision: '75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2' };
+  assert.deepEqual(manifest.imageModel, source);
+  assert.deepEqual(manifest.textModel, source);
+  assert.equal(manifest.imageInput, 'pixel_values');
+  assert.deepEqual(manifest.textInputs, ['input_ids']);
+  assert.equal(manifest.output, 'output_embedding');
+  assert.deepEqual(manifest.features, {
+    image: { pixel_values: { dtype: 'float32', shape: [1, 3, 224, 224] } },
+    text: { input_ids: { dtype: 'int32', shape: [1, 64] } },
+    output: { output_embedding: { dtype: 'float32', shape: [1, 768] } },
+  });
+  assert.equal(manifest.preprocessing?.image?.resize, 'warp directly to 224x224; do not preserve aspect ratio');
+  assert.equal(manifest.preprocessing?.image?.resample, 2);
+  assert.equal(manifest.preprocessing?.image?.rescale, 1 / 255);
+  assert.deepEqual(manifest.preprocessing?.image?.mean, [0.5, 0.5, 0.5]);
+  assert.deepEqual(manifest.preprocessing?.image?.std, [0.5, 0.5, 0.5]);
+  assert.equal(manifest.preprocessing?.outputNormalization,
+    'none; raw pooler_output; Swift L2-normalizes each encoder output once');
   assert.equal(manifest.parity?.status, 'passed');
+  assert.equal(manifest.parity?.precision, 'float32');
+  assert.equal(manifest.parity?.computeUnits, 'CPU_ONLY');
   for (const name of ['ImageEncoder.mlmodelc', 'TextEncoder.mlmodelc']) {
     const item = resource(name); assert.ok(item && statSync(item).isDirectory() && readdirSync(item).length, `Missing compiled device model ${name}`);
   }
-  assert.ok(resource('vocab.txt'), 'Missing multilingual vocabulary');
+  const tokenizerNames = { tokenizerFile: 'tokenizer.json', tokenizerConfigFile: 'tokenizer_config.json' };
+  const tokenizerPaths = [];
+  for (const [key, name] of Object.entries(tokenizerNames)) {
+    assert.equal(manifest[key], name, `Wrong manifest ${key}`);
+    const item = resource(name);
+    assert.ok(item && statSync(item).isFile(), `Missing SigLIP tokenizer resource ${name}`);
+    tokenizerPaths.push(item);
+    const expected = manifest.artifactsSHA256?.[name];
+    assert.match(expected, /^[a-f0-9]{64}$/, `Missing tokenizer hash: ${name}`);
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(item)) hash.update(chunk);
+    assert.equal(hash.digest('hex'), expected, `Bundled tokenizer bytes differ: ${name}`);
+  }
+  assert.equal(path.dirname(tokenizerPaths[0]), path.dirname(tokenizerPaths[1]),
+    'Both tokenizer JSON resources must share the local runtime directory');
+  // A passing manifest records export parity, not native or physical-device validation.
   const frameworks = path.join(app, 'Frameworks');
   if (existsSync(frameworks)) for (const name of readdirSync(frameworks)) {
     const binary = name.endsWith('.framework') ? path.join(frameworks, name, name.slice(0, -10)) : path.join(frameworks, name);
