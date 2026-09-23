@@ -1,13 +1,147 @@
 # Cloud build status — 2026-09-23
 
-## Current: SigLIP 2 · 0.3.0 (6) — SUCCESS; IPA downloaded and verified
+## Current: 0.3.1 (7) — SUCCESS first attempt; IPA downloaded and verified
+
+Source HEAD: `18ad52d37690ecfbf92b63a21285a6c3e8e753d4`.
+[Run 35840838147](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147)
+/ [job 107115240763](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147/job/107115240763).
+**SUCCESS on the first attempt; no fix or retry was needed.** Logs contain
+`TEST SUCCEEDED` and `BUILD SUCCEEDED`. The evidence below belongs to this run,
+not build 6. This documentation-only edit records supplied verified results;
+it does not run commands, tests, downloads or CI queries.
+
+| Gate | Verified build 7 result / remaining boundary |
+| --- | --- |
+| Source/static contracts | 30 passed. |
+| Pure Swift core | 79 passed. |
+| Generate and validate public offline Places pack | Public-place build and test_places step passed, including generated-pack validation. The 25-test count is declared in code / prior local documentation, not asserted here as a separately observed CI log total. |
+| Convert and check pinned model pair | Passed; model-report artifact 10741671604 records 23 cases and 92 comparisons, with this run's measurements below. |
+| Native App tests | 215 total: 214 passed, 1 physical-device file-protection test explicitly skipped on simulator, 0 failures. All App suites listed below are included in this total, not additional tests. |
+| GeneratedModelParityTests | All 7 passed in 67.736 seconds; no parity skip. |
+| IndexPipelineTests / PlaceAvailabilityTests | All 15 / 17 passed, respectively. |
+| BundledPlacesTests | Both tests passed: actual host-app pack hash/counts and public-city coverage, including New York outside coverage. Not a private-library GPS test. |
+| IndexPlacesPresentationTests | All 3 passed; screenshot review is narrower than test execution, as recorded below. |
+| UI tests | All 7 passed in 202.143 seconds; TEST SUCCEEDED. |
+| Simulator / device App resources and IPA validation | Passed: compiled simulator and device App bundle checks, device packager and IPA contents validation. Actual device-report Places identity is recorded below. |
+| iPhoneOS arm64 Release build and IPA upload | BUILD SUCCEEDED; unsigned 0.3.1 (7) package uploaded as artifact 10741731376. Not a physical-device execution test. |
+| New IPA download / length / SHA-256 | Actually completed with bounded-memory streaming; local length/hash verified and the post-download local report written and checked. |
+| Native visual review | 20 screenshots retrieved; only the 3 new index/place frames reviewed in a 960×680 contact sheet. Disclosures remained collapsed; their full internal counters were not visually reviewed. |
+| Physical iPhone / private-library coverage / speed | PENDING-DEVICE after user installation. No measured phone speedup or real-GPS coverage percentage is promised; file protection remains untested on a physical device. |
+| Distribution review | PENDING-LICENSE-REVIEW for model and geography redistribution; preserved source/license evidence is not legal approval. |
+
+### Export evidence from this run
+
+[Model-report artifact 10741671604](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147/artifacts/10741671604):
+**23 cases, 92 comparisons**, with unchanged modelVersion.
+
+| Metric | Build 7 measured value |
+| --- | --- |
+| Minimum embedding cosine across comparisons | 0.9999999999960657 |
+| Maximum raw component difference | 0.000011444091796875 |
+| Maximum paired text/image cosine matrix difference | 1.8557397291063538e-7 |
+
+The export's native `not-run` markers precede XCTest; the later seven passing
+GeneratedModelParityTests establish native execution, not those exporter markers.
+These synthetic numerical checks do not measure real-photo retrieval quality.
+
+### Verified device package, completed download and bounded visual review
+
+- Device report: **0.3.1, app build 7; iphoneos18.5 SDK; arm64 Release;
+  unsigned; Xcode 16.4; minimum iOS 17.0**. FP32 and semantic modelVersion are
+  unchanged from 0.3.0.
+- [Unsigned IPA artifact 10741731376](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147/artifacts/10741731376):
+  outer artifact **1,414,628,123 bytes**; inner IPA **1,414,620,805 bytes**.
+- IPA SHA-256:
+  `98fb537004a64adaa84b1ba15d798acaf71a0684555275faddc647d1adafd8d6`.
+- **Download actually completed**, with bounded-memory streaming and verified
+  local length/SHA-256, at
+  [build/device-download/35840838147/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35840838147/LocalImageIQ-iphoneos-unsigned.ipa).
+  The local report was written and checked after download. This is the build 7
+  package, not the old build 6 IPA; it still needs local Sideloadly signing.
+- Actual **device-package** bundledPlaces checks confirm **2,943 features,
+  15,175,079 GeoJSON bytes, CHN/FRA/DEU/NLD, 8 sources**. GeoJSON SHA-256:
+  `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`.
+  Manifest SHA-256:
+  `0b060aab6515670f136beed831ec043fe8d9e9bdce25c23802e8e9b3bda61812`.
+  These are verified device-package results, not just local source metadata.
+- **20 native UI screenshots retrieved; only 3 new index/place frames reviewed**:
+  Library after backfill, Library with zero GPS, and Settings with locations not
+  checked, in the **960×680**
+  [build/ui-review/35840838147/index-places-contact.jpg](../build/ui-review/35840838147/index-places-contact.jpg).
+  Visible content is readable. Disclosures are collapsed, so this is **not** a
+  visual check of every expanded internal counter. Counts are synthetic fixtures,
+  not user GPS observations; the other 17 screenshots were not reviewed this round.
+
+### Implemented scope, not a physical-phone performance claim
+
+- One structured child prefetches the next asset's cache row / PhotoKit preview
+  while the parent handles the current asset. One model pair, serial encoder
+  calls and one ordered commit path remain; this is not multiple inference workers.
+  Writes and progress stay in snapshot order, with successful saves completed
+  before their counters publish. Cancellation/error scope exit cancels and drains
+  the Swift child. PhotoKit has no cancellation acknowledgement; the existing
+  gate ignores late callbacks, without claiming the OS request has stopped.
+- No new arbitrary library/batch ceilings, deadlines, retries, original-download
+  requirement or networking policy. Preview-first, reduced previews accepted,
+  iCloud default off / explicit opt-in remain unchanged. Overlap is not measured
+  iPhone acceleration and may help little if inference dominates.
+- Both encoders still use `google/siglip2-base-patch16-224` at revision
+  `75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2`, FP32, the same preprocessing and
+  `photokit-preview-v1`. Semantic modelVersion remains
+  `siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`.
+  Compatible 0.3.0 image vectors are reused while locations/place vectors are
+  backfilled; compatible persisted distinct-place vectors are reused as well.
+- China, France, Germany and Netherlands ADM1/ADM2 public boundaries are now
+  required app resources in the normal CI path, including model-free builds.
+  The generated [manifest](../Resources/Places/places-manifest.json) and actual
+  device-package checks agree on the pack identity recorded above. Simulator,
+  device App and IPA resource gates passed; this edit does not rerun those checks.
+- Represented years are China ADM1 2019 / ADM2 2017, France 2022, Germany 2021,
+  Netherlands 2022. Historical administrative approximations are not current
+  addresses, POIs or global coverage. Labels use photo metadata, not current-device
+  location or online reverse geocoding; raw coordinates are neither stored nor uploaded.
+- Library separates current/last-scan GPS observations from saved labels:
+  resolved, no GPS, GPS with no usable pack, GPS outside coverage, and unavailable.
+  Not checked means unknown; label count is not GPS count or a permanent census.
+  The existing centered-place score and default weight **0.6** are unchanged;
+  supplying real place labels activates that branch, so ranking changes are intentional.
+
+Implementation, provenance and test contracts: [INDEX_PIPELINE_PLACES.md](INDEX_PIPELINE_PLACES.md).
+
+### Install the verified build 7 package; backfill places once
+
+Overwrite with the same Sideloadly account/effective Bundle ID; **do not uninstall,
+clear the index or re-encode the whole existing 0.3.0 image library**. Open
+**Library → Index / resume** for one location-backfill pass, keep the app open and
+network off, and resume there if interrupted. Valid image-cache hits need no pixels
+or image inference; new/changed photos follow normal encoding. Do not download all
+originals or change the location weight to disguise expected ranking changes.
+An index still using 0.2.x CLIP requires the separate historical model migration;
+build 7 does not make old CLIP vectors compatible. Normal use afterwards is enough,
+without a new user diagnostic/query round.
+
+### Remaining boundaries
+
+CI, native parity/UI execution, simulator/device resource checks, IPA packaging
+and the verified download are complete. User-side signing, overwrite installation
+and the one-pass location backfill have not yet been confirmed for build 7.
+Physical-iPhone behavior, file protection, latency/memory/heat and private-library
+GPS/coverage remain unverified; cloud tests and synthetic screenshots do not fill
+those gaps. No additional diagnostic/query round is requested. Expanded disclosure
+contents are outside this visual review's scope. Public release still requires
+model/geography license review, an App icon, a production Bundle ID, signing and
+TestFlight/distribution configuration; no store submission has occurred.
+
+## Historical: SigLIP 2 · 0.3.0 (6) — SUCCESS; IPA downloaded and verified
+
+Everything in this build 6 section, including its migration instructions, metrics,
+package and screenshot review, belongs to the previous release, not build 7.
 
 Source: `f9a2c85e9307cf365a8c2f62ec57eaf6e01bad78`.
 [Run 35824403795](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35824403795)
 / job `107062896845`: **SUCCESS**, the corrected run. The logs report
-`TEST SUCCEEDED` and `BUILD SUCCEEDED`. This documentation-only update records
-the completed run and verified download; it does not rerun CI or claim a
-physical-device result.
+`TEST SUCCEEDED` and `BUILD SUCCEEDED`. The prior documentation update recorded
+that completed run and verified download, not a physical-device result.
 
 Initial [run 35823153931](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35823153931)
 at `aee4cdc00be92e1699f68baa9ef7ccc72cbcfbda` **failed**. It passed all 30 static tests, 79 core tests, model conversion
@@ -32,7 +166,7 @@ SigLIP image encoder with the retired CLIP text encoder or old index vectors.
 
 ### Completed validation — evidence from corrected run 35824403795
 
-| Gate | Current evidence / remaining boundary |
+| Gate | Historical build 6 evidence / then-remaining boundary |
 | --- | --- |
 | Python static checks | 30 passed, reported for this change; not rerun by this documentation edit. Static checks are not model export or native parity. |
 | Pure Swift core | 79 passed, zero failures in this run. |
@@ -73,7 +207,7 @@ remain unchanged; synthetic parity is not real-library quality evidence.
 - **Download actually completed**, with bounded-memory streaming and verified
   local length/SHA-256:
   [build/device-download/35824403795/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35824403795/LocalImageIQ-iphoneos-unsigned.ipa).
-  This is the new build 6 package, not an older IPA or a pending download.
+  This was the verified build 6 package, not a pending download or the build 7 IPA.
   It remains unsigned and requires local Sideloadly signing before installation.
 - **17 native UI screenshots retrieved; only 4 reviewed**: Home, Library,
   Settings and hero-results layout, in the downscaled
@@ -82,7 +216,7 @@ remain unchanged; synthetic parity is not real-library quality evidence.
   not visual review; neither these screenshots nor simulator `.all` tests
   establish physical-phone performance or actual Neural Engine execution.
 
-### Installation and required vector migration
+### Historical installation and required migration from CLIP to build 6
 
 1. Overwrite using the same Sideloadly account and effective Bundle ID. **Do not
    uninstall or manually clear the index.**
@@ -124,9 +258,11 @@ does not promise restoration of overwritten old-model rows.
 
 Everything below records the earlier builds and their then-current instructions.
 In particular, old “do not rebuild” guidance applied to UI/diagnostic-only updates;
-it does not waive build 6's new-vector indexing step above. Old success counts,
+it did not waive build 6's CLIP-to-SigLIP new-vector indexing step above. That
+migration is not a requirement to re-encode valid 0.3.0 image vectors for build 7.
+Old success counts,
 parity measurements, license findings, package sizes and checksums do not describe
-the new paired model. Preserve them as history, not as pending-result substitutes.
+the current build. Preserve them as history, not as pending-result substitutes.
 
 ## Historical: read-only single-photo check · 0.2.1 (5)
 

@@ -2,7 +2,76 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 当前：0.3.0（build 6）SigLIP 2 — 自动验证通过，IPA 已下载校验
+## 当前：0.3.1（build 7）— 首轮验证通过，IPA 已完整下载并校验
+
+本次源码 HEAD：`18ad52d37690ecfbf92b63a21285a6c3e8e753d4`。
+[CI 35840838147](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147)
+／[job 107115240763](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147/job/107115240763)
+已 **SUCCESS，首轮通过，无需修复重跑**；日志包含 `TEST SUCCEEDED` 和
+`BUILD SUCCEEDED`。以下是本次 build 7 的实际结果，不借用下方 0.3.0 历史记录。
+
+- 源码／静态测试 **30 通过**，Swift 核心 **79 通过**；App **215 项：214 通过、
+   1 项真机文件保护在模拟器跳过、0 失败**。全部 **7 个 GeneratedModelParityTests
+   通过（67.736 秒）**，全部 **7 个 UI 测试通过（202.143 秒）**。
+- App 中 IndexPipeline **15**、PlaceAvailability **17**、BundledPlaces **2**、
+   IndexPlacesPresentation **3** 项均通过，均已计入 App 总数。包哈希／数量和公开城市
+   点位（含纽约包外）检查通过，不代表用户图库 GPS 覆盖。公开地点生成及 `test_places`
+   步骤通过；25 项是代码／既有本地记录中的数量，不另作日志实测总数。
+- 模拟器／设备 App 资源检查、iPhoneOS arm64 Release 编译及 IPA 验证通过。
+   本次模型导出报告为 **23 cases、92 comparisons**；最小余弦
+   `0.9999999999960657`，最大分量误差 `0.000011444091796875`，配对矩阵最大误差
+   `1.8557397291063538e-7`。模型版本未变；详细证据见 [构建记录](docs/BUILD_STATUS.md)。
+
+### 已交付的 build 7 安装包与有限界面审核
+
+- [build/device-download/35840838147/LocalImageIQ-iphoneos-unsigned.ipa](build/device-download/35840838147/LocalImageIQ-iphoneos-unsigned.ipa)
+   **已实际完整下载**，有界内存流式长度／SHA-256 校验完成，下载后的本地报告已写入并检查。
+- [GitHub 产物 10741731376](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147/artifacts/10741731376)：
+   外层 **1,414,628,123 字节**，内层 IPA **1,414,620,805 字节**；IPA SHA-256：
+   `98fb537004a64adaa84b1ba15d798acaf71a0684555275faddc647d1adafd8d6`。
+   设备报告确认 **0.3.1 / build 7、iphoneos18.5 / arm64 Release、Xcode 16.4、最低
+   iOS 17.0、未签名**；仍须 Sideloadly 本机签名，不是已在物理 iPhone 执行。
+- 取回 **20 张**原生 UI 截图，仅审核 **3 张新增地点界面**：回填后的 Library、
+   零 GPS 的 Library、尚未检查地点的 Settings；[960×680 联系图](build/ui-review/35840838147/index-places-contact.jpg)
+   中可见内容可读。折叠项未展开，**不声称内部全部计数已做视觉检查**；
+   数字来自合成场景，不是用户 GPS 结果，其余 17 张不计入本次审核。
+
+### 本次变化与不变项
+
+- 索引只预取下一张的缓存记录／PhotoKit 预览，与父任务处理当前张重叠。
+   仍只有一份模型对、串行推理、单一路径按快照顺序保存和发布进度，不是多个推理 worker。
+   取消／错误退出会取消并等待预取子任务结束；PhotoKit 无取消确认接口，迟到回调由原有
+   gate 忽略，不声称系统内部请求已经停止。没有新增任意数量上限、期限或联网策略变化。
+- 图像和文本仍为同一 SigLIP 2 模型对，`modelVersion`、FP32、预处理及
+   `photokit-preview-v1` 均不变。**有效的 0.3.0 图像向量继续复用**，地点回填不需整库图像重编码。
+- 新增中国、法国、德国、荷兰 ADM1／ADM2 离线行政区包。**实际设备包检查**确认
+   **2,943 个要素、15,175,079 字节**，GeoJSON SHA-256：
+   `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`。
+   国家为 CHN／FRA／DEU／NLD，共 **8 个来源**；清单 SHA-256：
+   `0b060aab6515670f136beed831ec043fe8d9e9bdce25c23802e8e9b3bda61812`。
+   这不只是本地源码元数据；来源代表年份为 2017–2022，
+   不是现行地址、POI 或全球覆盖。来源与限制见 [索引与地点说明](docs/INDEX_PIPELINE_PLACES.md)。
+- Library 分开显示本次／上次扫描观察到的“有 GPS、找到标签、无 GPS、无可用包、
+   包外、地点不可用”和已保存标签数。未检查显示未知，不把地点标签为 0 当成无 GPS，
+   不把扫描计数当成永久全库 GPS 统计。坐标仅在本机内存中用于查行政区，不保存或上传。
+- 默认地点权重仍为 **0.6**，没有暗改。回填后有覆盖照片的地点分支开始实际参与评分，
+   排名变化是预期；不承诺真机提速幅度或私人图库 GPS／地点覆盖率。
+
+### 现在可覆盖安装 build 7，跑一次地点回填
+
+1. 使用原 Sideloadly 账号、原有效 Bundle ID **覆盖安装**；不卸载、不清索引。
+2. 打开 **Library → Index / resume** 跑一遍，保持 App 在前台、联网关闭；中断可续跑。
+    已有且仍有效的 0.3.0 图像向量不再取预览或重编码，只检查／回填地点；
+    新增或已变化照片按正常流程编码，不要求下载原图或“下载并保留原片”。
+3. 完成后正常使用，不另加诊断查询或截图任务。若仍是 0.2.x 的 CLIP 索引，
+    才需要下面历史说明中的 SigLIP 2 模型迁移；不要把它套用到有效的 0.3.0 索引。
+
+本次仅依据已核验结果更新文档，未重新运行命令、测试、下载或查询 CI。
+完整交付证据与仍未完成的真机／许可事项见 [构建记录](docs/BUILD_STATUS.md)。
+
+## 历史：0.3.0（build 6）SigLIP 2 — 自动验证通过，IPA 已下载校验
+
+以下结果、包身份和模型迁移步骤属于上一次 0.3.0，不是 0.3.1 的完成声明。
 
 用户已批准把**图像和文本编码器一起**替换为
 `google/siglip2-base-patch16-224`，两者固定同一 revision
@@ -11,7 +80,7 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 [CI 35824403795](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35824403795)
 ／job `107062896845` 已 **SUCCESS**；日志包含 `TEST SUCCEEDED` 和 `BUILD SUCCEEDED`。
 
-- 30 个 Python 静态测试通过；本轮核心 **79 通过**，App **178 项：177 通过、
+- 30 个 Python 静态测试通过；0.3.0 核心 **79 通过**，App **178 项：177 通过、
    1 项真机文件保护在模拟器跳过、0 失败**；全部 **7 个 UI 测试通过**。
 - 全部 **7 个 GeneratedModelParityTests 通过（72.985 秒）**。生产 App 编码 API
    测试实际完成并通过断言：**23 次预测（17 文本＋6 图像）、58 项测量**。
@@ -23,8 +92,8 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
    最大原始分量误差 `0.000011444091796875`，配对矩阵最大误差
    `1.8557397291063538e-7`。导出 JSON 的原生 `not-run` 产生于 XCTest 之前，
    不是失败；原生通过依据是随后执行的 XCTest。
-- [新版未签名 IPA](build/device-download/35824403795/LocalImageIQ-iphoneos-unsigned.ipa)
-   已通过有界内存流式下载完成长度／SHA-256 校验，不是待下载或旧版包。
+- [0.3.0 未签名 IPA](build/device-download/35824403795/LocalImageIQ-iphoneos-unsigned.ipa)
+   当时已通过有界内存流式下载完成长度／SHA-256 校验；不是当前 build 7 的包。
    包身份与校验值见 [构建记录](docs/BUILD_STATUS.md)。
 - 已取回 17 张原生 UI 截图，**只检查了首页／图库／设置／主结果布局 4 张**的
    [缩小联系图](build/ui-review/35824403795/siglip2-ui-contact.jpg)；都是合成／测试场景，
@@ -33,7 +102,7 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 当前 modelVersion：
 `siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`。
 
-### 安装已校验的新版 IPA 后，只做这些
+### 历史：0.2.x → 0.3.0 的安装与模型迁移
 
 1. 用**原 Sideloadly 账号、原有效 Bundle ID 覆盖安装**，不卸载、不手动清索引。
 2. **必须打开 Library → Index / resume**，用新模型建立一次向量索引；保持联网关闭。
@@ -87,10 +156,11 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
 新版实际状态与交付信息见 [构建记录](docs/BUILD_STATUS.md)。
 
 - 照片全部／有限授权、选择更多照片、前台增量索引与取消。
-- 0.3.0 的 Core ML 成对图像／多语言文本编码为 768 维，SQLite 本机缓存；
-   新版模型已通过上述转换、原生 XCTest 和打包验证，实际手机效果与性能尚未验收。
+- 0.3.1 沿用 0.3.0 的 Core ML 成对图像／多语言文本编码，768 维、SQLite 本机缓存；
+   0.3.1 自身的全部 7 个原生 parity 测试及模拟器／设备打包检查已通过。
 - 语义搜索、结果预览与分享；不上传照片或坐标。
-- 默认地点权重 0.6，支持 0...1；无离线地点包时明确显示无覆盖，不在线反查。
+- 默认地点权重 0.6，支持 0...1；0.3.1 构建要求四国离线行政区包，回填后地点分支
+   实际参与评分。无可用包、无 GPS、包外与不可用分开呈现，不在线反查。
 - iCloud 网络访问默认关闭，用户主动开启后才允许 PhotoKit 按需联网。
 - 0.1.1 索引改为**本地预览优先**，不再先请求原图；可接收低清预览。
    仅本地无可用图像且用户开启联网时，才请求缺失的图像表示。PhotoKit 控制实际
@@ -134,7 +204,7 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
 - [project.yml](project.yml)：XcodeGen 规范，iOS 17+，Swift 5 语言模式；App 分词依赖
    需要 Swift 6 工具链，当前使用 Xcode 16.4；app + 测试 target。
 - [project.models.yml](project.models.yml)：转换完成后的模型测试资源增量配置。
-- [App](App)：UI、PhotoKit、Core ML、SQLite、可选离线边界。
+- [App](App)：UI、PhotoKit、Core ML、SQLite、离线行政区查询及无可用包状态处理。
 - [Packages/ImageIQCore](Packages/ImageIQCore)：无第三方依赖的数学、检索、分词。
 - [Resources/Models/README.md](Resources/Models/README.md)：模型导出入口与生成资源。
 - [docs/IMPLEMENTATION_CONTRACT.md](docs/IMPLEMENTATION_CONTRACT.md)：固定模型配对与接口。
@@ -148,8 +218,9 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
 分词用同一 revision 原样复制的 tokenizer JSON 和配置 JSON，App 依赖固定
 `swift-transformers` 1.3.4 的 `Tokenizers`，只从本地资源加载。显式小写后最多保留
 63 个内容 token，追加 EOS 1、右补 PAD 0 到 64，不自动加 BOS；保留字面特殊 token。
-Unicode 小写（含 Final_Sigma）和全部 17 条文本的 token IDs／masks 已通过本轮
-精确原生对齐，不是沿用旧 WordPiece 结果。`ImageIQCore` 自身仍是 Foundation-only；
+Unicode 小写（含 Final_Sigma）和全部 17 条文本的 token IDs／masks 已在 0.3.0
+通过精确原生对齐，不是沿用旧 WordPiece 结果；0.3.1 的原生 parity 也全部通过。
+`ImageIQCore` 自身仍是 Foundation-only；
 App 的上述依赖是另一个边界。
 
 图像按 EXIF 转正、转 RGB，直接拉伸到 224×224，不保比例、不中心裁剪；参考为
@@ -162,23 +233,26 @@ Pillow BILINEAR，均值和标准差均为 `[0.5,0.5,0.5]`。Quartz 仅转换原
 证据并保留 `redistributionApproved:false`。许可证副本、转换通过和私人构建均不
 等于公开分发的法律认证，发布前仍需人工许可审查。
 
-目前不附带地理数据。可选 `Places.geojson` 为 WGS84 FeatureCollection，
-每个 Polygon/MultiPolygon 的 properties 必须含 `label`、`level`（如 ADM2）。
-来源、许可、覆盖范围需要另行验证；不自动从个人照片推导边界。
+0.3.1 的正常构建路径（含无模型构建）会生成并打包四国公开 WGS84 行政区数据及
+来源清单；不是从个人照片推导边界，也不是在线地图／地址服务。每个 Polygon／
+MultiPolygon 使用 `label`、`level` 等公开属性。固定来源、历史年份、许可记录和
+打包检查见 [地点资源说明](Resources/Places/README.md) 与
+[索引与地点说明](docs/INDEX_PIPELINE_PLACES.md)；本轮模拟器 App、设备 App 及 IPA
+资源检查已通过，实际设备包身份已记录于页首。
 
 ## 发布前仍需完成
 
-0.3.0 的 macOS 编译／测试、FP32 模型转换／原生 parity、iPhoneOS arm64 构建及
-IPA 下载校验均已完成。构建使用 Xcode 16.4 / Swift 6 工具链（App 为 Swift 5
-语言模式）、iphoneos18.5 SDK，最低 iOS 17.0；未签名包仍须用户本机签名安装。
-新版本的真机照片权限、iCloud、耗时／内存／发热尚未验收；模拟器结果不能代替。
-本轮安装后仅需建新索引并正常使用，不另加用户诊断任务。正式发布另需 App 图标、正式 Bundle ID、
-模型许可审查、签名和 TestFlight 配置。
+0.3.1 的自动测试、模拟器／设备资源检查、iPhoneOS arm64 构建和 IPA 完整下载校验
+均已完成，**用户安装后的物理 iPhone 验证尚未完成**。云端原生测试和真机 SDK 编译
+不能证明预取提速、实际 GPS 覆盖或内存／发热，真机文件保护仍需物理设备验证。
+已交付的未签名包仍须本机签名；有效 0.3.0 索引只需一次地点回填，
+不另加用户诊断任务。正式发布另需 App 图标、正式 Bundle ID、
+模型及地点数据再分发许可审查、签名和 TestFlight 配置。
 当前 `com.example.localimageiq` 仅为开发占位标识；未提交到任何商店。
 
 普通免费 Apple 账号可供个人开发测试使用，但描述文件通常 7 天过期；Windows
 第三方签名不是 TestFlight，也不等于永久安装或苹果官方 Windows 开发支持。
-模型替换不改变此限制或隐私边界：照片、坐标和向量仍在本机处理，不上传图库；
+本次更新不改变此限制或隐私边界：照片、坐标和向量仍在本机处理，不上传图库；
 Apple 密码、验证码及证书不交给聊天或 CI，PhotoKit 联网仍由用户显式控制。
 
 文件备份排除可在模拟器测试；iOS 文件数据保护属性必须在真机验证。对应测试在

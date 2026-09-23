@@ -1,6 +1,86 @@
 # Native generated-model parity — SigLIP 2 / schema 2
 
-## Current status: 0.3.0 (6) — native parity passed; IPA verified
+## Current status: 0.3.1 (7) — native parity passed; IPA verified
+
+Source HEAD `18ad52d37690ecfbf92b63a21285a6c3e8e753d4`;
+[CI 35840838147](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147)
+/ [job 107115240763](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147/job/107115240763).
+**SUCCESS on the first attempt, with no fix/retry needed**; logs contain
+`TEST SUCCEEDED` and `BUILD SUCCEEDED`. This documentation-only edit records the
+supplied verified results; it runs no commands, tests, downloads or CI queries.
+
+- Source/static checks **30 passed**; core **79 passed**. App **215 total:
+  214 passed, 1 physical-device file-protection skip on simulator, 0 failures**.
+- **All 7 GeneratedModelParityTests passed in 67.736 seconds**, with no parity
+  skip. All **7 UI tests passed in 202.143 seconds**. The parity tests are included
+  in the App total, not seven additional App tests.
+- IndexPipeline **15**, PlaceAvailability **17**, BundledPlaces **2**, and
+  IndexPlacesPresentation **3** tests all passed, also included in the App total.
+  Public-place generation and test_places passed; 25 tests is the code/prior-local
+  declared count, not a separately verified CI log total here.
+- [Model-report artifact 10741671604](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147/artifacts/10741671604)
+  records **23 cases, 92 comparisons**, minimum cosine `0.9999999999960657`,
+  maximum raw component difference `0.000011444091796875`, and maximum paired
+  matrix difference `1.8557397291063538e-7`. These are this run's export results,
+  not relabelled build 6 values. Native `not-run` exporter markers precede XCTest;
+  the later passing XCTest results establish native parity.
+- Simulator/device App resources and IPA validation passed; iPhoneOS arm64
+  Release build succeeded. Device report: **0.3.1 (7), iphoneos18.5, arm64 Release,
+  unsigned, Xcode 16.4, minimum iOS 17.0**. Artifact **10741731376** was completely
+  downloaded with bounded-memory streaming; local length/SHA-256 verified and
+  post-download report written/checked. Exact identity and local package link:
+  [BUILD_STATUS.md](BUILD_STATUS.md).
+- **20 native UI frames retrieved, only 3 new index/place frames reviewed** in the
+  [960×680 contact sheet](../build/ui-review/35840838147/index-places-contact.jpg):
+  Library after backfill, Library with zero GPS, and Settings with locations not
+  checked. Visible content is readable; disclosures remained collapsed, so not
+  every expanded internal counter was visually checked. Counts are synthetic,
+  not user GPS results; this is not a physical-iPhone test.
+
+This is not another model migration. Both image and text remain
+`google/siglip2-base-patch16-224` at revision
+`75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2`, with the same schema 2 / FP32 /
+768D contract, tokenizer, preprocessing, `photokit-preview-v1` and modelVersion:
+`siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`.
+Build 6's results below remain the historical numerical baseline. Build 7's own
+passing XCTest results above establish its native parity; unchanged model identity
+or successful conversion alone would not establish that result.
+
+Build 7 adds one-ahead cache/PhotoKit preparation overlapped with parent processing,
+not multiple inference workers: one model pair, serial inference and ordered
+commits, with the child cancelled/drained on exit and late PhotoKit callbacks
+ignored by the existing gate. No new arbitrary limits or network policy changes.
+Separate pipeline/place tests cover these contracts; generated-model parity alone
+does not establish cancellation, persistence or location classification.
+
+Actual **device-package** checks confirm the China/France/Germany/Netherlands pack:
+**2,943 features, 15,175,079 bytes, CHN/FRA/DEU/NLD, 8 sources**, GeoJSON SHA-256
+`41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`, and manifest
+SHA-256 `0b060aab6515670f136beed831ec043fe8d9e9bdce25c23802e8e9b3bda61812`.
+These are not merely local [manifest](../Resources/Places/places-manifest.json)
+metadata. Sources represent 2017–2022 administrative boundaries, not
+global/current-address coverage.
+[BundledPlacesTests.swift](../Tests/BundledPlacesTests.swift) checks the host app's
+bytes/hash/counts and four public city reference points plus uncovered New York;
+both tests passed in this run. That is not a private-library GPS measurement.
+
+Install the delivered IPA using the same Sideloadly identity/effective Bundle ID.
+Valid 0.3.0 image vectors are reused in one **Library → Index / resume**
+places-backfill pass; no uninstall, index clear or whole-image re-encoding.
+Only new/changed photos need normal image encoding. GPS observations are per scan,
+separate from saved labels, with no-GPS/no-pack/outside/unavailable distinguished.
+Weight **0.6** and centered scoring stay unchanged; added place inputs intentionally
+can change rankings. Keep the app foreground and network off. User-side installation
+and physical-phone behavior, file protection, performance and private-library
+coverage are not yet verified; no speedup or coverage is promised. Model/geography
+license review remains separate. Full scope and delivery evidence:
+[INDEX_PIPELINE_PLACES.md](INDEX_PIPELINE_PLACES.md) and
+[BUILD_STATUS.md](BUILD_STATUS.md).
+
+## Historical evidence: 0.3.0 (6) — native parity passed; IPA verified
+
+All execution counts, measured values, package and review results in this section
+belong to the previous build 6, not build 7.
 
 User-approved paired model replacement, source
 `f9a2c85e9307cf365a8c2f62ec57eaf6e01bad78`.
@@ -21,7 +101,7 @@ unsigned FP32 device build uses iphoneos18.5 / arm64 / minimum iOS 17.0.
 - Corrected-run FP32 export: **23 cases, 92 comparisons**; minimum cosine
   `0.9999999999960657`, maximum raw error `0.000011444091796875`, and maximum
   paired-matrix difference `1.8557397291063538e-7`.
-- New IPA download is **complete**, with bounded-memory streaming and local
+- The build 6 IPA download is **complete**, with bounded-memory streaming and local
   length/SHA-256 verification. Artifact 10734323054 and exact package identity
   are recorded in [BUILD_STATUS.md](BUILD_STATUS.md); this is not a device test.
 - 17 native UI screenshots were retrieved, but **only 4** (Home, Library,
@@ -49,7 +129,8 @@ full same-tensor controls and numerical thresholds were not weakened or bypassed
 Historical CLIP/WordPiece/raw-512 reports and prior successful builds are retained
 in [BUILD_STATUS.md](BUILD_STATUS.md). They are not proof for SigLIP 2. All
 acceptance requirements below describe the unchanged tests that passed in the
-corrected run. Physical-iPhone behavior/performance and license review remain pending.
+corrected build 6 run and again in build 7, whose XCTest evidence is recorded above.
+Physical-iPhone behavior/performance and license review remain separate boundaries.
 
 ## Authoritative model and tokenizer contract
 
@@ -94,7 +175,8 @@ surrogate reference embeddings, download weights, compile models at runtime,
 or touch personal photos.
 
 The native consumer and generated tests target this contract and passed in the
-corrected run above. Source presence alone would not establish execution. This
+historical corrected build 6 run and in the current build 7 run above. Source
+presence alone would not establish execution. This
 documentation edit performs no export, test run, installation or CI action;
 passing source checks or Python export alone is not a native parity result.
 
@@ -151,6 +233,11 @@ its skip cannot conceal missing resources in an enabled build.
 
 ## Tests and numerical acceptance
 
+The requirements below remain the unchanged test contract. Both build 6 and
+build 7 passed all seven tests; their run-specific timings and totals are separate
+above. Per-test prediction/measurement counts below are assertions in that contract,
+not extra suite tests or additional exporter comparisons.
+
 | Test | Input and acceptance |
 | --- | --- |
 | `testGeneratedGemmaIDsAndMasksMatchAllCases` | Actual bundled JSONs and native `SigLIPTokenizer`; all 64 IDs and mask entries match exactly for each of the 17 pinned cases. |
@@ -166,7 +253,7 @@ The production API test retains raw ImageIO pixels, including **68×120** and
 preview upscaling or PNG/JPEG round trip. ImageIO reads actual EXIF orientation;
 fixture metadata is a check, not a substitute for that observation.
 
-Executed and asserted counts for this one passing API test:
+Asserted counts for this API test, which passed in both build 6 and build 7:
 
 - 6 image + 17 text predictions = **23**.
 - 6 exact direct-CGImage/native-data tensor comparisons + 6 diagnostic native/HF
@@ -181,7 +268,9 @@ Separately, the exporter completed 23 cases × four stages = **92** comparisons:
 Every stage requires cosine > 0.999; the first two require maxAbs ≤ 1e-5, the
 saved Core ML comparisons ≤ 1e-3. The 17×6 paired cosine matrix has 102 entries
 and requires maxAbs ≤ 1e-4; independent Pillow/HF pixels require ≤ 1e-6.
-All export gates passed; measured minima/maxima from this run are recorded above.
+All export gates passed in build 6 and build 7. Their measured minima/maxima are
+recorded in the separate run sections above; build 7's own model-report artifact
+10741671604 supplies its values even though they match build 6 numerically.
 
 All criteria above are numerical validation assertions, not production search
 filters, query rejection policies, runtime ceilings, performance quotas, or
@@ -298,20 +387,38 @@ runner's result bundle to retain attachments, including successful runs.
 Exporter `nativeParity: "not-run"` markers are preserved as input provenance;
 this suite does not rewrite them to "passed". Only a subsequently executed
 native XCTest result can establish these gates, on the OS and requested compute
-configuration recorded in that run. Run 35824403795 supplied that passing native
-result; its pre-XCTest JSON markers are not failed or unexecuted XCTest results.
+configuration recorded in that run. Runs 35824403795 (build 6) and 35840838147
+(build 7) each supplied passing native results; their pre-XCTest JSON markers are
+not failed or unexecuted XCTest results.
 
 ## Migration, device use and unchanged boundaries
 
-The new semantic modelVersion requires fresh image AND place-text vectors.
+### Current: 0.3.0 → 0.3.1, reuse image vectors and backfill places
+
+The semantic modelVersion and image policy do not change. The new IPA has passed
+its gates and been completely downloaded/verified. Overwrite with the same
+Sideloadly account/effective Bundle ID and open **Library → Index / resume** once.
+Do not uninstall, clear storage or rebuild every image vector. Still-valid 0.3.0
+rows bypass pixel fetch and image inference while locations are checked; changed
+labels/geography or removed GPS can update/remove place embeddings, and compatible
+distinct-place text vectors can be reused. New/changed photos encode normally.
+Keep the app open and network off; interrupted indexing resumes through the same
+entry. No original-download prerequisite or additional diagnostic round is added.
+
+### Historical: 0.2.x CLIP → 0.3.0 SigLIP 2 model migration
+
+That semantic modelVersion change required fresh image AND place-text vectors.
 Legacy 512D cache decoding exists only for migration, not SigLIP 2 search or a
-fallback encoder. The new IPA is verified: overwrite with the same Sideloadly
+fallback encoder. The build 6 IPA was verified: overwrite with the same Sideloadly
 account/effective Bundle ID, then **must use Library → Index / resume once**.
 Before new vectors exist, old-model usable coverage is expected to be **0**
-because the model changed. Do not uninstall or manually clear the index.
+because that model changed. This does not apply to valid 0.3.0 rows in build 7.
+Do not uninstall or manually clear the index.
 Interrupted indexing reuses completed,
 still-valid new rows. Photo `id` primary-key replacement means retained old IPA
 files are not old-index backups; rollback cannot promise restored old vectors.
+
+### Shared boundaries
 
 `photokit-preview-v1` remains preview-first with reduced images accepted, network
 default off, and fallback only after explicit user opt-in. Original downloads
