@@ -18,7 +18,7 @@ extension PhotoEncoding {
     /// Compatibility for injected mocks; production encoders must supply independent actors.
     func makeIndexingImageEncoders() async throws -> [any PhotoImageEncoding] {
         try Task.checkCancellation()
-        return [self, self, self, self]
+        return [any PhotoImageEncoding](repeating: self, count: PhotoIndexWorker.indexingWorkerCount)
     }
 }
 
@@ -60,15 +60,15 @@ actor CoreMLEncoders: PhotoEncoding {
         try Task.checkCancellation()
         let models = try await load()
         try Task.checkCancellation()
-        // Reuse the primary model rather than creating a fifth image instance.
+        // Reuse the already-loaded primary image model for the first slot.
         // Only the returned worker array owns the additional actors. Their models
-        // load on first use, so cache-only indexing does not load three more models.
-        let encoders: [any PhotoImageEncoding] = [
-            models.image,
-            CoreMLImageEncoder(modelURL: models.imageURL, manifest: models.manifest),
-            CoreMLImageEncoder(modelURL: models.imageURL, manifest: models.manifest),
-            CoreMLImageEncoder(modelURL: models.imageURL, manifest: models.manifest)
-        ]
+        // load on first prediction; cache-only indexing loads no extra image models.
+        // Each additional slot is a distinct actor with its own MLModel, not another
+        // paired encoder: the owner still has just one text model and tokenizer.
+        var encoders: [any PhotoImageEncoding] = [models.image]
+        for _ in 1..<PhotoIndexWorker.indexingWorkerCount {
+            encoders.append(CoreMLImageEncoder(modelURL: models.imageURL, manifest: models.manifest))
+        }
         try Task.checkCancellation()
         return encoders
     }

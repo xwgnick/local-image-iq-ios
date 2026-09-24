@@ -70,7 +70,7 @@ final class PhotoIndexWorkerTests: XCTestCase {
         let dataCalls = await context.encoders.dataCalls
         XCTAssertEqual(previews.count, 120)
         XCTAssertEqual(dataCalls, 0)
-        // Four speculative slots may arrive at the encoder out of snapshot order.
+        // Concurrent speculative slots may arrive at the encoder out of snapshot order.
         // Keep exact source, pixel identity and orientation coverage, not a prefix assumption.
         let localPreviews = previews.filter { $0.source == .localPreview }
         let reducedPreviews = previews.filter { $0.source == .localReducedPreview }
@@ -219,7 +219,9 @@ final class PhotoIndexWorkerTests: XCTestCase {
         })
         try await seed(context, id: "original", model: "test-model")
         try await seed(context, id: "old-model", model: IndexImagePolicy.cacheVersion(modelVersion: "older-model"))
-        try await seed(context, id: "old-policy", model: "test-model|photokit-preview-v0")
+        // The actually shipped fast-first policy must be invalidated even with
+        // identical model weights, photo revision and embedding dimensions.
+        try await seed(context, id: "old-policy", model: "test-model|photokit-preview-v1")
         try await seed(context, id: "current", model: cacheVersion)
         let before = try await context.worker.refresh()
         XCTAssertEqual(before.authorizedCount, 4)
@@ -247,6 +249,15 @@ final class PhotoIndexWorkerTests: XCTestCase {
         XCTAssertTrue(afterSearch.hits.allSatisfy { $0.photo.modelVersion == cacheVersion })
         let manifest = try await context.encoders.prepare()
         XCTAssertEqual(manifest.modelVersion, "test-model", "Policy versioning must not mutate the model manifest.")
+        let requestCount = context.library.requests.count
+        let resumedProgress = WorkerProgressTrace()
+        let resumed = try await context.worker.index(networkAllowed: false) { await resumedProgress.append($0) }
+        let resumedFinal = try await resumedProgress.last()
+        XCTAssertEqual(resumed.indexedCount, 4)
+        XCTAssertEqual(resumedFinal.reused, 4)
+        XCTAssertEqual(resumedFinal.encoded, 0)
+        XCTAssertEqual(context.library.requests.count, requestCount, "Completed HQ-policy rows must resume without fetching images again.")
+        assertSources(resumedFinal)
     }
 
     func testLegacy512CacheIsIgnoredThenReplacedBy768OnModelVersionChange() async throws {

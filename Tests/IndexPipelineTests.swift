@@ -12,6 +12,11 @@ import ImageIQCore
 final class IndexPipelineTests: XCTestCase {
     private let version = IndexImagePolicy.cacheVersion(modelVersion: "test-model")
     private let resolver = OfflinePlaceResolver.unavailable("Synthetic boundaries")
+    private let workerCount = PhotoIndexWorker.indexingWorkerCount
+
+    private func photoIDs(count: Int) -> [String] {
+        (0..<count).map { String(format: "photo-%03d", $0) }
+    }
 
     private func context(_ rows: [PipelineRow], holdCall: Int? = nil,
                          imageFailure: AppFailure? = nil, textFailure: AppFailure? = nil,
@@ -35,7 +40,8 @@ final class IndexPipelineTests: XCTestCase {
         return PipelineContext(worker: worker, library: library, encoders: encoders, store: store,
                                directory: directory, events: events, gate: hold.release,
                                allGates: holds.values.map(\.release) + previewHolds.values.map(\.release),
-                               encoderStarted: hold.started, encoderFinished: hold.finished, progress: PipelineProgress())
+                               encoderStarted: hold.started, encoderCancelled: hold.cancelled,
+                               encoderFinished: hold.finished, progress: PipelineProgress())
     }
 
     private func seed(_ context: PipelineContext, _ id: String, label: String? = nil,
@@ -81,95 +87,125 @@ final class IndexPipelineTests: XCTestCase {
         catch { XCTAssertTrue(error is CancellationError, "\(error)", file: file, line: line) }
     }
 
-    private func assertDrained(_ context: PipelineContext, heldID: String = "b",
+    private func assertDrained(_ context: PipelineContext, heldID: String, holdingImage: Bool = false,
                                file: StaticString = #filePath, line: UInt = #line) throws {
         let events = context.events.values
-        let cancelled = try XCTUnwrap(events.firstIndex(of: "cancel:\(heldID)"), file: file, line: line)
-        let finished = try XCTUnwrap(events.firstIndex(of: "request-end:\(heldID)"), file: file, line: line)
+        let cancelled = try XCTUnwrap(events.firstIndex(of: "\(holdingImage ? "encode-cancel" : "cancel"):\(heldID)"),
+                                      file: file, line: line)
+        let finished = try XCTUnwrap(events.firstIndex(of: "\(holdingImage ? "encode-end" : "request-end"):\(heldID)"),
+                                     file: file, line: line)
         let returned = try XCTUnwrap(events.firstIndex(of: "worker-return"), file: file, line: line)
         XCTAssertLessThan(cancelled, finished, file: file, line: line)
         XCTAssertLessThan(finished, returned, file: file, line: line)
         XCTAssertEqual(context.events.activeRequests, 0, file: file, line: line)
+        XCTAssertEqual(context.events.activeEncodes, 0, file: file, line: line)
     }
 
-    func testFourOverlappingRequestsAndEncodesUseOrderedRollingWindowNotBatchBarrier() async throws {
-        let ids = ["a", "b", "c", "d", "e", "f", "g", "h"]
-        let previews = Dictionary(uniqueKeysWithValues: ids.prefix(4).map { ($0, PipelinePreviewHold()) })
-        let images = Dictionary(uniqueKeysWithValues: ids.prefix(4).map { ($0, PipelineEncodeHold()) })
+    func testTwentyOverlappingRequestsAndEncodesUseOrderedRollingWindowNotBatchBarrier() async throws {
+        XCTAssertEqual(workerCount, 20, "Pin the production concurrency independently of count-derived fixtures")
+        let ids = photoIDs(count: workerCount * 2)
+        let window = Array(ids.prefix(workerCount))
+        let previews = Dictionary(uniqueKeysWithValues: window.map { ($0, PipelinePreviewHold()) })
+        let images = Dictionary(uniqueKeysWithValues: window.map { ($0, PipelineEncodeHold()) })
         let context = try context(ids.map { PipelineRow($0) }, previewHolds: previews, imageHolds: images)
-        let fifthEncoded = expectation(description: "Fifth image encoded while second and third remain held")
-        context.events.watch("encode-end:e", with: fifthEncoded)
+        let successorEncoded = expectation(description: "First successor encoded while the rest of the window is uncommitted")
+        context.events.watch("encode-end:\(ids[workerCount])", with: successorEncoded)
         let task = start(context, committedIDs: ids)
-        await fulfillment(of: ids.prefix(4).map { previews[$0]!.started }, timeout: 3)
-        XCTAssertEqual(context.library.requests.sorted(), Array(ids.prefix(4)))
-        XCTAssertEqual(context.events.activeRequests, 4)
-        XCTAssertEqual(context.events.maximumRequests, 4)
+        await fulfillment(of: window.map { previews[$0]!.started }, timeout: 3)
+        XCTAssertEqual(context.library.requests.sorted(), window)
+        XCTAssertEqual(context.events.activeRequests, workerCount)
+        XCTAssertEqual(context.events.maximumRequests, workerCount)
         XCTAssertEqual(context.events.activeEncodes, 0)
-        for id in ids.prefix(4) { await previews[id]!.release.open() }
-        await fulfillment(of: ids.prefix(4).map { images[$0]!.started }, timeout: 3)
-        XCTAssertEqual(context.events.activeEncodes, 4)
-        XCTAssertEqual(context.events.maximumEncodes, 4)
+        for id in window { await previews[id]!.release.open() }
+        await fulfillment(of: window.map { images[$0]!.started }, timeout: 3)
+        XCTAssertEqual(context.events.activeEncodes, workerCount)
+        XCTAssertEqual(context.events.maximumEncodes, workerCount)
         XCTAssertEqual(context.events.activeRequests, 0)
         let initialRows = try await context.store.records(modelVersion: version)
         XCTAssertTrue(initialRows.isEmpty)
         XCTAssertTrue(context.library.placeLookups.isEmpty)
 
-        // A finished fourth child still owns a window position until ordered commit.
-        await images["d"]!.release.open()
-        await fulfillment(of: [images["d"]!.finished], timeout: 3)
-        XCTAssertFalse(context.events.values.contains("request:e"))
+        // A finished last child still owns a window position until ordered commit.
+        let last = window[workerCount - 1]
+        await images[last]!.release.open()
+        await fulfillment(of: [images[last]!.finished], timeout: 3)
+        XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
         let speculativeRows = try await context.store.records(modelVersion: version)
         XCTAssertTrue(speculativeRows.isEmpty)
-        await images["a"]!.release.open()
-        await fulfillment(of: [fifthEncoded], timeout: 3)
-        XCTAssertFalse(context.events.values.contains("encode-end:b"))
-        XCTAssertFalse(context.events.values.contains("encode-end:c"))
-        XCTAssertFalse(context.events.values.contains("request:f"))
+        await images[ids[0]]!.release.open()
+        await fulfillment(of: [successorEncoded], timeout: 3)
+        for id in window.dropFirst().dropLast() {
+            XCTAssertFalse(context.events.values.contains("encode-end:\(id)"))
+        }
+        XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount + 1])"))
         let prefix = try await context.store.records(modelVersion: version)
         let partial = await context.progress.last
-        XCTAssertEqual(prefix.map(\.photo.id), ["a"])
+        XCTAssertEqual(prefix.map(\.photo.id), [ids[0]])
         XCTAssertEqual(partial?.completed, 1)
         XCTAssertEqual(partial?.encoded, 1)
-        XCTAssertEqual(context.library.placeLookups, ["a"])
-        await images["c"]!.release.open()
-        await fulfillment(of: [images["c"]!.finished], timeout: 3)
-        XCTAssertFalse(context.events.values.contains("request:f"))
-        await images["b"]!.release.open()
+        XCTAssertEqual(context.library.placeLookups, [ids[0]])
+        // Finish every remaining tail in reverse order while the second head stays
+        // held. These completed results, including the successor, still fill the window.
+        for id in window.dropFirst(2).dropLast().reversed() {
+            await images[id]!.release.open()
+            await fulfillment(of: [images[id]!.finished], timeout: 3)
+            XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount + 1])"))
+        }
+        XCTAssertEqual(context.library.requests.count, workerCount + 1)
+        await images[ids[1]]!.release.open()
         let summary = try await task.value
-        XCTAssertEqual(summary.indexedCount, 8)
+        XCTAssertEqual(summary.indexedCount, ids.count)
         XCTAssertEqual(context.library.requests.sorted(), ids)
         XCTAssertTrue(context.library.networkFlags.allSatisfy { !$0 })
         XCTAssertEqual(context.library.placeLookups, ids)
-        XCTAssertEqual(context.events.maximumUnencoded, 4)
+        XCTAssertEqual(context.events.maximumUnencoded, workerCount)
+        XCTAssertEqual(context.events.maximumRequests, workerCount)
+        XCTAssertEqual(context.events.maximumEncodes, workerCount)
+        XCTAssertEqual(context.events.activeRequests, 0)
         XCTAssertEqual(context.events.activeEncodes, 0)
-        XCTAssertEqual(context.events.maximumEncodesPerSlot, [0: 1, 1: 1, 2: 1, 3: 1])
+        XCTAssertEqual(context.events.maximumEncodesPerSlot,
+                       Dictionary(uniqueKeysWithValues: (0..<workerCount).map { ($0, 1) }))
         let calls = await context.encoders.imageCalls
         let factoryCalls = await context.encoders.factoryCalls
         let workers = await context.encoders.workers
         XCTAssertEqual(calls.sorted(), ids)
         XCTAssertEqual(factoryCalls, 1)
-        XCTAssertEqual(workers.count, 4)
-        XCTAssertEqual(Set(workers.map { ObjectIdentifier($0) }).count, 4)
+        XCTAssertEqual(workers.count, 20)
+        XCTAssertEqual(Set(workers.map { ObjectIdentifier($0) }).count, workerCount)
         for (slot, encoder) in workers.enumerated() {
             let slotCalls = await encoder.calls
             let peak = await encoder.peakActive
-            XCTAssertEqual(slotCalls, [ids[slot], ids[slot + 4]])
+            XCTAssertEqual(slotCalls, [ids[slot], ids[slot + workerCount]])
             XCTAssertEqual(peak, 1, "One active image per slot, even across window rollover")
         }
         let events = context.events.values
-        for (index, id) in ids.enumerated() where index >= 4 {
+        for (index, id) in ids.enumerated() where index >= workerCount {
             let admission = try XCTUnwrap(events.firstIndex(of: "request:\(id)"))
-            let commit = try XCTUnwrap(events.firstIndex(of: "commit:\(index - 3)"))
-            XCTAssertLessThan(commit, admission, "Finished-but-uncommitted work must not admit a fifth item")
+            let commit = try XCTUnwrap(events.firstIndex(of: "commit:\(index - workerCount + 1)"))
+            XCTAssertLessThan(commit, admission, "Finished-but-uncommitted work must count toward the window bound")
         }
-        XCTAssertLessThan(try XCTUnwrap(events.firstIndex(of: "encode-end:d")),
-                          try XCTUnwrap(events.firstIndex(of: "encode-end:a")))
-        XCTAssertLessThan(try XCTUnwrap(events.firstIndex(of: "request:e")),
-                          try XCTUnwrap(events.firstIndex(of: "encode-end:b")))
-        XCTAssertLessThan(try XCTUnwrap(events.firstIndex(of: "request:e")),
-                          try XCTUnwrap(events.firstIndex(of: "encode-end:c")))
+        // Check the bound at every admission, not only simultaneous requests/encodes:
+        // finished but uncommitted embeddings occupy these same twenty positions.
+        var admitted = 0
+        var committed = 0
+        var maximumOutstanding = 0
+        for event in events {
+            if event.hasPrefix("commit:"), let count = Int(event.dropFirst("commit:".count)) { committed = count }
+            if event.hasPrefix("request:") {
+                admitted += 1
+                maximumOutstanding = max(maximumOutstanding, admitted - committed)
+                XCTAssertLessThanOrEqual(admitted - committed, workerCount)
+            }
+        }
+        XCTAssertEqual(maximumOutstanding, workerCount)
+        XCTAssertLessThan(try XCTUnwrap(events.firstIndex(of: "encode-end:\(last)")),
+                          try XCTUnwrap(events.firstIndex(of: "encode-end:\(ids[0])")))
+        for id in window.dropFirst().dropLast() {
+            XCTAssertLessThan(try XCTUnwrap(events.firstIndex(of: "request:\(ids[workerCount])")),
+                              try XCTUnwrap(events.firstIndex(of: "encode-end:\(id)")))
+        }
         let states = await context.progress.states
-        XCTAssertEqual(states.map(\.completed), Array(0...8))
+        XCTAssertEqual(states.map(\.completed), Array(0...ids.count))
         XCTAssertTrue(states.allSatisfy { $0.encoded == $0.completed && $0.localPreviews == $0.encoded })
     }
 
@@ -207,22 +243,32 @@ final class IndexPipelineTests: XCTestCase {
         XCTAssertEqual(texts, ["Photo taken in Shared."])
     }
 
-    func testCancellationCancelsAndAwaitsAllFourChildrenBeforeReturning() async throws {
-        let ids = ["b", "c", "d"]
-        let holds = Dictionary(uniqueKeysWithValues: ids.map { ($0, PipelinePreviewHold()) })
-        let context = try context([PipelineRow("a", place: .resolved("A"))] + ["b", "c", "d", "e"].map { PipelineRow($0) },
+    func testCancellationCancelsAndAwaitsAllTwentyChildrenBeforeReturning() async throws {
+        XCTAssertEqual(workerCount, 20)
+        let ids = photoIDs(count: workerCount + 1)
+        let window = Array(ids.prefix(workerCount))
+        let previewIDs = Array(window.dropFirst())
+        let holds = Dictionary(uniqueKeysWithValues: previewIDs.map { ($0, PipelinePreviewHold()) })
+        let context = try context([PipelineRow(ids[0], place: .resolved("A"))] + ids.dropFirst().map { PipelineRow($0) },
                                   holdCall: 1, previewHolds: holds)
         let task = start(context)
-        await fulfillment(of: [context.encoderStarted] + ids.map { holds[$0]!.started }, timeout: 3)
+        await fulfillment(of: [context.encoderStarted] + previewIDs.map { holds[$0]!.started }, timeout: 3)
+        XCTAssertEqual(context.library.requests.sorted(), window)
+        XCTAssertEqual(context.events.activeRequests, workerCount - 1)
+        XCTAssertEqual(context.events.activeEncodes, 1)
+        XCTAssertEqual(context.events.activeRequests + context.events.activeEncodes, 20)
+        XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
         task.cancel()
-        await fulfillment(of: ids.map { holds[$0]!.cancelled }, timeout: 3)
+        await fulfillment(of: [context.encoderCancelled] + previewIDs.map { holds[$0]!.cancelled }, timeout: 3)
         await context.gate.open() // Intentionally delivers late encoder success.
         await fulfillment(of: [context.encoderFinished], timeout: 3)
         XCTAssertFalse(context.events.values.contains("worker-return"))
-        for id in ids { await holds[id]!.release.open() }
+        XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
+        for id in previewIDs { await holds[id]!.release.open() }
         await expectCancellation(task)
-        for id in ids { try assertDrained(context, heldID: id) }
-        XCTAssertEqual(context.library.requests.sorted(), ["a", "b", "c", "d"])
+        try assertDrained(context, heldID: ids[0], holdingImage: true)
+        for id in previewIDs { try assertDrained(context, heldID: id) }
+        XCTAssertEqual(context.library.requests.sorted(), window, "Cancellation must never admit the 21st photo")
         XCTAssertTrue(context.library.placeLookups.isEmpty)
         let rows = try await context.store.records(modelVersion: version)
         let final = await context.progress.last
@@ -233,6 +279,10 @@ final class IndexPipelineTests: XCTestCase {
     }
 
     func testFatalImageTextModelAndStorageErrorsDrainWindowAndNeverSaveSpeculativeRows() async throws {
+        XCTAssertEqual(workerCount, 20)
+        let ids = photoIDs(count: workerCount + 1)
+        let window = Array(ids.prefix(workerCount))
+        let speculativeIDs = Array(window.dropFirst(2))
         // Real SQLite validation supplies the storage error, not a mock writer.
         let scenarios: [(AppFailure?, AppFailure?, Double)] = [
             (.modelContract("Synthetic contract"), nil, 100),
@@ -245,20 +295,32 @@ final class IndexPipelineTests: XCTestCase {
         ]
         for (imageFailure, textFailure, creationTime) in scenarios {
             let hold = PipelinePreviewHold()
-            let context = try context([
-                PipelineRow("a", place: .resolved("A"), creationTime: creationTime),
-                PipelineRow("b"), PipelineRow("c"), PipelineRow("d"), PipelineRow("e")
-            ], holdCall: 1, imageFailure: imageFailure, textFailure: textFailure, previewHolds: ["b": hold])
-            let speculative = ["c", "d"].map { id -> XCTestExpectation in
-                let ready = expectation(description: "Speculative \(id) finished successfully")
-                context.events.watch("encode-end:\(id)", with: ready)
-                return ready
-            }
+            let images = Dictionary(uniqueKeysWithValues: speculativeIDs.map { ($0, PipelineEncodeHold()) })
+            let context = try context(
+                [PipelineRow(ids[0], place: .resolved("A"), creationTime: creationTime)]
+                    + ids.dropFirst().map { PipelineRow($0) },
+                holdCall: 1, imageFailure: imageFailure, textFailure: textFailure,
+                previewHolds: [ids[1]: hold], imageHolds: images)
             let task = start(context)
-            await fulfillment(of: [context.encoderStarted, hold.started] + speculative, timeout: 3)
+            await fulfillment(of: [context.encoderStarted, hold.started] + speculativeIDs.map { images[$0]!.started }, timeout: 3)
+            XCTAssertEqual(context.library.requests.sorted(), window)
+            XCTAssertEqual(context.events.activeRequests, 1)
+            XCTAssertEqual(context.events.activeEncodes, workerCount - 1)
+            XCTAssertEqual(context.events.activeRequests + context.events.activeEncodes, 20)
+            XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
+            // Establish twenty active children first, then retain successful
+            // speculative results behind a held head and one held PhotoKit request.
+            for id in speculativeIDs { await images[id]!.release.open() }
+            await fulfillment(of: speculativeIDs.map { images[$0]!.finished }, timeout: 3)
+            XCTAssertEqual(context.events.activeEncodes, 1)
+            XCTAssertTrue(context.library.placeLookups.isEmpty)
+            XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
+            let speculativeRows = try await context.store.records(modelVersion: version)
+            XCTAssertTrue(speculativeRows.isEmpty)
             await context.gate.open()
-            await fulfillment(of: [hold.cancelled], timeout: 3)
+            await fulfillment(of: [context.encoderFinished, hold.cancelled], timeout: 3)
             XCTAssertFalse(context.events.values.contains("worker-return"))
+            XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
             await hold.release.open()
             do { _ = try await task.value; XCTFail("Expected fatal error") }
             catch {
@@ -267,9 +329,11 @@ final class IndexPipelineTests: XCTestCase {
                 } else if case AppFailure.storage = error { }
                 else { XCTFail("Expected SQLite metadata error, got \(error)") }
             }
-            try assertDrained(context)
-            XCTAssertEqual(context.library.requests.sorted(), ["a", "b", "c", "d"])
-            XCTAssertEqual(context.library.placeLookups, ["a"])
+            try assertDrained(context, heldID: ids[1])
+            XCTAssertEqual(context.library.requests.sorted(), window, "A fatal head must never admit the 21st photo")
+            let calls = await context.encoders.imageCalls
+            XCTAssertEqual(calls.sorted(), [ids[0]] + speculativeIDs)
+            XCTAssertEqual(context.library.placeLookups, [ids[0]])
             let final = await context.progress.last
             let rows = try await context.store.records(modelVersion: version)
             XCTAssertTrue(rows.isEmpty)
@@ -399,36 +463,60 @@ final class IndexPipelineTests: XCTestCase {
     }
 
     func testCancelThenResumeReusesCommittedPrefixAndRechecksItsPlace() async throws {
-        let ids = ["c", "d", "e"]
-        let holds = Dictionary(uniqueKeysWithValues: ids.map { ($0, PipelinePreviewHold()) })
-        let context = try context(["a", "b", "c", "d", "e"].map { PipelineRow($0) },
-                                  holdCall: 2, previewHolds: holds)
+        XCTAssertEqual(workerCount, 20)
+        let ids = photoIDs(count: workerCount + 2)
+        let initialWindow = Array(ids.prefix(workerCount))
+        let previewIDs = Array(ids.dropFirst(2).prefix(workerCount - 1))
+        let holds = Dictionary(uniqueKeysWithValues: previewIDs.map { ($0, PipelinePreviewHold()) })
+        let first = PipelineEncodeHold()
+        let context = try context(ids.map { PipelineRow($0) }, holdCall: 2,
+                                  previewHolds: holds, imageHolds: [ids[0]: first])
         let committed = expectation(description: "First row committed before cancellation")
         context.events.watch("commit:1", with: committed)
         let task = start(context)
-        await fulfillment(of: [context.encoderStarted, committed] + ids.map { holds[$0]!.started }, timeout: 3)
+        await fulfillment(of: [first.started, context.encoderStarted] + previewIDs.dropLast().map { holds[$0]!.started }, timeout: 3)
+        XCTAssertEqual(context.library.requests.sorted(), initialWindow)
+        XCTAssertEqual(context.events.activeEncodes, 2)
+        XCTAssertEqual(context.events.activeRequests, workerCount - 2)
+        XCTAssertEqual(context.events.activeRequests + context.events.activeEncodes, 20)
+        XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
+        await first.release.open()
+        // Only the newly admitted request's expectation is awaited here; the
+        // other nineteen start expectations were already consumed above.
+        await fulfillment(of: [first.finished, committed, holds[ids[workerCount]]!.started], timeout: 3)
+        XCTAssertEqual(context.library.requests.sorted(), Array(ids.prefix(workerCount + 1)))
+        XCTAssertEqual(context.events.activeEncodes, 1)
+        XCTAssertEqual(context.events.activeRequests, workerCount - 1)
+        XCTAssertEqual(context.events.activeRequests + context.events.activeEncodes, 20)
+        XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount + 1])"),
+                       "One committed prefix frees only one slot, not the entire window")
         task.cancel()
-        await fulfillment(of: ids.map { holds[$0]!.cancelled }, timeout: 3)
+        await fulfillment(of: [context.encoderCancelled] + previewIDs.map { holds[$0]!.cancelled }, timeout: 3)
         await context.gate.open()
-        for id in ids { await holds[id]!.release.open() }
+        await fulfillment(of: [context.encoderFinished], timeout: 3)
+        XCTAssertFalse(context.events.values.contains("worker-return"))
+        for id in previewIDs { await holds[id]!.release.open() }
         await expectCancellation(task)
-        for id in ids { try assertDrained(context, heldID: id) }
+        try assertDrained(context, heldID: ids[1], holdingImage: true)
+        for id in previewIDs { try assertDrained(context, heldID: id) }
+        XCTAssertEqual(context.library.requests.sorted(), Array(ids.prefix(workerCount + 1)))
+        XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount + 1])"))
         let prefix = try await context.store.records(modelVersion: version)
         let interrupted = await context.progress.last
-        XCTAssertEqual(prefix.map(\.photo.id), ["a"])
+        XCTAssertEqual(prefix.map(\.photo.id), [ids[0]])
         XCTAssertEqual(interrupted?.completed, 1)
         XCTAssertEqual(interrupted?.placeChecked, 1)
         let summary = try await context.worker.index(networkAllowed: false) { await context.progress.append($0) }
         let resumed = await context.progress.last
         let calls = await context.encoders.imageCalls
-        XCTAssertEqual(summary.indexedCount, 5)
+        XCTAssertEqual(summary.indexedCount, ids.count)
         XCTAssertEqual(resumed?.reused, 1)
-        XCTAssertEqual(resumed?.encoded, 4)
-        XCTAssertEqual(resumed?.placeChecked, 5)
-        XCTAssertEqual(resumed?.localPreviews, 4)
-        XCTAssertEqual(calls.filter { $0 == "a" }.count, 1)
-        XCTAssertEqual(context.library.requests.filter { $0 == "a" }.count, 1)
-        XCTAssertEqual(context.library.placeLookups.filter { $0 == "a" }.count, 2)
+        XCTAssertEqual(resumed?.encoded, ids.count - 1)
+        XCTAssertEqual(resumed?.placeChecked, ids.count)
+        XCTAssertEqual(resumed?.localPreviews, ids.count - 1)
+        XCTAssertEqual(calls.filter { $0 == ids[0] }.count, 1)
+        XCTAssertEqual(context.library.requests.filter { $0 == ids[0] }.count, 1)
+        XCTAssertEqual(context.library.placeLookups.filter { $0 == ids[0] }.count, 2)
     }
 
     func testPreparedRevisionIsValidatedBeforeSaveAndDoesNotCountAStalePreview() async throws {
@@ -510,22 +598,32 @@ final class IndexPipelineTests: XCTestCase {
     }
 
     func testAuthorizationLossStopsPlaceChecksAndDrainsAllFollowingRequests() async throws {
-        let ids = ["b", "c", "d"]
-        let holds = Dictionary(uniqueKeysWithValues: ids.map { ($0, PipelinePreviewHold()) })
-        let context = try context(["a", "b", "c", "d", "e"].map { PipelineRow($0) },
+        XCTAssertEqual(workerCount, 20)
+        let ids = photoIDs(count: workerCount + 1)
+        let window = Array(ids.prefix(workerCount))
+        let previewIDs = Array(window.dropFirst())
+        let holds = Dictionary(uniqueKeysWithValues: previewIDs.map { ($0, PipelinePreviewHold()) })
+        let context = try context(ids.map { PipelineRow($0) },
                                   holdCall: 1, previewHolds: holds)
         let task = start(context)
-        await fulfillment(of: [context.encoderStarted] + ids.map { holds[$0]!.started }, timeout: 3)
+        await fulfillment(of: [context.encoderStarted] + previewIDs.map { holds[$0]!.started }, timeout: 3)
+        XCTAssertEqual(context.library.requests.sorted(), window)
+        XCTAssertEqual(context.events.activeRequests, workerCount - 1)
+        XCTAssertEqual(context.events.activeEncodes, 1)
+        XCTAssertEqual(context.events.activeRequests + context.events.activeEncodes, 20)
+        XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
         context.library.setReadable(false)
         await context.gate.open()
-        await fulfillment(of: ids.map { holds[$0]!.cancelled }, timeout: 3)
-        for id in ids { await holds[id]!.release.open() }
+        await fulfillment(of: [context.encoderFinished] + previewIDs.map { holds[$0]!.cancelled }, timeout: 3)
+        XCTAssertFalse(context.events.values.contains("worker-return"))
+        XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
+        for id in previewIDs { await holds[id]!.release.open() }
         do { _ = try await task.value; XCTFail("Expected lost authorization") }
         catch AppFailure.permission { }
         catch { XCTFail("Unexpected error: \(error)") }
-        for id in ids { try assertDrained(context, heldID: id) }
+        for id in previewIDs { try assertDrained(context, heldID: id) }
         XCTAssertTrue(context.library.placeLookups.isEmpty, "No place/GPS read before a head result or after revocation")
-        XCTAssertEqual(context.library.requests.sorted(), ["a", "b", "c", "d"])
+        XCTAssertEqual(context.library.requests.sorted(), window, "Revocation must never admit the 21st photo")
         let final = await context.progress.last
         XCTAssertEqual(final?.completed, 0)
         XCTAssertEqual(final?.placeChecked, 0)
@@ -533,8 +631,9 @@ final class IndexPipelineTests: XCTestCase {
         XCTAssertTrue(rows.isEmpty)
     }
 
-    func testFourCachedSlotsBackfillGeographyWithoutImagesAndEncodeSharedPlaceOnce() async throws {
-        let ids = ["a", "b", "c", "d", "e", "f", "g", "h"]
+    func testTwentyCachedSlotsBackfillGeographyWithoutImagesAndEncodeSharedPlaceOnce() async throws {
+        XCTAssertEqual(workerCount, 20)
+        let ids = photoIDs(count: workerCount * 2)
         let context = try context(ids.map { PipelineRow($0, place: .resolved("Shared")) })
         for id in ids { try await seed(context, id, geography: "old-pack") }
         let summary = try await start(context).value
@@ -544,10 +643,12 @@ final class IndexPipelineTests: XCTestCase {
         let factoryCalls = await context.encoders.factoryCalls
         let workers = await context.encoders.workers
         XCTAssertEqual(factoryCalls, 1)
-        XCTAssertEqual(workers.count, 4)
-        XCTAssertEqual(Set(workers.map { ObjectIdentifier($0) }).count, 4)
+        XCTAssertEqual(workers.count, 20)
+        XCTAssertEqual(Set(workers.map { ObjectIdentifier($0) }).count, workerCount)
         XCTAssertTrue(calls.isEmpty)
         XCTAssertTrue(context.library.requests.isEmpty)
+        XCTAssertEqual(context.events.maximumRequests, 0)
+        XCTAssertEqual(context.events.maximumUnencoded, 0)
         XCTAssertEqual(context.events.maximumEncodes, 0, "Cache-only slots must not invoke image inference")
         for worker in workers {
             let slotCalls = await worker.calls
@@ -555,16 +656,16 @@ final class IndexPipelineTests: XCTestCase {
         }
         XCTAssertEqual(texts, ["Photo taken in Shared."])
         XCTAssertEqual(context.library.placeLookups, ids)
-        XCTAssertEqual(summary.indexedCount, 8)
-        XCTAssertEqual(summary.locatedCount, 8)
+        XCTAssertEqual(summary.indexedCount, ids.count)
+        XCTAssertEqual(summary.locatedCount, ids.count)
         XCTAssertEqual(summary.modelVersion, version)
         XCTAssertEqual(summary.placesDescription, resolver.coverageDescription)
-        XCTAssertEqual(final?.completed, 8)
-        XCTAssertEqual(final?.reused, 8)
+        XCTAssertEqual(final?.completed, ids.count)
+        XCTAssertEqual(final?.reused, ids.count)
         XCTAssertEqual(final?.encoded, 0)
-        XCTAssertEqual(final?.placeChecked, 8)
-        XCTAssertEqual(final?.placeUpdated, 8)
-        XCTAssertEqual(final?.gpsCount, 8)
+        XCTAssertEqual(final?.placeChecked, ids.count)
+        XCTAssertEqual(final?.placeUpdated, ids.count)
+        XCTAssertEqual(final?.gpsCount, ids.count)
         XCTAssertEqual(final?.failed, 0)
         XCTAssertEqual(final?.cloudSkipped, 0)
         XCTAssertEqual(final?.localPreviews, 0)
@@ -579,30 +680,35 @@ final class IndexPipelineTests: XCTestCase {
         }
     }
 
-    func testFourConcurrentImageResultsShareCentralTextCacheWithoutChangingModelOrPreviewPolicy() async throws {
-        let ids = ["a", "b", "c", "d"]
-        let holds = Dictionary(uniqueKeysWithValues: ids.map { ($0, PipelineEncodeHold()) })
-        let context = try context([
-            PipelineRow("a", place: .resolved("Shared")),
-            PipelineRow("b", place: .resolved("Shared"), source: .localReducedPreview),
-            PipelineRow("c", place: .resolved("Shared"), source: .networkPreview),
-            PipelineRow("d", place: .resolved("Shared")),
-            PipelineRow("e", place: .resolved("Shared"))
-        ], imageHolds: holds)
-        let legacyVersion = "old-model|photokit-preview-v1"
-        try await seed(context, "a", label: "Shared", model: legacyVersion)
-        try await seed(context, "e", geography: "old-pack")
+    func testTwentyConcurrentImageResultsShareCentralTextCacheWithActiveModelAndPreviewPolicy() async throws {
+        XCTAssertEqual(workerCount, 20)
+        let ids = photoIDs(count: workerCount + 1)
+        let window = Array(ids.prefix(workerCount))
+        let cachedID = ids[workerCount]
+        let holds = Dictionary(uniqueKeysWithValues: window.map { ($0, PipelineEncodeHold()) })
+        let rows = ids.enumerated().map { index, id -> PipelineRow in
+            let source: IndexingImage.Source = index == 1 ? .localReducedPreview : (index == 2 ? .networkPreview : .localPreview)
+            return PipelineRow(id, place: .resolved("Shared"), source: source)
+        }
+        let context = try context(rows, imageHolds: holds)
+        // An unchanged model with the old Fast-only policy must also be rebuilt.
+        let legacyVersion = "test-model|photokit-preview-v1"
+        try await seed(context, ids[0], label: "Shared", model: legacyVersion)
+        try await seed(context, cachedID, geography: "old-pack")
         let task = start(context, network: true)
-        await fulfillment(of: ids.map { holds[$0]!.started }, timeout: 3)
-        XCTAssertEqual(context.events.activeEncodes, 4)
-        for id in ["d", "c", "b"] {
+        await fulfillment(of: window.map { holds[$0]!.started }, timeout: 3)
+        XCTAssertEqual(context.events.activeEncodes, 20)
+        XCTAssertEqual(context.events.activeRequests, 0)
+        XCTAssertEqual(context.library.requests.sorted(), window)
+        for id in window.dropFirst().reversed() {
             await holds[id]!.release.open()
             await fulfillment(of: [holds[id]!.finished], timeout: 3)
         }
         let speculativeTexts = await context.encoders.texts
         XCTAssertTrue(speculativeTexts.isEmpty, "Children must not each encode the shared label")
         XCTAssertTrue(context.library.placeLookups.isEmpty)
-        await holds["a"]!.release.open()
+        XCTAssertEqual(context.events.activeEncodes, 1)
+        await holds[ids[0]]!.release.open()
         let summary = try await task.value
         let final = await context.progress.last
         let texts = await context.encoders.texts
@@ -610,29 +716,38 @@ final class IndexPipelineTests: XCTestCase {
         let factoryCalls = await context.encoders.factoryCalls
         let workers = await context.encoders.workers
         XCTAssertEqual(factoryCalls, 1)
-        XCTAssertEqual(workers.count, 4)
-        XCTAssertEqual(Set(workers.map { ObjectIdentifier($0) }).count, 4)
+        XCTAssertEqual(workers.count, 20)
+        XCTAssertEqual(Set(workers.map { ObjectIdentifier($0) }).count, workerCount)
+        XCTAssertEqual(context.events.maximumEncodes, 20)
+        XCTAssertEqual(context.events.activeEncodes, 0)
+        for (slot, worker) in workers.enumerated() {
+            let slotCalls = await worker.calls
+            let peak = await worker.peakActive
+            XCTAssertEqual(slotCalls, [window[slot]], "The current-policy cache hit must not invoke any image encoder")
+            XCTAssertEqual(peak, 1)
+        }
         XCTAssertEqual(texts, ["Photo taken in Shared."])
-        XCTAssertEqual(calls.sorted(), ids)
-        XCTAssertEqual(context.library.requests.sorted(), ids, "The old cached current-model image e must bypass PhotoKit")
+        XCTAssertEqual(calls.sorted(), window)
+        XCTAssertEqual(context.library.requests.sorted(), window, "The current-policy cached image must bypass PhotoKit")
         XCTAssertTrue(context.library.networkFlags.allSatisfy { $0 })
-        XCTAssertEqual(summary.modelVersion, "test-model|photokit-preview-v1")
-        XCTAssertEqual(summary.indexedCount, 5)
-        XCTAssertEqual(summary.locatedCount, 5)
-        XCTAssertEqual(final?.completed, 5)
-        XCTAssertEqual(final?.encoded, 4)
+        XCTAssertEqual(summary.modelVersion, "test-model|photokit-hq224-fast-fallback-v1")
+        XCTAssertEqual(summary.indexedCount, ids.count)
+        XCTAssertEqual(summary.locatedCount, ids.count)
+        XCTAssertEqual(final?.completed, ids.count)
+        XCTAssertEqual(final?.encoded, workerCount)
         XCTAssertEqual(final?.reused, 1)
-        XCTAssertEqual(final?.localPreviews, 2)
+        XCTAssertEqual(final?.localPreviews, workerCount - 2)
         XCTAssertEqual(final?.reducedPreviews, 1)
         XCTAssertEqual(final?.networkPreviews, 1)
-        XCTAssertEqual(final?.placeChecked, 5)
-        XCTAssertEqual(final?.placeUpdated, 4)
+        XCTAssertEqual(final?.placeChecked, ids.count)
+        XCTAssertEqual(final?.placeUpdated, workerCount)
         XCTAssertEqual(final?.failed, 0)
         XCTAssertEqual(final?.cloudSkipped, 0)
-        let rows = try await context.store.records(modelVersion: version)
-        XCTAssertEqual(rows.map(\.photo.id), ids + ["e"])
-        for row in rows {
-            XCTAssertEqual(row.photo.imageEmbedding, TestFixtures.vector(axis: row.photo.id == "e" ? 1 : 0))
+        let saved = try await context.store.records(modelVersion: version)
+        XCTAssertEqual(saved.map(\.photo.id), ids)
+        for row in saved {
+            XCTAssertEqual(row.photo.modelVersion, version)
+            XCTAssertEqual(row.photo.imageEmbedding, TestFixtures.vector(axis: row.photo.id == cachedID ? 1 : 0))
             XCTAssertEqual(row.photo.location?.vector, TestFixtures.vector(axis: 3))
             XCTAssertEqual(row.geographyVersion, resolver.version)
         }
@@ -642,32 +757,36 @@ final class IndexPipelineTests: XCTestCase {
         XCTAssertEqual(currentPlace, TestFixtures.vector(axis: 3))
     }
 
-    func testCancellationDrainsFourPhotoRequestsBeforeSerializedRefreshAndSearch() async throws {
+    func testCancellationDrainsTwentyPhotoRequestsBeforeSerializedRefreshAndSearch() async throws {
         try await assertSuccessorWaitsForCancelledWindow(holdingImages: false)
     }
 
-    func testCancellationDrainsFourImageEncodesBeforeSerializedRefreshAndSearch() async throws {
+    func testCancellationDrainsTwentyImageEncodesBeforeSerializedRefreshAndSearch() async throws {
         try await assertSuccessorWaitsForCancelledWindow(holdingImages: true)
     }
 
     private func assertSuccessorWaitsForCancelledWindow(holdingImages: Bool) async throws {
-        let ids = ["a", "b", "c", "d"]
-        let previews = holdingImages ? [:] : Dictionary(uniqueKeysWithValues: ids.map { ($0, PipelinePreviewHold()) })
-        let images = holdingImages ? Dictionary(uniqueKeysWithValues: ids.map { ($0, PipelineEncodeHold()) }) : [:]
-        let context = try context((ids + ["e"]).map { PipelineRow($0, place: .resolved("Shared")) },
+        XCTAssertEqual(workerCount, 20)
+        let ids = photoIDs(count: workerCount + 1)
+        let window = Array(ids.prefix(workerCount))
+        let previews = holdingImages ? [:] : Dictionary(uniqueKeysWithValues: window.map { ($0, PipelinePreviewHold()) })
+        let images = holdingImages ? Dictionary(uniqueKeysWithValues: window.map { ($0, PipelineEncodeHold()) }) : [:]
+        let context = try context(ids.map { PipelineRow($0, place: .resolved("Shared")) },
                                   previewHolds: previews, imageHolds: images)
-        let started = holdingImages ? ids.map { images[$0]!.started } : ids.map { previews[$0]!.started }
-        let cancelled = holdingImages ? ids.map { images[$0]!.cancelled } : ids.map { previews[$0]!.cancelled }
-        let ended = ids.map { id -> XCTestExpectation in
+        let started = holdingImages ? window.map { images[$0]!.started } : window.map { previews[$0]!.started }
+        let cancelled = holdingImages ? window.map { images[$0]!.cancelled } : window.map { previews[$0]!.cancelled }
+        let ended = window.map { id -> XCTestExpectation in
             let expectation = XCTestExpectation(description: "Old child \(id) returned from its noninterruptible gate")
             context.events.watch("\(holdingImages ? "encode-end" : "request-end"):\(id)", with: expectation)
             return expectation
         }
         let task = start(context)
         await fulfillment(of: started, timeout: 3)
-        XCTAssertEqual(context.library.requests.sorted(), ids)
+        XCTAssertEqual(context.library.requests.sorted(), window)
+        XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
         XCTAssertTrue(context.library.networkFlags.allSatisfy { !$0 })
-        XCTAssertEqual(holdingImages ? context.events.activeEncodes : context.events.activeRequests, 4)
+        XCTAssertEqual(holdingImages ? context.events.activeEncodes : context.events.activeRequests, 20)
+        XCTAssertEqual(holdingImages ? context.events.activeRequests : context.events.activeEncodes, 0)
         let waiting = expectation(description: "Successor is waiting for the old index operation")
         context.events.watch("successor-waiting", with: waiting)
         // Match AppState's documented predecessor-await contract WITHOUT creating
@@ -685,8 +804,10 @@ final class IndexPipelineTests: XCTestCase {
         await fulfillment(of: [waiting], timeout: 3)
         task.cancel()
         await fulfillment(of: cancelled, timeout: 3)
-        for (index, id) in ids.enumerated() {
+        for (index, id) in window.enumerated() {
             // Before EACH release, at least one old child is still unable to return.
+            XCTAssertEqual(holdingImages ? context.events.activeEncodes : context.events.activeRequests, workerCount - index)
+            XCTAssertFalse(context.events.values.contains("request:\(ids[workerCount])"))
             XCTAssertFalse(context.events.values.contains("worker-return"))
             XCTAssertFalse(context.events.values.contains("successor-refresh"))
             XCTAssertFalse(context.events.values.contains("successor-search"))
@@ -703,7 +824,7 @@ final class IndexPipelineTests: XCTestCase {
         XCTAssertEqual(refreshed.indexedCount, 0)
         XCTAssertTrue(searched.hits.isEmpty)
         XCTAssertEqual(searched.summary.indexedCount, 0)
-        XCTAssertEqual(context.library.requests.sorted(), ids, "Cancelled window must never admit e")
+        XCTAssertEqual(context.library.requests.sorted(), window, "Cancelled window must never admit the 21st photo")
         XCTAssertTrue(context.library.placeLookups.isEmpty)
         XCTAssertEqual(context.events.activeRequests, 0)
         XCTAssertEqual(context.events.activeEncodes, 0)
@@ -712,20 +833,23 @@ final class IndexPipelineTests: XCTestCase {
         let texts = await context.encoders.texts
         let factoryCalls = await context.encoders.factoryCalls
         XCTAssertTrue(rows.isEmpty)
-        XCTAssertEqual(states, [IndexProgress(total: 5)])
+        XCTAssertEqual(states, [IndexProgress(total: ids.count)])
         XCTAssertEqual(texts, ["synthetic query"])
         XCTAssertEqual(factoryCalls, 1, "Refresh and search must not create a new indexing pool")
+        let workers = await context.encoders.workers
+        XCTAssertEqual(workers.count, 20)
+        XCTAssertEqual(Set(workers.map { ObjectIdentifier($0) }).count, workerCount)
         let events = context.events.values
         let returned = try XCTUnwrap(events.firstIndex(of: "worker-return"))
         let refresh = try XCTUnwrap(events.firstIndex(of: "successor-refresh"))
         let search = try XCTUnwrap(events.firstIndex(of: "successor-search"))
         XCTAssertLessThan(returned, refresh)
         XCTAssertLessThan(refresh, search)
-        for id in ids {
+        for id in window {
             let cancel = try XCTUnwrap(events.firstIndex(of: "\(holdingImages ? "encode-cancel" : "cancel"):\(id)"))
             let end = try XCTUnwrap(events.firstIndex(of: "\(holdingImages ? "encode-end" : "request-end"):\(id)"))
             XCTAssertLessThan(cancel, end)
-            XCTAssertLessThan(end, returned, "All four children must drain before the parent returns")
+            XCTAssertLessThan(end, returned, "All twenty children must drain before the parent returns")
         }
     }
 
@@ -754,6 +878,7 @@ private struct PipelineContext: Sendable {
     let gate: PipelineLatch
     let allGates: [PipelineLatch]
     let encoderStarted: XCTestExpectation
+    let encoderCancelled: XCTestExpectation
     let encoderFinished: XCTestExpectation
     let progress: PipelineProgress
 }
@@ -1028,8 +1153,8 @@ private actor PipelineEncoders: PhotoEncoding {
 
     func makeIndexingImageEncoders() async throws -> [any PhotoImageEncoding] {
         factoryCalls += 1
-        // Deliberately do not use the protocol's [self, self, self, self] fallback.
-        let made = (0..<4).map { slot in
+        // Match the production pool size with distinct actors, not repeated self.
+        let made = (0..<PhotoIndexWorker.indexingWorkerCount).map { slot in
             PipelineImageEncoder(slot: slot, ids: ids, events: events, holds: holds,
                                  headFailure: imageFailure)
         }

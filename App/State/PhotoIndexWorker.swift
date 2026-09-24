@@ -63,7 +63,7 @@ extension PhotoWorkServicing {
 /// serialize whole async jobs: the caller waits for a cancelled predecessor before
 /// starting the next job, including time spent awaiting Photos/encoders/storage.
 actor PhotoIndexWorker: PhotoWorkServicing {
-    static let indexingWorkerCount = 4
+    static let indexingWorkerCount = 20
 
     private let library: any PhotoLibraryIndexing
     private let encoders: any PhotoEncoding
@@ -121,23 +121,23 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         guard library.canReadImages else { throw AppFailure.permission }
         let manifest = try await encoders.prepare()
         try Task.checkCancellation()
-        // The factory supplies exactly four image slots, scoped to this index
+        // The factory supplies exactly indexingWorkerCount image slots, scoped to this index
         // call, with extra image models loaded lazily only on cache misses.
         // Location encoding still uses the single parent-owned text encoder.
         let imageEncoders = try await encoders.makeIndexingImageEncoders()
         try Task.checkCancellation()
         guard imageEncoders.count == Self.indexingWorkerCount else {
-            throw AppFailure.modelContract("Indexing requires exactly four image encoder slots.")
+            throw AppFailure.modelContract("Indexing requires exactly \(Self.indexingWorkerCount) image encoder slots.")
         }
         let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
         let resolver = boundaries()
         let store = try storage()
         var state = IndexProgress(total: snapshot.count)
         await progress(state)
-        // Four children read/prepare/encode images; only the parent resolves
+        // Up to indexingWorkerCount children read/prepare/encode images; only the parent resolves
         // places, updates the text cache, saves and reports actual outcomes.
         // The sliding window includes finished-but-uncommitted items, so a slow
-        // head can stall submission. This is NOT a four-item batch barrier:
+        // head can stall submission. This is NOT a whole-window batch barrier:
         // each ordered commit immediately frees one slot for its successor.
         // Finished results retain embeddings/errors, never preview pixels.
         try await withThrowingTaskGroup(of: PreparedIndexItem.self) { group in
@@ -198,7 +198,7 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                         let snapshotIndex = nextSubmit
                         let revision = snapshot[snapshotIndex]
                         // A slot is reused only after its previous item's commit;
-                        // the four-item window prevents overlapping slot owners.
+                        // the count-bounded window prevents overlapping slot owners.
                         let imageEncoder = imageEncoders[snapshotIndex % Self.indexingWorkerCount]
                         guard group.addTaskUnlessCancelled(operation: {
                             try await Self.prepare(revision, snapshotIndex: snapshotIndex,

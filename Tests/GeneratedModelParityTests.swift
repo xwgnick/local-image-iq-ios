@@ -156,15 +156,20 @@ final class GeneratedModelParityTests: XCTestCase {
         // Exercise the production .all factory in every model-enabled build, not
         // the optional engine-comparison gate. No timing/hardware-overlap claim.
         try await withAsyncReport(computeUnits: "all") { report in
-            report.coverageNote = "Actual indexing factory, four retained image actors, six raw CGImage fixtures. All four slots predict each fixture concurrently; numerical coverage is not proof of physical GPU/ANE overlap or PhotoKit pixel identity."
-            report.expectedAppPredictions = ["image.indexingPreview": 24]
+            let workerCount = PhotoIndexWorker.indexingWorkerCount
+            try require(workerCount == 20, "Production indexing must use twenty image slots.")
+            report.coverageNote = "Actual indexing factory, \(workerCount) retained image actors, six raw CGImage fixtures. Every slot predicts every fixture concurrently (120 predictions, 240 normalized embedding gates plus 12 tensor comparisons). Numerical coverage is not proof of physical GPU/ANE overlap or PhotoKit pixel identity."
+            report.expectedAppPredictions = ["image.indexingPreview": workerCount * 6]
             let fixtures = try self.resources(report: &report)
             try require(fixtures.images.cases.count == 6,
                         "Indexing factory parity requires all six generated image cases.")
-            // One owner loads the text model once; do not create four paired encoders.
+            // One owner loads one text model/tokenizer, not twenty paired encoders.
             let owner: any PhotoEncoding = CoreMLEncoders(bundle: fixtures.bundle)
             let encoders = try await owner.makeIndexingImageEncoders()
-            try require(encoders.count == 4, "The production indexing factory must return four image encoders.")
+            try require(encoders.count == 20 && encoders.count == workerCount,
+                        "The production indexing factory must return twenty image encoders.")
+            try require(Set(encoders.map { ObjectIdentifier($0 as AnyObject) }).count == workerCount,
+                        "Every production image slot must retain a distinct actor.")
 
             for fixture in fixtures.images.cases {
                 try Task.checkCancellation()
@@ -182,10 +187,10 @@ final class GeneratedModelParityTests: XCTestCase {
                     return outputs
                 }
                 try Task.checkCancellation()
-                // The first completed group has opened all four real image models;
+                // The first completed group has opened all twenty real image models;
                 // reuse these same actors for the remaining five fixtures.
-                try require(outputs.count == 4 && Set(outputs.map { $0.0 }) == Set(0..<4),
-                            "\(fixture.id): expected exactly one output from each factory slot 0...3.")
+                try require(outputs.count == workerCount && Set(outputs.map { $0.0 }) == Set(encoders.indices),
+                            "\(fixture.id): expected exactly one output from each of the \(workerCount) factory slots.")
                 // Only the parent touches XCTest/helpers/report; children capture
                 // just their slot, Sendable encoder and immutable preview.
                 for (slot, projection) in outputs.sorted(by: { $0.0 < $1.0 }) {
@@ -196,8 +201,11 @@ final class GeneratedModelParityTests: XCTestCase {
                 }
             }
             try require(report.completedAppPredictions == report.expectedAppPredictions
-                        && report.previews.count == 6 && report.measurements.count == 60,
-                        "Incomplete indexing factory parity: expected 24 predictions and 60 comparisons (12 tensor comparisons, 48 normalized embedding gates).")
+                        && report.completedAppPredictions["image.indexingPreview"] == 120
+                        && report.previews.count == 6 && report.measurements.count == 252
+                        && report.measurements.filter { $0.stage.hasPrefix("image.appIndexingSlot") }.count == 240
+                        && report.measurements.filter { $0.stage.hasPrefix("image.previewVs") }.count == 12,
+                        "Incomplete indexing factory parity: expected 120 predictions and 252 comparisons (12 tensor comparisons, 240 normalized embedding gates).")
         }
     }
 

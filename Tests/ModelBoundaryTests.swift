@@ -252,10 +252,12 @@ final class ModelBoundaryTests: XCTestCase {
         }
     }
 
-    func testInjectedDefaultIndexingImageFactoryReturnsFourAndHonorsPreCancellation() async throws {
+    func testInjectedDefaultIndexingImageFactoryReturnsTwentyAndHonorsPreCancellation() async throws {
         let injected: any PhotoEncoding = DefaultFactoryEncoders()
         let encoders = try await injected.makeIndexingImageEncoders()
-        XCTAssertEqual(encoders.count, 4, "Injected encoders must retain the four-slot default factory.")
+        XCTAssertEqual(PhotoIndexWorker.indexingWorkerCount, 20)
+        XCTAssertEqual(encoders.count, 20, "Injected encoders must retain the twenty-slot default factory.")
+        XCTAssertEqual(encoders.count, PhotoIndexWorker.indexingWorkerCount)
 
         // Cancel inside a separate task before the call, without a scheduling race
         // or cancelling the XCTest task. The mock's model APIs all throw if called.

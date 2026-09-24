@@ -38,6 +38,7 @@ final class LocalPreviewComparisonTests: XCTestCase {
         XCTAssertEqual(report.entries.map(\.mode), [.fast224, .quality224, .quality480])
         let plans = script.plans
         XCTAssertEqual(plans.count, 3)
+        XCTAssertEqual(report.entries.count, 3)
         guard plans.count == 3, report.entries.count == 3 else { return }
         let sizes = [CGSize(width: CGFloat(224) * 4032 / 3024, height: 224),
                      CGSize(width: CGFloat(224) * 4032 / 3024, height: 224),
@@ -53,10 +54,13 @@ final class LocalPreviewComparisonTests: XCTestCase {
         XCTAssertEqual(script.pendingCount, 0)
     }
 
-    func testFast224OptionsMatchTheActualProductionLocalPreviewLoader() async throws {
+    func testQuality224OptionsMatchProductionFirstRequestWithoutChangingDiagnosticOrder() async throws {
         let image = try syntheticImage()
         let baseline = LocalComparisonScript(stages: [[.init(image: image)]])
         let target = PreviewImageLoader.targetSize(pixelWidth: 4032, pixelHeight: 3024)
+        let expected224 = CGSize(width: CGFloat(224) * 4032 / 3024, height: 224)
+        XCTAssertEqual(target, expected224)
+        XCTAssertEqual(IndexImagePolicy.version, "photokit-hq224-fast-fallback-v1")
         let baselineRun = begin(baseline) {
             try await PreviewImageLoader.load(targetSize: target, networkAllowed: false,
                 request: { baseline.request($0, $1, $2, $3) }, cancel: { baseline.cancel($0) })
@@ -64,10 +68,20 @@ final class LocalPreviewComparisonTests: XCTestCase {
         let baselineImage = try await finish(baselineRun)
         let comparison = LocalComparisonScript(stages: Array(repeating: [.init(image: image)], count: 3))
         let report = try await compare(comparison)
-        XCTAssertEqual(baseline.plans.count, 1)
-        let expected = try XCTUnwrap(baseline.plans.first)
-        let actual = try XCTUnwrap(comparison.plans.first)
-        assertPlan(expected, target: target, delivery: .fastFormat)
+        let baselinePlans = baseline.plans
+        let comparisonPlans = comparison.plans
+        XCTAssertEqual(baselinePlans.count, 1)
+        XCTAssertEqual(comparisonPlans.count, 3)
+        XCTAssertEqual(report.entries.count, 3)
+        XCTAssertEqual(report.entries.map(\.mode), [.fast224, .quality224, .quality480])
+        guard baselinePlans.count == 1, comparisonPlans.count == 3, report.entries.count == 3 else { return }
+        let expected = baselinePlans[0]
+        let actual = comparisonPlans[1]
+        // Explicit contracts prevent two equally incorrect loaders from passing.
+        assertPlan(expected, target: expected224, delivery: .highQualityFormat)
+        assertPlan(comparisonPlans[0], target: expected224, delivery: .fastFormat)
+        assertPlan(actual, target: expected224, delivery: .highQualityFormat)
+        assertPlan(comparisonPlans[2], target: CGSize(width: 640, height: 480), delivery: .highQualityFormat)
         XCTAssertEqual(actual.targetSize, expected.targetSize)
         XCTAssertEqual(actual.contentMode, expected.contentMode)
         XCTAssertEqual(actual.options.deliveryMode, expected.options.deliveryMode)
@@ -76,10 +90,16 @@ final class LocalPreviewComparisonTests: XCTestCase {
         XCTAssertEqual(actual.options.isNetworkAccessAllowed, expected.options.isNetworkAccessAllowed)
         XCTAssertEqual(actual.options.isSynchronous, expected.options.isSynchronous)
         XCTAssertFalse(actual.options === expected.options)
-        let preview = try XCTUnwrap(report.entries.first?.preview)
+        let preview = try XCTUnwrap(report.entries[1].preview)
         XCTAssertTrue(preview.cgImage === baselineImage.cgImage)
         XCTAssertEqual(preview.orientation, baselineImage.orientation)
         XCTAssertEqual(preview.source, baselineImage.source)
+        XCTAssertEqual(preview.source, .localReducedPreview)
+        XCTAssertEqual(preview.requestedSize, expected224)
+        XCTAssertEqual(baselineImage.requestedSize, expected224)
+        XCTAssertNil(report.entries[1].issue)
+        XCTAssertTrue(baseline.cancelledIDs.isEmpty)
+        XCTAssertTrue(comparison.cancelledIDs.isEmpty)
     }
 
     func testTargetSizeKeepsFloatingAspectRatioAndInvalidMetadataUsesFiniteFallback() {

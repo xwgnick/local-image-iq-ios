@@ -258,7 +258,7 @@ struct LibrarySheet: View {
         } header: {
             Text("iCloud")
         } footer: {
-            Text("Local previews come first, including reduced-quality previews; indexing does not request originals. When this is on, Photos may download image data for missing previews using Wi-Fi or mobile data, and controls the download size. No whole-library download is required. Off keeps photo requests offline.")
+            Text("Indexing tries a high-quality local preview at short edge 224 first, then a fast local preview if unavailable. Originals are not requested. Only when both are unavailable and this is on may Photos download image data using Wi-Fi or mobile data; Photos controls the download size. Off keeps both preview requests offline.")
         }
         .listRowBackground(IQStyle.surface)
     }
@@ -283,7 +283,11 @@ struct LibrarySheet: View {
                 if let error = state.errorMessage, error != modelProblem {
                     diagnostic("Last operation issue", error)
                 }
-                Text("4 image workers · reads and encodes photos concurrently")
+                Text("\(PhotoIndexWorker.indexingWorkerCount) image workers · reads and encodes photos concurrently")
+                    .font(.footnote)
+                    .foregroundStyle(IQStyle.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("High quality 224 first · fast local fallback · higher concurrency uses more memory and may cause iOS to close the app.")
                     .font(.footnote)
                     .foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)

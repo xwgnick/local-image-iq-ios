@@ -28,7 +28,7 @@ struct IndexingImage: @unchecked Sendable {
 }
 
 enum IndexImagePolicy {
-    static let version = "photokit-preview-v1"
+    static let version = "photokit-hq224-fast-fallback-v1"
 
     static func cacheVersion(modelVersion: String) -> String {
         modelVersion + "|" + version
@@ -113,47 +113,74 @@ enum PreviewImageLoader {
     static func load(targetSize: CGSize, networkAllowed: Bool,
                      request: @escaping Request,
                      cancel: @escaping @Sendable (PHImageRequestID) -> Void) async throws -> IndexingImage {
-        do {
-            return try await loadStage(targetSize: targetSize, network: false, request: request, cancel: cancel)
-        } catch {
+        var needsNetwork = false
+        // Both local stages use the same short-edge-224 target. Only an actual
+        // missing resource advances the sequence, never a generic/auth error.
+        let localModes: [PHImageRequestOptionsDeliveryMode] = [.highQualityFormat, .fastFormat]
+        for delivery in localModes {
             try Task.checkCancellation()
-            guard let missing = error as? LocalMissing else { throw error }
-            guard networkAllowed else {
-                switch missing {
-                case .requiresNetwork: throw AppFailure.cloudOnly
-                case .noResource: throw AppFailure.photo("PhotoKit returned no local preview.")
-                }
+            do {
+                let image = try await loadStage(targetSize: targetSize, delivery: delivery, network: false,
+                                                request: request, cancel: cancel)
+                try Task.checkCancellation()
+                return image
+            } catch {
+                try Task.checkCancellation()
+                guard let missing = error as? LocalMissing else { throw error }
+                if case .requiresNetwork = missing { needsNetwork = true }
             }
         }
-        // Exactly one optional retry, for a missing local resource only. No auth/error retry.
+        try Task.checkCancellation()
+        guard networkAllowed else {
+            if needsNetwork { throw AppFailure.cloudOnly }
+            throw AppFailure.photo("PhotoKit returned no local preview.")
+        }
+        // Only the existing explicit opt-in permits a network request, after
+        // BOTH local representations were missing. Real network errors stay raw.
         do {
-            return try await loadStage(targetSize: targetSize, network: true, request: request, cancel: cancel)
+            let image = try await loadStage(targetSize: targetSize, delivery: .highQualityFormat, network: true,
+                                            request: request, cancel: cancel)
+            try Task.checkCancellation()
+            return image
         } catch {
             try Task.checkCancellation()
             throw error
         }
     }
 
-    private static func loadStage(targetSize: CGSize, network: Bool,
+    private static func loadStage(targetSize: CGSize, delivery: PHImageRequestOptionsDeliveryMode, network: Bool,
                                   request: @escaping Request,
                                   cancel: @escaping @Sendable (PHImageRequestID) -> Void) async throws -> IndexingImage {
         try Task.checkCancellation()
         // Fresh options for each stage; never mutate options belonging to an active request.
         let options = PHImageRequestOptions()
         options.version = .current
-        options.deliveryMode = network ? .highQualityFormat : .fastFormat
+        options.deliveryMode = delivery
         options.resizeMode = .fast
         options.isSynchronous = false
         options.isNetworkAccessAllowed = network
         let gate = PhotoRequestGate<IndexingImage>(cancelRequest: cancel)
+        let firstCallback = CallbackClaim()
         let result: IndexingImage = try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 gate.install(continuation)
                 if Task.isCancelled { gate.cancel(); return }
                 let id = request(targetSize, .aspectFit, options) { image, info in
+                    // Claim before pixel conversion; even concurrent duplicates
+                    // must not replace the first callback while CI renders it.
+                    guard firstCallback.claim() else { return }
                     // Cancellation beats even usable pixels and cloud/error metadata.
                     if PhotoImageRequestInfo.isCancellation(info) {
                         gate.finish(.failure(CancellationError()))
+                        return
+                    }
+                    let error = info?[PHImageErrorKey] as? Error
+                    if let error, isPermissionFailure(error) {
+                        gate.finish(.failure(AppFailure.permission))
+                        return
+                    }
+                    if let error, isAuthenticationFailure(error) {
+                        gate.finish(.failure(error))
                         return
                     }
                     do {
@@ -163,13 +190,13 @@ enum PreviewImageLoader {
                                 || CGFloat(min(pixels.width, pixels.height)) < min(targetSize.width, targetSize.height)
                             let source: IndexingImage.Source = network ? .networkPreview
                                 : (reduced ? .localReducedPreview : .localPreview)
-                            // fastFormat has ONE callback, which may be degraded. Never wait
-                            // for a nonexistent better image, and never JPEG/PNG re-encode.
+                            // BOTH delivery modes accept one-shot low-resolution/degraded
+                            // pixels. Never wait for a better callback or JPEG/PNG re-encode.
                             gate.finish(.success(IndexingImage(cgImage: pixels,
                                                               orientation: orientation(image.imageOrientation),
                                                               source: source, requestedSize: targetSize,
                                                               photokitDegraded: degraded)))
-                        } else if let error = info?[PHImageErrorKey] as? Error {
+                        } else if let error {
                             if !network, PhotoImageRequestInfo.requiresNetwork(error) {
                                 throw LocalMissing.requiresNetwork
                             }
@@ -190,6 +217,33 @@ enum PreviewImageLoader {
         // A task cancellation racing a successful callback must not deliver an image.
         try Task.checkCancellation()
         return result
+    }
+
+    private static func isPermissionFailure(_ error: Error) -> Bool {
+        if let failure = error as? AppFailure, case .permission = failure { return true }
+        let nsError = error as NSError
+        return nsError.domain == PHPhotosErrorDomain
+            && (nsError.code == PHPhotosError.Code.accessUserDenied.rawValue
+                || nsError.code == PHPhotosError.Code.accessRestricted.rawValue)
+    }
+
+    private static func isAuthenticationFailure(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorUserAuthenticationRequired
+    }
+
+    /// PhotoRequestGate owns completion/cancellation; this only claims a callback.
+    private final class CallbackClaim: @unchecked Sendable {
+        private let lock = NSLock()
+        private var claimed = false
+
+        func claim() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !claimed else { return false }
+            claimed = true
+            return true
+        }
     }
 
     private static func cgImage(from image: UIImage) -> CGImage? {
