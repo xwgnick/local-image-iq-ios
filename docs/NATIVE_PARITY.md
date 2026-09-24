@@ -1,6 +1,118 @@
 # Native generated-model parity — SigLIP 2 / schema 2
 
-## Current status: 0.3.2 (8) — all eight native parity tests passed; IPA verified
+## Current: 0.3.4 (10) — all eight native parity tests passed; 20-slot gate and IPA verified
+
+源码 `3381fa6750f8efa76aa0895a72963c2d56a497f5` 的
+[CI 35991227461](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35991227461)
+／[job 107605532969](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35991227461/job/107605532969)
+已 **SUCCESS，首轮通过，无需修复重跑**；日志确认 `TEST SUCCEEDED` 和设备
+`BUILD SUCCEEDED`。本次 **8 个 GeneratedModelParityTests 全部通过（94.326 秒）**，
+包括真实 20 图像 actor 的生产工厂；build 10 IPA 完整下载及本地长度／SHA-256
+校验已完成。以下是本次实际结果，不借用 build 9／8 通过记录，也不代表真机性能。
+
+### 当前生产工厂：120 次预测／252 项测量已实际执行并通过
+
+`testIndexingImageFactoryAllSlotsConcurrentPreviewParity` 本次实际使用生产
+`makeIndexingImageEncoders()`、一个中央 owner 及 **20 个真实独立图像模型 actor**，
+不是仅用 mock 或把 20 个任务排进同一个图像 actor。复用 1 个常驻主图像 actor，
+另 19 个仅图像 actor 懒加载；生产索引在所有子任务结束后释放这些额外 actor 的
+作用域持有。中央只有 **1 个文本模型＋1 个 tokenizer**，不是 20 套图文模型。
+
+- 6 个真实生成资源夹具 × 20 个生产槽＝**120 次预测**；同一组 actor 跨夹具复用，
+  不逐图创建模型。每个夹具要求每槽恰有一个输出；夹具内部并发，六个夹具依次运行。
+- 120 个已归一化输出各与两份归一化原始参考比较＝**240 项向量比较**；保持
+  768 维、输出 norm error ≤ 1e-5、图像余弦 ≥ 0.995。不能再次归一化 App 输出
+  来掩盖其归一化错误，不放宽阈值。
+- 6 项 direct-CGImage／native-data 张量比较＋6 项 native／HF 诊断张量比较
+  ＝**12 项张量测量**，按夹具测一次，不是每槽各 12 项。合计 **252 项**。
+  诊断像素误差不是新增 bit-exact Pillow 门槛。
+- 保留 EXIF、原始 **68×120／112×199** 等夹具像素，直到生产预处理执行 224×224
+  缩放；不在测试侧先放大图。夹具是合成数据，不是私人图库或 PhotoKit 实测。
+- 原 `testAppEncodersModelSizedPreviewAndAllTextReferenceParity` 独立保留：
+  **23 次预测（6 图像＋17 文本）、46 项向量比较＋12 项张量测量＝58 项**，
+  原阈值不变。120／252 不替换、也不放宽原 23／58 门槛。
+
+以上计数与数值门槛**均已实际断言通过**。工厂测试每夹具等待 20 路完成
+是测试分组，不是生产批次调度；生产窗口把进行中与完成待顺序提交一起计入 **20**，
+每顺序提交一项才补位，慢队首可阻塞补位，不是每 20 张一批。父任务顺序处理地点、
+写库及保存后进度；取消／错误退出取消并等待所有子任务，迟到 PhotoKit 回调仍忽略。
+有效缓存命中不取图、不图像推理，纯缓存扫描不懒加载额外 19 份图像模型。
+
+19 份额外模型及并发张量是用户明确批准、将用 **iPhone 15** 测试的高内存实验，
+**可能被 iOS 终止**。不静默加限制或自动缩回 4，不保证引用释放后系统立即归还内存。
+独立 actor、`.all` 或模拟器测试都不能证明硬件同时执行 20 路、比四槽快 5 倍，
+也不保证整库索引或重开续跑一定完成；速度／内存／发热为 PENDING-DEVICE。
+
+### 当前输入策略、迁移与非数值回归
+
+模型仍是同一 SigLIP 2 配对、**768 维／FP32**、同一 `modelVersion`、tokenizer、
+预处理和 **2,943 要素地点包**；改变的是输入策略，由实际发布的
+`photokit-preview-v1` 切换为 **`photokit-hq224-fast-fallback-v1`**。
+先请求短边目标 224 的 `.highQualityFormat`、网络关闭；仅本地资源不可用才请求
+同目标 `.fastFormat`、网络仍关闭。保留 `.aspectFit`／`.current`／
+`resizeMode = .fast`，不调用原图 API。可用像素立即接受，含 reduced／degraded
+或单次回调；取消、权限／授权失败、无像素普通错误均不触发兜底。只有两路本地均无
+资源且用户已显式允许联网，才允许第三路高质量联网请求，默认仍关闭。
+
+下一次 Index / resume 自动重新编码旧策略行，不手动 Clear index。旧行在新行
+成功提交前不进入搜索或当前有效计数，迁移中覆盖可能减少甚至为 0，排名可能变化；
+不能承诺搜索不变。已提交且仍有效的新策略行可复用，Fast 兜底行也缓存、不自动
+提升质量。模型不变不等于旧输入策略仍兼容。
+
+地点文本缓存同样以完整的 `IndexImagePolicy.cacheVersion` 为键，旧策略地点文本向量
+不能跨此次迁移复用；新策略内相同地点文本仍共享缓存，只需编码一次。
+
+新策略与 20 actor 的依据是源码及测试，不声称设备报告含有输入策略字段。
+下列 App 子套件已计入总数，不重复相加；耗时不是手机性能测量。
+
+| 测试／交付项 | build 10 实际结果 |
+| --- | --- |
+| Swift 核心／App | 核心 79 通过；App 270 项：269 通过、1 项真机文件保护在模拟器跳过、0 失败；122.720 秒。 |
+| `IndexingImageRequestTests` | 38 项全部通过；0.694 秒。此前实际 26 项，不是 25 项；新增 12 项。 |
+| `IndexPipelineTests` | 19 项全部通过；1.124 秒；顺序窗口、缓存、取消／续跑与持久化由此独立验证，不由数值测试代证。 |
+| `LocalPreviewComparisonTests` | 18 项全部通过；0.074 秒；三路诊断保持原行为。 |
+| `LocalPreviewComparisonPresentationTests` | 19 项全部通过；1.340 秒。 |
+| `GeneratedModelParityTests` | 8 项全部通过；94.326 秒；20 槽 120／252 与原 23／58 门槛均通过且未放宽。 |
+| UI 测试 | 7 项全部通过；202.650 秒。 |
+| 设备包／完整 IPA 下载校验 | 设备构建及资源检查通过；完整下载、本地实际长度／SHA-256 校验完成，见下文。 |
+| iPhone 15／许可 | PENDING-DEVICE／PENDING-LICENSE-REVIEW；与数值验收分开。 |
+
+本次模型导出报告为 **`parityPassed:true`、23 cases**：最小余弦
+`0.9999999999960657`，最大原始分量误差 `0.000011444091796875`，
+`pairedCosineMaxAbs` 为 `1.8557397291063538e-7`。这些是**导出报告极值，非原生
+XCTest 或真机极值**；原生通过依据是本次实际执行的 XCTest。
+
+### 已验证设备包与有限截图审核
+
+- [../build/device-download/35991227461/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35991227461/LocalImageIQ-iphoneos-unsigned.ipa)
+  已实际完整有界流式下载，长度／SHA-256 验证后才最终重命名。本地 IPA
+  **1,414,733,291 字节**，SHA-256：
+  `0e1bc7ece93af94745e81e780d9ddf3fc78b9173c2e987a68710322be46bf7ff`。
+  设备报告和校验文件齐全，无部分下载残留，旧包保留；仍须 Sideloadly 本机签名。
+- 设备报告确认 **0.3.4 / 10、iphoneos18.5、arm64 Release、未签名、Xcode 16.4、
+  最低 iOS 17.0**，同一 FP32／768 维 SigLIP 2 配对，`modelVersion`：
+  `siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`。
+  同一 Places 包 **2,943 要素、15,175,079 字节、CHN／FRA／DEU／NLD、8 个来源**；
+  完整包哈希及产物身份见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+- 24 张 UI 截图已下载，**仅审核 3 张索引／地点界面**的 **990×742** 联系图
+  [../build/ui-review/35991227461/hq20-index-contact.jpg](../build/ui-review/35991227461/hq20-index-contact.jpg)：
+  Library 回填后／零 GPS、Settings 尚未检查地点的可见内容清楚。折叠项未展开，
+  屏外联网页脚／20 worker 标签及其余 21 张均未视觉审核；合成场景不是私人图库、
+  真实 PhotoKit 或硬件 20 路并发证明。
+
+三路诊断及正常图片显示未改动，不把取图策略改动描述为显示已经变清晰。已有匿名
+真机个例仅为 Fast **68×120**、高质量 224 **224×398**、高质量 480 不可用；
+不是全图库证据，也不是 build 10 真机通过证据。此处不嵌入／上传私人照片、文件名或截图。
+**build 10 IPA 已就绪，无需等待或重新下载**。用原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载／
+清库；Network OFF，Library → Index / resume 一次、保持前台，完成后再试搜索。
+若被终止，重开并从同一入口续跑已提交的有效前缀，不保证 20 槽一定完成；现在不
+追加诊断任务。完整状态见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+## Historical status: 0.3.2 (8) — all eight native parity tests passed; IPA verified
+
+以下保留旧版本的原始结果及当时步骤；“new／current”仅指当时。历史四槽 24／60
+通过记录不是当前二十槽 120／252 的验证结果。build 9 的既有通过证据保留于
+[BUILD_STATUS.md](BUILD_STATUS.md) 的历史 0.3.3 节，也不能替代 build 10 验证。
 
 Source `b40d2faaf11b2f499779881b4863325fa7dae659`;
 [CI 35848409845](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845)
@@ -316,7 +428,10 @@ The independent solid-color test always runs without model resources. An
 optional `.all` test checks resource availability before its engine opt-in skip;
 its skip cannot conceal missing resources in an enabled build.
 
-## Tests and numerical acceptance
+## Historical build 8 tests and numerical acceptance — retained baseline
+
+下面原样保留四槽版本的断言与执行结果。当前 build 10 工厂改为 20 槽，实际通过的
+120 次预测／252 项测量见页首；原数值阈值和 23／58 不变且已通过。
 
 The original seven tests and thresholds remain unchanged, with an eighth test
 added for the real four-image-encoder factory. Builds 6 and 7 passed the original
@@ -452,7 +567,10 @@ for diagnosis. The strict unchanged-tensor test is essential: it distinguishes
 conversion/runtime discrepancies from decoder/color/orientation/interpolation
 discrepancies. Synthetic patterns do not prove real-photo retrieval quality.
 
-## Runtime, memory, and result evidence
+## Historical build 8 runtime, memory, and result evidence
+
+本节四槽运行说明与已通过记录属于历史 build 8；当前 20 槽的模型所有权、夹具复用
+和待验证状态见页首。附件格式／数值证据边界仍适用，但历史通过不代表新版本通过。
 
 Tests call the production tokenizer, Int32 tensor builder, image preprocessing,
 and `CoreMLEncoders.normalizedProjection`. Direct model tests use `MLModel`
@@ -509,7 +627,20 @@ this is not a reuse of the older seven-test results.
 
 ## Migration, device use and unchanged boundaries
 
-### Current: 0.3.0 / 0.3.1 → 0.3.2, normally reuse image vectors
+### Current: 0.3.4 (10) — input-policy migration without manual clear
+
+build 10 首轮 CI、设备包身份及完整下载后的长度／SHA-256 校验已完成，IPA 现在就绪。
+用原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不手动 Clear index。
+保持 Network OFF、App 前台，打开 Library → Index / resume 跑一次。
+SigLIP 2 模型及地点包不变，但输入策略已从 `photokit-preview-v1` 改为
+`photokit-hq224-fast-fallback-v1`，旧策略图像行必须自动重编码；旧向量被搜索和
+当前有效计数排除，直到对应新行成功提交，迁移中不保证搜索覆盖／排名不变。
+已完成且仍有效的新策略行可续用，Fast 兜底行也缓存、不自动提升质量。
+完成后再试搜索；被终止后重开再点同一入口，已提交的有效前缀保留，未提交工作需
+重做。20 槽有用户已批准的内存风险，可能反复被终止，不能保证最终跑完。
+现在不追加诊断、截图或清库测速任务。
+
+### Historical: 0.3.0 / 0.3.1 → 0.3.2, normally reuse image vectors
 
 The semantic modelVersion and image policy do not change. Build 8's CI, IPA gates
 and complete local byte/hash-verified download are finished. Use that package to
@@ -545,12 +676,11 @@ files are not old-index backups; rollback cannot promise restored old vectors.
 
 ### Shared boundaries
 
-`photokit-preview-v1` remains preview-first with reduced images accepted, network
-default off, and fallback only after explicit user opt-in. Original downloads
-are not required. This is not a preview-quality fix or a promise that every
-cloud photo is available offline. After indexing, normal use is enough; beyond
-the user's optional cold speed comparison, no extra test queries, diagnostic
-screenshots or additional user testing round is requested.
+当前 `photokit-hq224-fast-fallback-v1` 仍接受可用低清像素：高质量 224 本地优先，
+无本地资源才 Fast 本地兜底；取消／权限／授权／无像素普通错误不兜底。两路本地
+均无资源且用户显式允许，才可高质量联网第三次请求，默认网络关闭。不要求下载
+原图，不保证每张云照片离线可用或质量提升，正常显示和三路诊断不变。历史可选
+冷启动测速不是当前操作要求；现在只等新包，不追加查询、诊断或截图任务。
 
 Synthetic numerical parity is not retrieval-quality evidence. The desktop
 comparison had language/query/resolution trade-offs, not universal improvement;

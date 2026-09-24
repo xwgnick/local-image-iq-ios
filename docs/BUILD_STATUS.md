@@ -1,6 +1,141 @@
 # Cloud build status — 2026-09-24
 
-## Current: 0.3.3 (9) — 首轮验证通过，IPA 已完整下载并校验
+## Current: 0.3.4 (10) — SUCCESS first attempt; IPA downloaded and verified
+
+源码 `3381fa6750f8efa76aa0895a72963c2d56a497f5` 已推送至个人仓库
+`xwgnick/local-image-iq-ios`（`personal`）。
+[Run 35991227461](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35991227461)
+／[job 107605532969](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35991227461/job/107605532969)
+已 **SUCCESS，首轮通过，无需修复重跑**；日志确认 `TEST SUCCEEDED` 和设备
+`BUILD SUCCEEDED`。源码检查、Swift 核心、公开地点包生成／校验、模型导出、
+原生／UI 测试及设备打包均通过；build 10 IPA 已实际完整下载并校验。
+本次仅记录提供的已核验证据，不重新运行命令、测试、CI 查询或下载。
+
+### 当前源码实现与未改变的边界
+
+- 索引先以短边目标 224 请求 `.highQualityFormat`，网络关闭；只有无可用本地
+  资源才退回同目标 `.fastFormat`，仍网络关闭。均为 `.aspectFit`、`.current`、
+  `resizeMode = .fast`，不调用原图 API；请求目标不是实际返回像素保证。
+- 任一请求返回可用像素即接受，包括降质图及仅一次回调；取消、权限／授权失败、
+  无像素的普通错误不触发兜底。只有两次本地请求均无可用资源，且用户已显式允许
+  联网，才允许第三次高质量联网请求。默认仍关闭联网，不要求下载原图。
+- 输入策略 `photokit-hq224-fast-fallback-v1` 替换实际已发布的
+  `photokit-preview-v1`。同一 SigLIP 2 图文配对、768 维／FP32、`modelVersion`、
+  tokenizer、模型预处理、2,943 要素四国地点包、评分和默认地点权重 0.6 不变。
+  本次设备报告已确认模型与地点包身份；新输入策略及 20 actor 由源码和测试验证，
+  不声称设备报告含有或验证了输入策略字段。
+- 下次 Index / resume 自动重编码旧策略行，无需手动 Clear index。旧策略向量在
+  新行成功提交前被搜索与当前有效计数排除；覆盖可能暂时下降至 0，不能承诺迁移
+  期间搜索或排名不变。已提交且仍有效的新策略行可复用／续跑；Fast 兜底行也缓存，
+  不会在后续续跑时自动提升输入质量。
+- 地点文本缓存同样以完整的 `IndexImagePolicy.cacheVersion` 为键；旧策略地点文本
+  向量不能跨此次迁移复用。新策略内相同地点文本仍共享缓存，只需编码一次。
+- **20 个实际独立图像模型 actor／槽位**：复用 1 个常驻主图像 actor，19 个额外
+  仅图像 actor 在索引作用域内懒加载，全部子任务结束后释放作用域持有；中央只有
+  **1 个文本模型＋1 个 tokenizer**。有效缓存命中不取图／图像推理，纯缓存扫描不
+  懒加载额外 19 份模型。释放引用不等于系统立即回收全部内存。
+- 固定 20 槽滚动窗口包括进行中和已完成待顺序提交的项目；慢队首可阻塞补位，
+  每顺序提交一项才补一个，不是批次 20。父任务按快照顺序处理地点、写库、发布
+  进度，先保存后计数；取消／错误退出取消并等待所有子任务结束，同步预测可能需
+  等返回，迟到 PhotoKit 回调由 gate 忽略，不表示系统已确认取消。
+- 用户明确批准 20 槽高内存实验，将在 **iPhone 15** 测试；额外模型和中间张量可能
+  使 iOS 终止 App。没有静默限制或自动缩回 4，也没有硬件同时执行 20 路、相对
+  四槽 **5 倍提速**或整库必定完成的证据／承诺。没有新增任意图库上限或超时。
+- 三路预览诊断及正常图片显示不变，不宣称 UI 图像现在更清晰。
+
+### 当前验证账本：build 10 实际执行结果
+
+以下 App 子套件已计入 270 项总数，不重复相加；耗时不是手机性能测量。
+
+| 项目 | build 10 已核验结果／边界 |
+| --- | --- |
+| CI／源码与资源检查 | 上述 run／job 首轮 SUCCESS；源码检查、公开地点包生成／校验、模型／App 资源检查及设备打包通过。 |
+| Swift 核心 | 79 通过。 |
+| App XCTest | 270 项：269 通过、1 项真机文件保护在模拟器跳过、0 失败；122.720 秒。 |
+| `IndexingImageRequestTests` | 38 项全部通过；0.694 秒。此前实际为 26 项，不是 25 项；新增 12 项。 |
+| `IndexPipelineTests` | 19 项全部通过；1.124 秒。20 槽顺序窗口、缓存、取消／续跑契约通过。 |
+| `LocalPreviewComparisonTests` | 18 项全部通过；0.074 秒。三路诊断行为保持不变。 |
+| `LocalPreviewComparisonPresentationTests` | 19 项全部通过；1.340 秒。假服务／生成像素，不是真实 PhotoKit。 |
+| `GeneratedModelParityTests` | 8 项全部通过；94.326 秒，包含真实 20 图像 actor 的生产工厂测试。 |
+| 真实生产工厂数值测试 | 6 夹具 × 20 槽＝120 次预测；240 项归一化向量比较＋12 项张量测量＝252 项，实际执行及计数／门槛断言通过。 |
+| 原生产编码 API 数值门槛 | 原 23 次预测／58 项测量通过，原阈值不变。 |
+| UI 测试 | 7 项全部通过；202.650 秒；TEST SUCCEEDED。 |
+| 模型导出 | parityPassed:true，23 cases；本次导出极值见下文，不是原生 XCTest 极值。 |
+| 设备构建／资源检查 | BUILD SUCCEEDED；实际报告确认 0.3.4 / 10 及下述模型／地点包身份。 |
+| 新 IPA／下载校验 | COMPLETE：有界流式完整下载，实际本地长度／SHA-256 校验通过后才最终重命名；报告和校验文件齐全，无部分下载残留。 |
+| iPhone 15 实测 | PENDING-DEVICE：安装、输入策略迁移、20 槽稳定性、搜索效果、耗时／内存／发热及文件保护均待验证。 |
+| 模型／地点再分发 | PENDING-LICENSE-REVIEW，人工审查仍未完成。 |
+
+真实工厂测试保留归一化 768 维输出、norm error ≤ 1e-5、图像余弦 ≥ 0.995 的
+原门槛且已通过；12 项张量测量按 6 个夹具各测两项，不是每槽重复 12 项。
+原 23／58 测试独立保留并通过，120／252 不替代它。
+
+非致命日志备注：CI 出现测试临时库的 SQLite “vnode unlinked while in use” 警告，
+路径位于测试临时目录；相关测试仍 PASS。静态审查提示夹具可能持有两个独立
+`SQLitePhotoStore` 连接：`context.store` 已关闭，但 worker store 仍有独立生命周期。
+这只是可能解释，未确认全部警告原因，也不是生产 drain 失败证据；本次不扩展修复范围。
+刻意输入 3 字节无效数据的 ImageIO 错误属于已通过的负例测试，不作为失败处理。
+
+| 模型导出指标 | build 10 报告值（非原生／真机极值） |
+| --- | --- |
+| 最小余弦 | 0.9999999999960657 |
+| 最大原始分量误差 | 0.000011444091796875 |
+| pairedCosineMaxAbs | 1.8557397291063538e-7 |
+
+### 实际设备包与完整下载
+
+- 设备报告确认 **0.3.4 / build 10、iphoneos18.5、arm64 Release、未签名、Xcode 16.4、
+  最低 iOS 17.0**。这是真机 SDK 构建，不是已在物理 iPhone 安装或运行。
+- 仍为同一 FP32／768 维 SigLIP 2 配对 `google/siglip2-base-patch16-224`，revision
+  `75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2`；`modelVersion`：
+  `siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`。
+- 同一设备报告确认 Places **2,943 要素、15,175,079 GeoJSON 字节、CHN／FRA／DEU／NLD、
+  8 个来源**。GeoJSON SHA-256：
+  `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`；清单 SHA-256：
+  `0b060aab6515670f136beed831ec043fe8d9e9bdce25c23802e8e9b3bda61812`。
+- [IPA 产物 10805190700](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35991227461/artifacts/10805190700)：
+  外层 **1,414,740,610 字节**；内层 IPA **1,414,733,291 字节**；IPA SHA-256：
+  `0e1bc7ece93af94745e81e780d9ddf3fc78b9173c2e987a68710322be46bf7ff`。
+- **完整下载已实际完成**：有界内存流式读取，实际长度／SHA-256 核验通过后才最终重命名为
+  [../build/device-download/35991227461/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35991227461/LocalImageIQ-iphoneos-unsigned.ipa)。
+  同目录的 [../build/device-download/35991227461/device-build.json](../build/device-download/35991227461/device-build.json)
+  与 [../build/device-download/35991227461/SHA256SUMS.txt](../build/device-download/35991227461/SHA256SUMS.txt)
+  均已存在；父进程已直接读取完成记录 JSON 并核对本地文件名，无部分下载残留，旧包保留。
+  **现在即可用于 Sideloadly 本机签名，无需等待新包或重新下载。**
+
+### 有限截图审核：仅 3 张索引／地点界面
+
+[UI 产物 10804911624](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35991227461/artifacts/10804911624)
+为 **2,714,944 字节**，24 张截图已下载；仅审核 **3 张**的 **990×742** 联系图
+[../build/ui-review/35991227461/hq20-index-contact.jpg](../build/ui-review/35991227461/hq20-index-contact.jpg)：
+Library 回填后、Library 零 GPS、Settings 尚未检查地点，可见内容清楚。
+折叠项未展开，内部计数未视觉审核；联网页脚及 20 worker 标签在屏外，**未视觉审核**；
+其余 **21 张未审核**。合成场景不是私人图库 GPS／真实 PhotoKit 或硬件 20 路并发证据。
+
+### 已有匿名真机观察：仅为改动动机
+
+一个真实手机个例中，Fast 本地返回 **68×120**，高质量 224 本地返回 **224×398**，
+高质量 480 不可用。仅记录匿名尺寸／可用性，不嵌入或上传私人照片、照片文件名或
+截图；不是全图库统计，不证明任意照片都可获得更好像素，也不证明检索或正常显示
+已经改善，更不是 build 10 的真机通过证据。
+
+### 用户下一步：用已校验的新包，一次正常迁移
+
+1. 使用上方已完整下载并校验的 build 10 IPA；不追加手机诊断或截图任务。
+2. 用原 Sideloadly 账号、原有效 Bundle ID 覆盖安装；不卸载、不 Clear index。
+3. Network OFF，Library → Index / resume 跑一次，保持前台。模型没换，但新输入
+  策略需要重编码旧策略行；无需下载原图。
+4. 完成后再试搜索。若被 iOS 终止，重新打开并点 Index / resume；已成功提交且
+  仍有效的前缀保留，未提交工作重做。不保证 20 槽配置一定能完成。
+
+操作见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)，机制见
+[INDEX_PIPELINE_PLACES.md](INDEX_PIPELINE_PLACES.md)，数值边界见
+[NATIVE_PARITY.md](NATIVE_PARITY.md)。
+
+## Historical: 0.3.3 (9) — 首轮验证通过，IPA 已完整下载并校验
+
+以下及更早版本保留原始结果和当时步骤；“本次／current”仅指各自历史版本。
+旧版“不跑索引”、截图诊断或可选清库测速均不是 build 10 当前操作要求。
 
 源码 `9e055b13be62ca184593387b1b5dc647b3a85a26` 的
 [Run 35965638523](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35965638523)

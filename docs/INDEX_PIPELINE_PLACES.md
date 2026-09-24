@@ -1,6 +1,130 @@
-# 0.3.2 (8) · Four-worker indexing and unchanged offline places
+# Indexing input policy, rolling pipeline and offline places
 
-## Current status — build 8 passed first attempt; IPA downloaded and verified
+## Current: 0.3.4 (10) — HQ 224 local-first, 20 image actors; tests passed, IPA verified
+
+源码 `3381fa6750f8efa76aa0895a72963c2d56a497f5` 的
+[CI 35991227461](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35991227461)
+／[job 107605532969](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35991227461/job/107605532969)
+已 **SUCCESS，首轮通过，无需修复重跑**，日志确认 `TEST SUCCEEDED` 和设备
+`BUILD SUCCEEDED`。本次原生／UI 测试、设备包检查及 IPA 完整下载校验均已通过；
+新输入策略与 20 actor 由源码和测试验证，不声称设备报告含有输入策略字段。
+
+### 当前取图顺序：先高质量本地，资源缺失才兜底
+
+1. 短边目标 **224**，`.highQualityFormat`，网络关闭。
+2. 仅当第一路无可用本地资源，才请求同目标的 `.fastFormat`，仍网络关闭。
+3. 仅当两路本地请求均无可用资源，且用户已显式打开联网，才允许第三次
+	 `.highQualityFormat` 联网请求。联网默认 **OFF**；不是任一失败都改联网。
+
+这些索引请求保留 `.aspectFit`、`.current`、`resizeMode = .fast`，不调用原图
+API，也不要求下载原图。任一路返回可用像素即接受，包括 reduced／degraded 图和
+只有一次回调的情况；不会为了等未保证会来的高清回调而丢弃已有图。
+**取消、权限／授权失败、无像素的普通错误不触发 Fast 或联网兜底**；资源不可用与
+普通错误不是同一种结果。迟到回调仍由现有 gate 忽略。
+
+224 是请求目标而非实际像素保证；PhotoKit 的保比例请求与模型预处理是两层：模型
+仍按原 EXIF／RGB／Pillow 兼容缩放规则产生 224×224 张量，没有换模型预处理。
+三路预览诊断和正常图片显示均不变，不宣称 UI 清晰度已经改善。
+已有匿名真机个例只观察到 Fast **68×120**、高质量 224 **224×398**、高质量 480
+不可用；不是全图库或检索质量结论。此处不嵌入／上传私人照片、文件名或截图。
+
+### 当前缓存身份与输入策略迁移
+
+- 新策略 **`photokit-hq224-fast-fallback-v1`** 替换实际已发布的
+	**`photokit-preview-v1`**。图文仍是同一 SigLIP 2 配对、768 维／FP32；模型版本、
+	tokenizer 和预处理未变。输入策略变更本身足以使旧策略图像行不再兼容。
+- 下次 **Library → Index / resume** 自动重新编码旧策略行，**不需要手动
+	Clear index**。旧行在新行成功提交前被搜索和当前有效计数过滤；迁移开始时可能
+	没有当前可搜索行，随后随提交逐步恢复。不能承诺迁移期间搜索覆盖／排名不变。
+- 已成功提交且仍有效的新策略行直接复用，跳过取图和图像推理。中断后继续同一
+	入口，已提交的有效前缀保留，未提交工作需重做，不要求从零重来。
+- **Fast 兜底行也是有效的新策略缓存**；不会在下一轮续跑时自动改取高质量图、
+	重新编码以“提质”。新策略不等于每一行都来自高质量输入。
+- 仍检查／按需回填地点。地点文本缓存同样以完整的 `IndexImagePolicy.cacheVersion`
+	为键，包含输入策略身份，因此**旧策略地点文本向量不能跨此次迁移复用**，即使
+	模型和地点包未变。新策略内相同地点文本仍共享缓存，只需编码一次；“兼容缓存”
+	仅指完整缓存版本匹配的有效记录。旧策略图像也不能直接复用或混入当前搜索。
+
+### 当前生产并发：20 个独立图像 actor，不是 20 个排队任务共享一个模型
+
+生产工厂提供 **20 个独立图像 `MLModel` actor**。槽 0 复用常驻主图像 actor，
+另 **19 个仅图像 actor** 属于本次索引作用域，首次使用才懒加载；全部子任务结束、
+索引调用退出后释放作用域持有。中央仍仅 **1 个文本模型＋1 个 tokenizer**，
+统一地点文本去重／缓存；不是 20 套图文模型。纯有效缓存扫描不加载额外 19 份模型。
+
+每个子任务负责读缓存、按需取 PhotoKit 图、预处理和自己槽位的图像推理。
+**正在处理＋已完成但尚未顺序提交，总计最多 20 项**。完成但等待前序提交仍占槽；
+慢队首可阻挡补位，不能提前接入第 21 个未提交项。每顺序提交一项就补一个槽，
+不等整组结束，**不是 batch 20**。完成结果保留向量／结果而非预览像素，图库快照
+和缓存仍有各自内存开销，并不声称 App 总内存恒定。
+
+父任务继续按图库快照顺序做地点处理、文本缓存、数据库写入和进度发布；保存成功
+才计入完成。取消／错误退出会取消并等待全部最多 20 个子任务，之后才进入下一个
+串行工作。同步 Core ML 预测可能需等返回；gate 忽略迟到 PhotoKit 回调，不声称
+系统请求有取消确认。进程被 iOS 强制终止不同于正常取消；只保留已经成功提交的记录。
+
+### 已批准的内存实验，不隐藏退回四槽
+
+用户明确批准 20 槽，将在 **iPhone 15** 测试。19 份额外图像模型和并发中间张量是
+刻意接受的内存代价，**iOS 可能因此终止 App**。不会静默加上 4 槽限制或自动缩回
+4；没有新增任意图库数量／字节上限、超时或自动重试。释放作用域引用不保证系统
+立即归还内存。独立 actor 不证明 GPU／ANE 同时执行 20 路，不承诺较四槽 **5 倍
+提速**、真机耗时或整个图库一定完成，重开续跑也不是一定完成的保证。
+
+### 地点与模型身份及当前实际测试结果
+
+同一 `google/siglip2-base-patch16-224` 配对，revision
+`75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2`；`modelVersion` 仍为
+`siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`。
+build 10 设备报告已确认同一模型和四国 CHN／FRA／DEU／NLD 地点包身份：
+**2,943 要素、15,175,079 GeoJSON 字节、8 个来源**。GeoJSON SHA-256：
+`41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`；清单 SHA-256：
+`0b060aab6515670f136beed831ec043fe8d9e9bdce25c23802e8e9b3bda61812`。
+来源、年份、评分公式和默认地点权重 **0.6** 不变；仍不保存／上传原始坐标、不在线反查。
+
+下列 App 子套件已计入总数，不重复相加；测试耗时不是手机性能。
+
+| 当前检查 | build 10 实际结果 |
+| --- | --- |
+| Swift 核心／App | 核心 79 通过；App 270 项：269 通过、1 项真机文件保护在模拟器跳过、0 失败；122.720 秒。 |
+| `IndexingImageRequestTests` | 38 项全部通过；0.694 秒。此前 26 项（不是 25），新增 12 项。 |
+| `IndexPipelineTests` | 19 项全部通过；1.124 秒。20 槽顺序窗口、缓存、取消／续跑契约通过。 |
+| `LocalPreviewComparisonTests` | 18 项全部通过；0.074 秒，三路诊断保持不变。 |
+| `LocalPreviewComparisonPresentationTests` | 19 项全部通过；1.340 秒。 |
+| `GeneratedModelParityTests` | 8 项全部通过；94.326 秒。 |
+| 真实 20 槽生产工厂 parity | 实际完成并断言通过：6 夹具 × 20 槽＝120 次预测；240 项归一化向量比较＋12 项张量测量＝252 项。 |
+| 原生产 API parity | 23 次预测／58 项测量通过，原数值门槛不变。 |
+| UI | 7 项全部通过；202.650 秒。 |
+| 模型导出／设备包 | parityPassed:true、23 cases；导出极值见构建记录，非原生极值。设备构建及资源检查通过。 |
+| IPA／真机 | 新 IPA 完整下载及本地长度／SHA-256 校验已完成；iPhone 15 仍为 PENDING-DEVICE。 |
+
+### 已校验交付与有限截图审核
+
+- [../build/device-download/35991227461/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35991227461/LocalImageIQ-iphoneos-unsigned.ipa)
+	已实际完成有界流式下载，实际长度／SHA-256 验证后才最终重命名；报告及校验文件
+	齐全，无部分下载残留，旧包保留。内层 IPA **1,414,733,291 字节**，SHA-256：
+	`0e1bc7ece93af94745e81e780d9ddf3fc78b9173c2e987a68710322be46bf7ff`。
+	设备报告确认 **0.3.4 / 10、iphoneos18.5、arm64 Release、未签名、Xcode 16.4、最低 iOS 17.0**。
+- 24 张 UI 截图已下载，**仅审核 3 张索引／地点界面**的 **990×742** 联系图
+	[../build/ui-review/35991227461/hq20-index-contact.jpg](../build/ui-review/35991227461/hq20-index-contact.jpg)：
+	Library 回填后／零 GPS、Settings 尚未检查地点的可见内容清楚。折叠项未展开，
+	屏外联网页脚／20 worker 标签及其余 21 张均未视觉审核。合成场景不是私人图库
+	GPS、真实 PhotoKit 或硬件 20 路并发证据。
+
+### 当前用户步骤
+
+**build 10 IPA 已就绪，无需等待或重新下载**；不追加诊断或截图。使用原
+Sideloadly 账号／原有效 Bundle ID 覆盖安装，**不卸载、不清库**；Network OFF，
+**Library → Index / resume** 跑一次、保持前台。模型没换但输入策略要重编码；
+完成后再试搜索。若被终止，重开后点同一入口，复用已提交且仍有效的前缀，不保证
+20 槽能跑完整库。许可仍为 PENDING-LICENSE-REVIEW。状态以
+[BUILD_STATUS.md](BUILD_STATUS.md) 为准，操作见
+[WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
+
+## Historical: 0.3.2 (8) — four workers passed first attempt; IPA verified
+
+以下保留 build 8 及更早版本的原始实现、验证结果和当时步骤；其中“current／new”
+均指历史版本，不是 build 10 通过证据，也不是当前清库测速或旧策略缓存复用要求。
 
 Source `b40d2faaf11b2f499779881b4863325fa7dae659`;
 [CI 35848409845](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845)
@@ -11,7 +135,7 @@ the completed local IPA download/length/hash are verified. This edit only record
 supplied verified results: no commands, tests, CI queries/retries, downloads or
 phone actions. Older build 7 evidence is preserved separately below.
 
-## Install/use
+## Historical build 8 — install/use
 
 Use the verified build 8 package linked below; overwrite with the same Sideloadly
 account and effective Bundle ID, without uninstalling or clearing index/cache.
@@ -38,7 +162,7 @@ Existing location weight **0.6** now has real place-label input for covered phot
 after backfill, as introduced in build 7; rankings may change as intended when
 labels are added. Build 8 changes neither the weight nor the centered score.
 
-## Indexing — fixed four-slot rolling window, explicitly requested by the user
+## Historical build 8 — fixed four-slot rolling window, explicitly requested by the user
 
 [PhotoIndexWorker.swift](../App/State/PhotoIndexWorker.swift) implements four
 structured child slots. Each child reads the cache, obtains the PhotoKit preview
@@ -96,7 +220,7 @@ unchanged. Four independent actors make concurrent work possible; they do not
 prove physical GPU/ANE overlap, **4× speed**, lower elapsed time or acceptable
 phone memory/heat. Those remain unmeasured, not additional user diagnostic tasks.
 
-## Places
+## Historical build 8 — places (pack retained in current source)
 
 Public pinned geoBoundaries gbOpen sources for China, France, Germany and the
 Netherlands, ADM1/ADM2, are required app resources in the normal build path,
@@ -131,7 +255,7 @@ saved place updates are different counts. These are scan observations (possibly
 partial), not persisted GPS or permanent whole-library totals. No private-library
 GPS/coverage count or percentage is established by public reference-point tests.
 
-## Public resource provenance
+## Historical build 8 — public resource provenance and verified package
 
 Sources: revision `9469f09592ced973a3448cf66b6100b741b64c0d`, hashes and original
 license/source/year metadata in [place_sources.json](../scripts/place_sources.json).
@@ -167,7 +291,7 @@ hash/count checks and four public city reference points plus New York outside
 coverage. These are not personal-photo or real-GPS coverage tests. See
 [resource contracts](../Resources/Places/README.md).
 
-## Current build 8 validation — verified execution results
+## Historical build 8 validation — verified execution results
 
 CI **35848409845 / job 107140049230** passed on its first attempt. The following
 App sub-suites are included in the App total, not extra tests to add again:
@@ -262,7 +386,7 @@ XCTest do not override the later passing native tests.
 	Counts are synthetic, not user GPS observations; the other 17 frames were not
 	reviewed this round.
 
-## Current remaining boundaries
+## Historical build 8 remaining boundaries
 
 Build 8 CI/native execution, resource checks, device compilation, IPA identity and
 complete local byte/hash-verified download are finished. Signing/install and
