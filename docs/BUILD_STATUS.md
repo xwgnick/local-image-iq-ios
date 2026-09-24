@@ -1,6 +1,89 @@
-# Cloud build status — 2026-09-23
+# Cloud build status — 2026-09-24
 
-## Current: 0.3.2 (8) — four workers passed first attempt; IPA downloaded and verified
+## Current: 0.3.3 (9) — 首轮验证通过，IPA 已完整下载并校验
+
+源码 `9e055b13be62ca184593387b1b5dc647b3a85a26` 的
+[Run 35965638523](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35965638523)
+／[job 107523495276](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35965638523/job/107523495276)
+已 **SUCCESS，首轮通过**；日志确认 `TEST SUCCEEDED` 和设备 `BUILD SUCCEEDED`。
+以下为本次 build 9 的已核验证据，不借用历史结果。
+
+### 本次测试结果
+
+| 项目 | 已核验结果／边界 |
+| --- | --- |
+| Swift 核心 | 79 通过。 |
+| App XCTest | 258 项：257 通过、1 项真机文件保护在模拟器跳过、0 失败；96.471 秒。下列 App 子套件已计入总数，不重复相加。 |
+| LocalPreviewComparisonTests | 18 项全部通过；0.060 秒。 |
+| LocalPreviewComparisonPresentationTests | 19 项全部通过；1.248 秒。注入假服务／生成像素，不是真实 PhotoKit。 |
+| GeneratedModelParityTests | 8 项全部通过；71.345 秒，包含生产工厂的真实四图像模型 actor。 |
+| 四 actor 数值门槛 | 6 夹具 × 4 槽＝24 次预测；48 项归一化向量比较＋12 项张量测量＝60 项；计数及图像余弦 ≥ 0.995 均断言通过。 |
+| 原生产编码 API 门槛 | 23 次预测／58 项测量通过，原门槛不变。 |
+| UI 测试 | 7 项全部通过；198.491 秒。测试耗时不是手机速度测量。 |
+| 模型导出报告 | parityPassed:true，23 cases；本次导出极值见下表，不是原生 XCTest 极值。 |
+| 真机 | PENDING-DEVICE：本机签名／覆盖安装、真实 PhotoKit 离线结果、细节质量、文件保护、速度／内存／发热及私人图库 GPS 覆盖均待验证。 |
+| 再分发许可 | PENDING-LICENSE-REVIEW：模型及地点数据仍需人工审查。 |
+
+| 模型导出指标 | 本次报告值（非原生／真机极值） |
+| --- | --- |
+| 最小余弦 | 0.9999999999960657 |
+| 最大原始分量误差 | 0.000011444091796875 |
+| pairedCosineMaxAbs | 1.8557397291063538e-7 |
+
+### 实际设备包与完整下载
+
+- 设备报告确认 **0.3.3 / build 9、iphoneos18.5、arm64 Release、未签名、Xcode 16.4、
+  最低 iOS 17.0**。这是真机 SDK 构建，不是已在物理 iPhone 安装或运行。
+- 模型仍为同一 FP32 SigLIP 2 配对、**768 维**：`google/siglip2-base-patch16-224`，
+  revision `75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2`；`modelVersion`：
+  `siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`。
+- 同一设备报告确认 Places **2,943 要素、15,175,079 GeoJSON 字节、CHN／FRA／DEU／NLD、
+  8 个来源**。GeoJSON SHA-256：
+  `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`；清单 SHA-256：
+  `0b060aab6515670f136beed831ec043fe8d9e9bdce25c23802e8e9b3bda61812`。
+- [IPA 产物 10794875285](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35965638523/artifacts/10794875285)：
+  外层 **1,414,738,797 字节**；内层 IPA **1,414,731,479 字节**。
+  IPA SHA-256：`5c36d87fa1b5845a6806274a200ad602a917b778da5398b49116b2e9b303328b`。
+- **完整下载已实际完成**：有界内存流式读取，实际长度／SHA-256 核验通过后才最终重命名为
+  [../build/device-download/35965638523/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35965638523/LocalImageIQ-iphoneos-unsigned.ipa)。
+  同目录的 [../build/device-download/35965638523/device-build.json](../build/device-download/35965638523/device-build.json)
+  与 [../build/device-download/35965638523/SHA256SUMS.txt](../build/device-download/35965638523/SHA256SUMS.txt)
+  均已存在；父进程已直接读取完成记录 JSON 并核对本地文件，无残留部分下载。旧包保留，
+  不需重新下载；本包仍须 Sideloadly 本机签名。
+
+### 有限截图审核：只审核 4 张新增预览图
+
+[UI 产物 10794342294](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35965638523/artifacts/10794342294)
+为 **2,711,196 字节**，24 张 UIReview 截图已下载；**仅审核其中 4 张新增预览图**，
+其余 20 张未审核。前三张各 393×852，大字号图 375×667；在 **1340×758** 联系图
+[../build/ui-review/35965638523/local-preview-contact.jpg](../build/ui-review/35965638523/local-preview-contact.jpg)
+中审核的范围如下：
+
+- 三路预览：三列尺寸／元数据及等大面板清楚可见。
+- 全部不可用：不可用状态清楚可见。
+- 同一区域细节：三路面板的共同区域可见。
+- 大字号：当前视口仅见菜单和第一个大面板；屏外元数据／其余面板**未做视觉审核**。
+
+像素均为程序生成的假数据；**未实际点击或滚动验证**，不证明真实 PhotoKit、离线覆盖、
+清晰度或手机性能。UI 测试通过不等于这四个预览场景已完成真机交互验收。
+
+### 安装后直接对比，不改索引
+
+用原 Sideloadly 账号／原有效 Bundle ID **覆盖安装，不卸载、不清库、不重建，
+不用点 Index / resume**。打开 App 前先开飞行模式并关闭 Wi-Fi，选已知白笔照片或
+任一可访问结果 → 大图底部“本地预览对比” → 自动顺序完成 Fast 224／高质量 224／
+高质量 480 → 发默认三路“等框对比”截图；可选“同一区域细节”。
+
+对比仅在内存中，不调用索引 worker、编码器或 SQLite，不保存／导出图像、不改向量／排名。
+模型、四 worker、Places、预处理／索引版本、正常显示及默认联网策略均不变。
+三路禁止联网，但不检测飞行模式、不绕过系统缓存；打开 App、先前看图和前一次请求都
+可能预热缓存。实际 CG 像素更大或原始降质标记为“否”不保证更清晰，也不是质量修复。
+操作与请求契约见 [LOCAL_PREVIEW_COMPARISON.md](LOCAL_PREVIEW_COMPARISON.md)。
+
+## Historical: 0.3.2 (8) — four workers passed first attempt; IPA downloaded and verified
+
+The following results and speed-test instructions belong to build 8, not build 9.
+Its IPA has no three-way comparison; the current diagnostic needs no index clear or rerun.
 
 Source: `b40d2faaf11b2f499779881b4863325fa7dae659`.
 [Run 35848409845](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845)
@@ -134,7 +217,7 @@ index-rescue or extra diagnostic/query round is required. Detailed contracts:
 ## Historical: 0.3.1 (7) — SUCCESS first attempt; IPA downloaded and verified
 
 The following build 7 results, one-ahead implementation and installation handoff
-are older evidence, not success or delivery evidence for current build 8.
+are older evidence, not success or delivery evidence for build 8 or current build 9.
 
 Source: `18ad52d37690ecfbf92b63a21285a6c3e8e753d4`.
 [Run 35840838147](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147)

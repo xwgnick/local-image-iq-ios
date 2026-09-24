@@ -2,7 +2,47 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 当前：0.3.2（build 8）— 4 worker 首轮验证通过，IPA 已完整下载并校验
+## 当前：0.3.3（build 9）— 首轮验证通过，IPA 已完整下载并校验
+
+源码 `9e055b13be62ca184593387b1b5dc647b3a85a26` 的
+[CI 35965638523](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35965638523)
+／[job 107523495276](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35965638523/job/107523495276)
+已 **SUCCESS，首轮通过**；日志确认 `TEST SUCCEEDED` 和设备 `BUILD SUCCEEDED`。
+
+- Swift 核心 **79 通过**；App **258 项：257 通过、1 项真机文件保护在模拟器跳过、
+   0 失败（96.471 秒）**。其中加载器 **18 项（0.060 秒）**、状态／展示 **19 项
+   （1.248 秒）**、GeneratedModelParity **8 项（71.345 秒）**全部通过，均已计入 App 总数。
+   真实四图像 actor 的 **24 次预测／60 项测量**及原 **23 次／58 项**门槛均通过且未改。
+   UI **7 项全部通过（198.491 秒）**；这些耗时不是手机性能测量。
+- [build/device-download/35965638523/LocalImageIQ-iphoneos-unsigned.ipa](build/device-download/35965638523/LocalImageIQ-iphoneos-unsigned.ipa)
+   **已实际完整下载**，有界流式读取核验实际长度／SHA-256 后才最终重命名；本地 IPA
+   **1,414,731,479 字节**，校验文件与设备报告齐全，无残留部分下载，旧包保留。
+   SHA-256：`5c36d87fa1b5845a6806274a200ad602a917b778da5398b49116b2e9b303328b`。
+   设备报告确认 **0.3.3 / 9、arm64 Release、未签名**，仍需 Sideloadly 本机签名。
+- 24 张 UI 截图已下载，**仅审核 4 张新增预览图**的
+   [build/ui-review/35965638523/local-preview-contact.jpg](build/ui-review/35965638523/local-preview-contact.jpg)
+   （1340×758）。三列尺寸／元数据、等框、不可用状态及同一区域细节可见；大字号
+   仅看见菜单和首个大面板，屏外元数据／其余面板未审核，也未实际点击／滚动验证。
+   图像均为生成的假像素，不是实际 PhotoKit 或清晰度证据。
+
+用原 Sideloadly 账号／原有效 Bundle ID **覆盖安装 build 9，不卸载、不清索引、不重建，
+也不用点 Index / resume**。打开 App 前先开飞行模式并关闭 Wi-Fi；搜索
+`a hand holding a broken white pen` 找到此前的破损白笔照片，或任选当前可访问的结果。
+点开照片 → 底部“本地预览对比” → 自动依次请求 Fast 224／高质量 224／高质量 480。
+先发默认三路“等框对比”截图；可选“同一区域细节”选区后再截图。照片／搜索词没有硬编码。
+
+三路禁止联网，但 App 不检测飞行模式；打开 App、先前看图及前一请求都可能预热系统缓存，
+本流程不绕过缓存。实际返回 CG 像素更大或原始降质标记为“否”，都不保证更清晰。
+仅内存对比，不调用索引 worker、编码器或 SQLite；同一 SigLIP 2、四 worker、Places、
+预处理／索引、正常显示及默认联网策略不变，不是质量修复。
+**PENDING-DEVICE**：本机签名／安装、真实 PhotoKit 离线结果、速度／内存／发热仍待验证；
+**PENDING-LICENSE-REVIEW**：模型及地点再分发仍需人工审查。
+操作见 [docs/LOCAL_PREVIEW_COMPARISON.md](docs/LOCAL_PREVIEW_COMPARISON.md)，完整证据见
+[docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+
+## 历史：0.3.2（build 8）— 4 worker 首轮验证通过，IPA 已完整下载并校验
+
+以下仅为 build 8 的结果与当时测速说明；其包不含三路对比，本次不需清库或索引续跑。
 
 源码：`b40d2faaf11b2f499779881b4863325fa7dae659`。
 [CI 35848409845](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845)
@@ -172,7 +212,7 @@ Library → Index / resume**，联网关闭、保持前台。这会删除 App �
    `1.8557397291063538e-7`。导出 JSON 的原生 `not-run` 产生于 XCTest 之前，
    不是失败；原生通过依据是随后执行的 XCTest。
 - [0.3.0 未签名 IPA](build/device-download/35824403795/LocalImageIQ-iphoneos-unsigned.ipa)
-   当时已通过有界内存流式下载完成长度／SHA-256 校验；不是 build 7 或当前 build 8 的包。
+   当时已通过有界内存流式下载完成长度／SHA-256 校验；不是 build 7、8 或当前 build 9 的包。
    包身份与校验值见 [构建记录](docs/BUILD_STATUS.md)。
 - 已取回 17 张原生 UI 截图，**只检查了首页／图库／设置／主结果布局 4 张**的
    [缩小联系图](build/ui-review/35824403795/siglip2-ui-contact.jpg)；都是合成／测试场景，
@@ -235,9 +275,9 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
 新版实际状态与交付信息见 [构建记录](docs/BUILD_STATUS.md)。
 
 - 照片全部／有限授权、选择更多照片、前台增量索引与取消。
-- 0.3.2 沿用 0.3.0／0.3.1 的 Core ML 成对图像／多语言文本编码，768 维、SQLite
-   本机缓存；4 个独立图像槽位共享中央文本服务。本版 8 个原生 parity 测试及打包
-   验证均通过，含新增四槽真实模型测试；真机速度／内存／发热仍未测定。
+- 0.3.3 沿用 0.3.2 的 SigLIP 2 成对编码、768 维 SQLite 缓存与四图像 worker。
+   build 9 本次 8 个原生 parity 测试及设备打包已通过，IPA 已完整下载并校验；
+   四 worker 真机速度／内存／发热仍未测定。
 - 语义搜索、结果预览与分享；不上传照片或坐标。
 - 默认地点权重 0.6，支持 0...1；0.3.1 构建要求四国离线行政区包，回填后地点分支
    实际参与评分。无可用包、无 GPS、包外与不可用分开呈现，不在线反查。
@@ -300,7 +340,7 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
 63 个内容 token，追加 EOS 1、右补 PAD 0 到 64，不自动加 BOS；保留字面特殊 token。
 Unicode 小写（含 Final_Sigma）和全部 17 条文本的 token IDs／masks 已在 0.3.0
 通过精确原生对齐，不是沿用旧 WordPiece 结果；0.3.1 的原生 parity 也全部通过，
-0.3.2 的 8 项原生 parity 已在本次 CI 全部通过。
+0.3.2 和当前 0.3.3 的 8 项原生 parity 均已在各自 CI 全部通过。
 `ImageIQCore` 自身仍是 Foundation-only；
 App 的上述依赖是另一个边界。
 
@@ -319,16 +359,17 @@ Pillow BILINEAR，均值和标准差均为 `[0.5,0.5,0.5]`。Quartz 仅转换原
 MultiPolygon 使用 `label`、`level` 等公开属性。固定来源、历史年份、许可记录和
 打包检查见 [地点资源说明](Resources/Places/README.md) 与
 [索引与地点说明](docs/INDEX_PIPELINE_PLACES.md)；0.3.1 的模拟器 App、设备 App 及 IPA
-资源检查已通过，0.3.2 本次对应检查也通过，设备报告确认同一地点包身份。
+资源检查已通过，0.3.2 对应检查也通过；当前 0.3.3 设备报告再次确认同一地点包身份。
 
 ## 发布前仍需完成
 
-0.3.2 的 CI、原生测试、模拟器／设备资源检查、iPhoneOS arm64 构建、IPA 完整下载
-及字节数／SHA-256 校验均已完成；**本机签名／覆盖安装和物理 iPhone 验证仍未确认**。
-云端原生测试和真机 SDK 编译也不能证明 4 worker 提速、实际 GPS 覆盖或内存／发热。
-真机文件保护仍需物理设备验证。已验证的新包仍须本机签名；正常升级复用有效索引，
-用户选择从零测速才清空索引，不另加诊断任务。正式发布另需 App 图标、正式 Bundle ID、
-模型及地点数据再分发许可审查、签名和 TestFlight 配置。
+0.3.3 的 CI、原生／UI 测试、iPhoneOS arm64 构建、设备包身份核验、IPA 完整下载
+及字节数／SHA-256 校验均已完成；**PENDING-DEVICE：本机签名／覆盖安装和物理 iPhone
+验证仍未确认**。模拟器测试与真机 SDK 编译不能证明真实 PhotoKit 离线可用性、
+4 worker 提速、实际 GPS 覆盖、内存／发热或真机文件保护。
+本次覆盖安装复用有效索引，直接做预览对比，不清库、不重建。
+**PENDING-LICENSE-REVIEW**：模型及地点数据再分发仍需人工审查；正式发布另需
+App 图标、正式 Bundle ID、签名和 TestFlight 配置。
 当前 `com.example.localimageiq` 仅为开发占位标识；未提交到任何商店。
 
 普通免费 Apple 账号可供个人开发测试使用，但描述文件通常 7 天过期；Windows

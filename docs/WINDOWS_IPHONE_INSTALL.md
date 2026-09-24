@@ -5,7 +5,60 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.3.2（build 8）— 4 worker 首轮验证通过，新包已完整下载并校验
+## 当前：0.3.3（build 9）— 首轮验证通过，新包已完整下载并校验
+
+源码 `9e055b13be62ca184593387b1b5dc647b3a85a26` 的
+[CI 35965638523](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35965638523)
+／[job 107523495276](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35965638523/job/107523495276)
+已 **SUCCESS，首轮通过**，日志确认 `TEST SUCCEEDED` 和设备 `BUILD SUCCEEDED`。
+Swift 核心 **79 通过**；App **258 项：257 通过、1 项真机文件保护在模拟器跳过、
+0 失败**，其中新增加载器 **18 项**、状态／展示 **19 项**及模型 parity **8 项**均通过；
+UI **7 项全部通过**。这些不代表已在手机安装或验证真实 PhotoKit。
+
+### 已备好的 build 9 安装包
+
+- [../build/device-download/35965638523/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35965638523/LocalImageIQ-iphoneos-unsigned.ipa)
+  **已实际完整下载**，有界流式读取核验实际长度／SHA-256 后才最终重命名；无需重新下载。
+  [../build/device-download/35965638523/device-build.json](../build/device-download/35965638523/device-build.json)
+  与 [../build/device-download/35965638523/SHA256SUMS.txt](../build/device-download/35965638523/SHA256SUMS.txt)
+  均已存在，无部分下载残留，旧包保留。
+- [IPA 产物 10794875285](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35965638523/artifacts/10794875285)：
+  外层 **1,414,738,797 字节**，内层 IPA **1,414,731,479 字节**；IPA SHA-256：
+  `5c36d87fa1b5845a6806274a200ad602a917b778da5398b49116b2e9b303328b`。
+- 设备报告确认 **0.3.3 / build 9、iphoneos18.5、arm64 Release、未签名、Xcode 16.4、
+  最低 iOS 17.0**，同一 768 维 SigLIP 2 模型及地点包；仍须 Sideloadly 本机签名。
+
+### 现在只做这几步
+
+1. 用原 Sideloadly 账号、原有效 Bundle ID 覆盖安装并完成必要的系统信任。
+  不卸载、不清索引、不重建，也不用点 Index / resume。
+2. 打开 App 前先开飞行模式，并在系统设置中关闭 Wi-Fi；App 本身不检测飞行模式。
+3. 打开 App，搜索 `a hand holding a broken white pen`，选此前找到的手持破损白笔照片；
+  或选一张当前可访问的搜索结果。这是人工选图例子，不是 App 硬编码或固定排名。
+4. 点开照片 → 底部“本地预览对比”。页面自动依次请求 Fast 224／高质量 224／高质量 480。
+  等结束后先发默认三路“等框对比”截图，尽量带上三路图像和像素／标记；不可用也照实截图。
+5. 可选切换“同一区域细节”，点下方参考图选择区域，再发一张。无需为了此诊断重建索引。
+
+不要在测试前特意联网打开目标照片；这可能预热缓存。打开 App、正常搜索／大图加载及
+前一路请求也可能影响后一路，三路都不绕过系统缓存。页面的网络关闭只表示请求禁止联网；
+实际离线可用性要看手机结果。返回 CG 像素、方向与原始降质标记会显示在图下，
+尺寸大或标记“否”不等于更清晰。
+
+仅内存诊断，不调用索引 worker、编码器或 SQLite；SigLIP 2、四 worker、Places、
+预处理／索引、正常显示及默认联网策略不变，不是质量修复。
+24 张 UI 截图已下载，**仅审核 4 张新增预览图**的
+[../build/ui-review/35965638523/local-preview-contact.jpg](../build/ui-review/35965638523/local-preview-contact.jpg)
+（1340×758）：三列尺寸／元数据与等框、不可用状态、同一区域细节可见；大字号仅见菜单
+和首个大面板，屏外元数据／其余面板未审核，未实际点击／滚动验证。像素为生成假数据。
+
+**PENDING-DEVICE**：本机签名／安装、真实 PhotoKit 离线结果、速度／内存／发热等仍待验证。
+**PENDING-LICENSE-REVIEW**：模型及地点再分发仍需人工审查。完整证据见
+[BUILD_STATUS.md](BUILD_STATUS.md)，请求与测试边界见
+[LOCAL_PREVIEW_COMPARISON.md](LOCAL_PREVIEW_COMPARISON.md)。
+
+## 历史：0.3.2（build 8）— 4 worker 首轮验证通过，旧包已完整下载并校验
+
+以下保留 build 8 的结果与当时测速步骤；它不含三路对比，不是本次清库／续跑要求。
 
 源码：`b40d2faaf11b2f499779881b4863325fa7dae659`。
 [CI 35848409845](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35848409845)
@@ -96,7 +149,7 @@
 arm64 Release 编译及 IPA 验证均已通过。完整测试明细和本次模型报告见
 [构建记录](BUILD_STATUS.md)。本次仅记录已核验结果，不运行命令、测试、下载或查询 CI。
 
-### 历史 build 7 安装包（不是当前 build 8）
+### 历史 build 7 安装包（不是 build 8 或当前 build 9）
 
 - [build/device-download/35840838147/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35840838147/LocalImageIQ-iphoneos-unsigned.ipa)
   **已实际完整下载**；有界内存流式长度／SHA-256 校验完成，下载后本地报告已写入并
@@ -153,7 +206,7 @@ Library 区分扫描时有 GPS／找到标签／无 GPS／无可用包／包外�
 生产 App 编码 API 测试已断言并通过 23 次预测（17 文本＋6 图像）、58 项测量。
 完整导出测量和测试边界见 [构建记录](BUILD_STATUS.md)。
 
-### 历史 build 6 安装包（不是当前 build 8）
+### 历史 build 6 安装包（不是 build 8 或当前 build 9）
 
 - 本地已完整下载并校验的
   [build/device-download/35824403795/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35824403795/LocalImageIQ-iphoneos-unsigned.ipa)。
@@ -202,8 +255,8 @@ Library 区分扫描时有 GPS／找到标签／无 GPS／无可用包／包外�
 开启才可按需联网。不要求原图，也不承诺每张云照片都可离线读取；本次不是预览质量
 修复。模型不保证所有语言、查询都更好，桌面 CPU 数字也不是 iPhone 性能。
 
-以下两个升级小节也仅保留历史说明，不要求重新执行；当前 0.3.0／0.3.1 → 0.3.2
-正常复用图像缓存、可选从零测速的区别见页首，不适用历史 CLIP 整体换模型步骤。
+以下两个升级小节也仅保留历史说明，不要求重新执行。0.3.2 的可选从零测速属于历史；
+本次 0.3.3 预览对比不换模型、不清库、不重建，不适用历史 CLIP 整体换模型步骤。
 
 ## 历史：已装 0.2.0，更新到 0.2.1 检查版
 
@@ -257,10 +310,10 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 
 ## 3. 签名安装
 
-1. 将已完整下载并校验的
-  [0.3.2 / build 8 IPA](../build/device-download/35848409845/LocalImageIQ-iphoneos-unsigned.ipa)
-  拖进 Sideloadly；无需重新下载。其他电脑没有本地包时，可使用页首已核验的
-  产物 **10745235946**，解压外层 ZIP 后取出 IPA；**不解压或修改 IPA 的 Payload**。
+1. 将已完整下载并校验的 **0.3.3 / build 9**
+  [../build/device-download/35965638523/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/35965638523/LocalImageIQ-iphoneos-unsigned.ipa)
+  拖进 Sideloadly；历史 build 8 包不含三路对比，不能代替。
+   若拿到外层产物 ZIP，只解压取出 IPA；**不解压或修改 IPA 的 Payload**。
 2. 选择已连接的 iPhone，输入你本人有权使用的 Apple Account。
 3. 点击 Start；密码及双重认证仅由你在工具／Apple 登录流程中手动输入。
    如工具明确要求普通密码或 App 专用密码，以当前官方说明为准，不互相替代试错。
@@ -275,24 +328,12 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
   要求重启和确认。菜单暂时不出现时，先完成一次配对／开发签名安装再检查。
 - 若遇到账户或设备管理政策禁止开发者模式，停止并确认政策，不绕过设备管理。
 
-## 5. build 8 安装后：正常续跑；从零测速可选
+## 5. build 9 安装后：直接对比，不跑索引
 
-首次安装时选择你愿意授权的照片并正常建立索引；从 0.3.0／0.3.1 覆盖升级无需重新
-选择全部照片，更无需清库。打开 **Library → Index / resume**，联网关闭、App 前台。
-有效缓存仍可用，不会因为 4 worker 更新而全部失效；缓存命中也检查地点但不取预览／
-图像重编码，新增／变化照片正常编码，中断可续跑。不要求原图下载。
-
-只有用户选择页首的**从零测速**时，才在安装后打开 **Settings → Clear index**，
-再打开 **Library → Index / resume**，联网关闭、保持前台。索引／缓存会丢失，
-系统照片不删除，之后重新索引。对比旧 0.3.1 与新 0.3.2 的同地点包、同照片数量、
-同网络关闭和相近温度／发热／供电条件，不能与缓存续跑混比。正常升级不必执行这一步。
-没有代跑手机或实际速度／内存测量，也没有索引抢救、额外查询、诊断截图或来源计数回传要求。
-
-搜索提交后键盘会收起；也可用 Done 或拖动收起。四国离线行政区包身份不变，0.3.2
-本次资源检查已通过，设备报告确认同一包。有 GPS 不保证落在包内或成功保存地点标签。
-默认权重仍为 0.6，回填后有地点输入的评分分支生效，排名变化是预期，不静默调参抵消。
-四 worker 真机耗时／内存／发热、文件保护及真实 GPS 覆盖尚未测定；云端测试和
-iPhoneOS 编译不能替代，不声称 4 倍提速或物理设备性能已验收。
+按页首步骤：打开 App 前开飞行模式并关闭 Wi-Fi，找到已有照片 → 底部“本地预览对比”
+→ 等自动完成后截图。不执行历史清库测速、地点回填或模型迁移步骤。
+关闭页面或切后台会取消并清空内存结果，回来不自动重跑；需要时点“重新对比”。
+本页不自动导出／上传照片，截图由用户自行选择发送。
 
 ## 隐私与模型许可不因本次更新而放宽
 
