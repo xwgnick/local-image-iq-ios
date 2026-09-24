@@ -151,6 +151,11 @@ struct PhotoGalleryViewer: View {
         let initialQuery: String
     }
 
+    private struct PreviewComparisonSelection: Identifiable {
+        let id: String
+        let state: LocalPreviewComparisonState
+    }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedID: String
@@ -159,6 +164,7 @@ struct PhotoGalleryViewer: View {
     @State private var failedPhoto: FailedPhoto?
     @State private var shareItem: ShareItem?
     @State private var photoCheckSelection: PhotoCheckSelection?
+    @State private var previewComparisonSelection: PreviewComparisonSelection?
 
     init(ids: [String], initialID: String, library: PhotoLibraryClient,
          networkAllowed: Bool, state: AppState? = nil) {
@@ -232,6 +238,9 @@ struct PhotoGalleryViewer: View {
                 PhotoCheckSheet(state: state, photoID: selection.id, initialQuery: selection.initialQuery)
             }
         }
+        .sheet(item: $previewComparisonSelection) { selection in
+            LocalPreviewComparisonSheet(state: selection.state)
+        }
     }
 
     private var topBar: some View {
@@ -263,16 +272,32 @@ struct PhotoGalleryViewer: View {
     }
 
     private var bottomBar: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                shareButton
-                checkButton
+        VStack(spacing: 8) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    shareButton
+                    checkButton
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                VStack(spacing: 8) {
+                    shareButton
+                    checkButton
+                }
             }
-            .fixedSize(horizontal: true, vertical: false)
-            VStack(spacing: 8) {
-                shareButton
-                checkButton
+            Button {
+                guard ids.contains(selectedID), library.currentRevision(id: selectedID) != nil else { return }
+                clearPhotoCheck()
+                previewComparisonSelection = PreviewComparisonSelection(
+                    id: selectedID, state: LocalPreviewComparisonState(service: library, photoID: selectedID))
+            } label: {
+                Label("本地预览对比", systemImage: "photo.on.rectangle.angled")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(PhotoGalleryStyle.accent)
+                    .frame(minHeight: 44)
             }
+            .buttonStyle(.plain)
+            .disabled(!hasCheckableSelection)
+            .accessibilityIdentifier("compare-local-previews")
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
@@ -330,6 +355,8 @@ struct PhotoGalleryViewer: View {
     }
 
     private func clearPhotoCheck() {
+        previewComparisonSelection?.state.cancelAndClear()
+        previewComparisonSelection = nil
         photoCheckSelection = nil
         state?.dismissPhotoCheck()
     }

@@ -282,3 +282,43 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
         (info?[key] as? NSNumber)?.boolValue ?? false
     }
 }
+
+/// Deliberately separate from the normal indexing and display APIs above.
+extension PhotoLibraryClient: LocalPreviewComparing {
+    func compareLocalPreviews(id: String) async throws -> LocalPreviewComparison {
+        try Task.checkCancellation()
+        let authorization = Self.authorization
+        guard authorization == .authorized || authorization == .limited else {
+            throw AppFailure.permission
+        }
+        // Capture one request asset and its snapshot before the first await. All
+        // three requests use this same PHAsset; validation only rechecks metadata.
+        guard let selectedAsset = asset(id: id) else {
+            throw AppFailure.photo("This photo is no longer accessible.")
+        }
+        let revision = PhotoRevision(asset: selectedAsset)
+        return try await LocalPreviewComparisonLoader.compare(
+            id: id, revision: revision, authorizationRawValue: authorization.rawValue,
+            pixelWidth: selectedAsset.pixelWidth, pixelHeight: selectedAsset.pixelHeight,
+            request: { [manager] targetSize, contentMode, options, callback in
+                manager.requestImage(for: selectedAsset, targetSize: targetSize, contentMode: contentMode,
+                                     options: options, resultHandler: callback)
+            }, cancel: { [manager] in manager.cancelImageRequest($0) }, validate: { [self] in
+                isLocalPreviewCurrent(id: id, revision: revision, authorizationRawValue: authorization.rawValue)
+            })
+    }
+
+    func isCurrent(_ comparison: LocalPreviewComparison) -> Bool {
+        isLocalPreviewCurrent(id: comparison.photoID, revision: comparison.revision,
+                              authorizationRawValue: comparison.authorizationRawValue)
+    }
+
+    private func isLocalPreviewCurrent(id: String, revision: PhotoRevision, authorizationRawValue: Int) -> Bool {
+        let authorization = Self.authorization
+        guard authorization.rawValue == authorizationRawValue,
+              authorization == .authorized || authorization == .limited,
+              revision.id == id, currentRevision(id: id) == revision else { return false }
+        // Also reject a permission transition while fetching the current revision.
+        return Self.authorization == authorization
+    }
+}
