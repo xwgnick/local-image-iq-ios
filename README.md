@@ -2,24 +2,45 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 当前：0.4.0（build 11）— 原生验证通过；第二轮仅上传配额失败，交付受阻
+## 当前：0.4.0（build 11）— 私有 Release 首次尝试成功，IPA 已完整下载并校验
 
-用户已批准系统 Apple Translation。当前源码
-`0c09c46ff5edf74ffeb4a2cece2f7b9fd20a5910` 的第二轮
-[CI 36383757627](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36383757627)
-／[job 108804722901](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36383757627/job/108804722901)
-已 **COMPLETED / FAILURE**，不是仍在运行。原生 `TEST SUCCEEDED`、iPhoneOS
-`BUILD SUCCEEDED`、包验证 **SUCCESS**；仅 **Upload UI／Keep evidence** 两个步骤
-因 `Artifact storage quota has been hit` 失败，**IPA 上传因 UI 上传失败而 SKIPPED**。
-本轮已把设备构建移到首次上传前，并补充语言包竞态 UI 提示；测试未跳过、门槛未放宽。
+用户现已明确批准**方案 2：同一私有仓库 Release＋job 级 contents: write**，不是
+改为公开仓库或更改计费。新源码 `844492b754f86d519c904da21cd80c1c814c056b` 相比
+已通过原生／设备验证的 `0c09c46ff5edf74ffeb4a2cece2f7b9fd20a5910`，只改工作流及
+两个发布／测试脚本，**没有 App、索引或模型改动**。发布器 **83 项本地 Node 22 mock
+测试通过，CI 对应测试步骤也 PASS**；本轮真实上传／发布及本地下载校验均已完成。
+[CI 36387878343](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36387878343)
+／[job 108817040032](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36387878343/job/108817040032)，
+已 **COMPLETED / SUCCESS**，日志确认 `TEST SUCCEEDED` 和设备 `BUILD SUCCEEDED`。
+这是**两次 Actions artifact 配额失败后的首次私有 Release 尝试成功**，不是 build 11 总体首轮成功。
 
-**PASS-NATIVE／PASS-PACKAGE 不等于交付**：设备报告与 IPA 身份仅来自 job 日志，
-是 **runner 本地产物**；artifacts API 返回 `[]`，**未上传、未完整下载、未验证交付**。
-Windows 本地没有 build 11 新 IPA，也没有可用新包链接，旧包不能代替。
-本次只按已提供的最终证据编辑文档，不查询 CI、执行命令、下载或额外重试。
+- [私有 Release：ci-36387878343-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
+   （ID **398009938**）于 **2026-09-28T06:55:36Z** 发布，**prerelease、非 draft、非 Latest**；
+   仓库仍私有。**9 项资产＝8 项载荷＋交付清单**全部上传并通过 API SHA-256 核验。
+- [build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa](build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa)
+   **已实际完整下载并校验，可用于 Sideloadly 本机签名**。asset **594739443**，精确
+   **1,414,801,288 字节**；SHA-256：`6043afbe68a84edd16d1314ecf4369f308bff8d7cf676392aee5eee6a950ca71`。
+   设备报告、校验文件、交付清单及下载记录齐全；父进程直接流式复验字节／哈希一致，
+   `ipaVerifiedLocally: true`，无部分下载残留，全部旧本地包保留。另一台电脑可在上述
+   Release 页面登录 **xwgnick 或具有该私有仓库读取权限的账号**下载同一 IPA 并核验。
+
+本次仅依据已核验证据更新文档，不查询 CI、执行命令、下载或追加触发。
+
+新交付不再使用 Actions artifact 存储：仅精确匹配私有 `xwgnick/local-image-iq-ios`，
+保留全局只读，构建 job 使用 `contents: write`／`actions: read` 和运行自带 token，
+不新增 PAT 或 Apple 凭据。所有原生门槛不变；先建唯一 DRAFT，白名单资产逐项流式
+上传并核对远端字节／哈希，全部通过后发布 prerelease，**不设为 Latest**。失败证据
+保留 DRAFT；部分上传不是交付，不覆盖／删除既有 Release、tag 或资产。
+详见 [私有 Release 交付](docs/PRIVATE_RELEASE_DELIVERY.md)。
+
+**前两轮历史**：[首轮 36382669765](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36382669765)
+仅两项上传配额失败，设备构建跳过；[第二轮 36383757627](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36383757627)
+同样仅 Upload UI／Keep evidence 配额失败，但原生、iPhoneOS 编译和包验证通过，IPA
+上传跳过。第二轮 artifacts API 为 `[]`，包身份仅见 runner 日志，未交付；旧 runner
+包大小／哈希不作新包身份。完整测试、清理与历史包身份见[构建状态](docs/BUILD_STATUS.md)。
 
 - **iOS 18+ 真机**使用系统 Translation；最低系统仍为 iOS 17，不支持时原文回退。
-   job 日志确认本次 **0.4.0 / 11、Xcode 16.4／iphoneos18.5、arm64、未签名**；
+   本轮设备报告确认 **0.4.0 / 11、Xcode 16.4／iphoneos18.5、arm64 Release、未签名**；
    真机专用分支已编译，不等于已在手机运行。不声称要求 Apple Intelligence 或 LLM。
    模拟器不运行真实系统翻译。
 - “中文搜索增强”默认开启，生产入口用 `UserDefaults.standard` 保存开关，不保存
@@ -36,24 +57,22 @@ Windows 本地没有 build 11 新 IPA，也没有可用新包链接，旧包不�
    后台与迟到结果检查保留，已激活 host 等闭包结束；未进入后台的重复 active 不取消同意流程。
 - **20 worker、HQ224／Fast 策略、模型／预处理、图像与地点缓存、Places 均不变**。
    已有 build 10 当前策略索引**不清库、不重建图像或地点、不必跑 Index / resume**。
-   日志报告确认同一 **768 维模型／modelVersion、2,943 要素 Places**；runner IPA
-   **1,414,801,289 字节**，哈希见[构建状态](docs/BUILD_STATUS.md)。语言包另占系统
-   空间、不打进 IPA，实际语言包大小未测量；上述包字节数不是本地下载校验。
+   本轮设备报告确认同一 **768 维模型／modelVersion、2,943 要素 Places**。新 IPA
+   约 **1.4 GB**，精确字节／哈希见上；语言包另占系统空间、不打进 IPA，
+   实际语言包大小未测量。
 
-**第二轮实测**：核心 **79 通过**；App **349 项：348 通过、1 项真机文件保护在模拟器
-跳过、0 失败（118.821 秒）**。新增 **42 状态（0.435 秒）＋32 桥接（1.384 秒）＋
-5 展示（0.561 秒）**全部通过，已计入 App 总数。GeneratedModelParity **8 通过
-（83.298 秒）**，含真实 20 槽工厂 **120 次预测／252 项测量**，原 **23／58** 门槛
-不变且通过；独立 UI **7 通过（202.326 秒）**。截图生成测试和导出步骤通过，但四张
-`UIReview-query-translation-*` 假翻译附件**未取回、未逐项核验、未视觉审核**。
+**本轮实测（36387878343）**：核心 **79 通过**；App **349 项：348 通过、1 项真机文件保护在
+模拟器跳过、0 失败（108.139 秒）**。新增 **42 状态（0.404 秒）＋32 桥接（0.310 秒）＋
+5 展示（0.438 秒）**全部通过，已计入 App 总数。GeneratedModelParity **8 通过
+（81.423 秒）**，含真实 20 槽工厂 **120 次预测／252 项测量**，原 **23／58** 门槛
+不变且通过；独立 UI **7 通过（199.344 秒）**。测试耗时不是手机性能。
+
+截图 ZIP 已下载校验，**仅提取并审核四张新增翻译截图**的
+[1340×758 联系图](build/ui-review/36387878343/query-translation-contact.jpg)：普通态原中文／
+英文／“使用原文”清楚，缺包提示及设置入口可见；Settings 四控件及屏内页脚可读但较密；
+大字号原文／英文／按钮可见，下方空状态延伸到屏外，**不代表整页审核**。其余截图未提取／
+查看，总数未核实；5 项展示测试不是按钮 UI 自动化。均是假翻译／零结果合成场景。
 **PENDING-DEVICE**：真实系统翻译、离线质量、延迟及同意弹窗行为仍未测量。
-
-**首轮历史，不混用耗时**：源码 `7b63e3539cdd34a2c7593b5f3431775af72e2dda` 的
-[CI 36382669765](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36382669765)
-／[job 108801470042](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36382669765/job/108801470042)
-同样仅两项上传配额失败；App **349 项／348 通过／1 跳过／0 失败（122.833 秒）**，
-新增 42＋32＋5 均通过；UI **7 通过（201.613 秒）**。核心步骤通过但首轮数量未单独
-核实；截图导出成功但未下载／审核，**设备编译／IPA 步骤 SKIPPED**。
 
 **旧产物说明（适用于下方全部历史章节）**：用户仅批准删除已有本地备份的旧 IPA
 云端产物；已分两阶段完成 **9＋1＝10 个**：首批 9 个为 **9,906,302,776 远端字节**，
@@ -67,15 +86,14 @@ Windows 本地没有 build 11 新 IPA，也没有可用新包链接，旧包不�
 全量存储与本月累计用量未知。GitHub 官方计费说明：删除不清除已累计的月度存储用量，用量每
 **6–12 小时**更新，等待不保证恢复上传。
 
-用户已拒绝预先授权 private Release：“**等真的被阻止了，我们再来商讨对策**”。
-**现在第二轮实际阻塞已确认，停在此处，待与用户商讨**；private Release 或用户处理
-账号配额仅为后续选项，不构成授权。未创建 Release，未更改权限／计费／额外存储，
-未清理其他仓库或继续删除，也不额外重试；源码已提交，最终文档留待父流程提交。
+此前“先确认实际阻塞再商讨”的阶段已结束，**当前私有 Release 路线已获明确批准**。
+仓库可见性、计费与其余产物不动；macOS 分钟仍按原规则计量，不承诺免费。
 
-**以下仅为交付后步骤，现在没有可安装新包**。待另行确认交付路线、新 IPA 完整下载并
-核验长度／SHA-256 后：原 Sideloadly 账号／有效 Bundle ID 覆盖安装，不卸载、不清库；
+**现在可用上方已校验的 build 11 IPA 签名安装**：原 Sideloadly 账号／有效 Bundle ID
+覆盖安装，不卸载、不清库；
 Settings → 中文搜索增强 → 简体中文 → 英文 → 下载离线语言包并同意，确认就绪后搜索
-**身份证**，比较显示的英文及“使用原文”。可选在语言包下载后关闭全部网络再试真机；
+**身份证**，比较实际显示的英文及“使用原文”，不保证译为 “ID card” 或提升检索效果。
+可选在语言包下载后关闭全部网络再试真机；
 不要求整库重跑或诊断截图。详见 [中文搜索增强](docs/QUERY_TRANSLATION.md)、
 [构建状态](docs/BUILD_STATUS.md)和[安装说明](docs/WINDOWS_IPHONE_INSTALL.md)。
 
@@ -444,7 +462,8 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
    actor 和高质量 224 优先的本地输入策略。旧策略行需自动重编码；迁移期间搜索和
    当前有效计数会排除旧行。build 10 CI 首轮通过，IPA 已完整下载并校验；真机速度／内存／发热待测。
 - 0.4.0 仅新增可关闭的系统中文查询翻译与独立语言包准备，不改变上述模型／输入策略／
-   图像和地点缓存；有效 build 10 索引无需重建。构建与交付待验证，详见
+   图像和地点缓存；有效 build 10 索引无需重建。本轮 CI、私有 Release 与本地 IPA 校验
+   均已完成，真机翻译仍待验证，详见
    [docs/QUERY_TRANSLATION.md](docs/QUERY_TRANSLATION.md)。
 - 语义搜索、结果预览与分享；不上传照片或坐标。
 - 默认地点权重 0.6，支持 0...1；0.3.1 构建要求四国离线行政区包，回填后地点分支
@@ -477,23 +496,26 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
    编译和 XCTest。没有模型的数值对齐测试会明确跳过。优先排除原生编译问题。
 2. 随后 `include_models=true`：仅下载固定公开模型，macOS 转换、PyTorch/Core ML
    数值对齐，再运行 Swift tokenizer／预处理／模型推理夹具测试。
-3. 构建产物是 **Simulator App ZIP + xcresult**，不是可装到 iPhone 的 IPA。
+3. 非设备构建产物是 **Simulator App ZIP + xcresult**，不是可装到 iPhone 的 IPA。
    真机安装和 TestFlight 仍需要 Apple 签名、对应团队和后续配置。
 4. Windows 个人测试路线：勾选 `include_models` 与 `build_device_ipa`，通过测试后
    额外编译 `iphoneos` SDK / arm64 Release App，生成**未签名真机 IPA**。由用户
    在 Windows 用已同意的第三方签名工具安装，不向 CI 提供 Apple 密码或证书。
    详见 [Windows 安装到 iPhone](docs/WINDOWS_IPHONE_INSTALL.md)。
+5. 新运行通过[同仓库私有 Release](docs/PRIVATE_RELEASE_DELIVERY.md)交付包与测试证据，
+   不再上传 Actions artifacts；上文旧 artifact 链接仅作历史记录。公开模型／地点来源
+   仍固定，CI 不接收私人照片、GPS、数据库或视频。
 
 标准 `macos-15` runner 当前为 Apple Silicon；私有仓库消耗账号 Actions 额度，
-**不承诺无限免费**，模型转换尤其需要核对额度和存储。没有自动 push/PR 触发。
+**不承诺无限免费**；Release 存储路线不免除构建分钟计量，也未改变计费设置。没有自动 push/PR 触发。
 模型转换环境独立，不修改桌面 Python 环境。
 
 ## 工程与模型
 
 - [project.yml](project.yml)：XcodeGen 规范，iOS 17+，Swift 5 语言模式；App 分词依赖
    需要 Swift 6 工具链，既有构建基线为 Xcode 16.4／iOS 18.5 SDK；app + 测试 target。
-   build 11 系统翻译在 iOS 18+ 真机启用，iOS 17 原文回退；第二轮原生测试／设备编译
-   和 runner 包身份验证已通过，证据来自 job 日志，未交付到本地或验证真机运行。
+   build 11 系统翻译在 iOS 18+ 真机启用，iOS 17 原文回退；本轮原生测试／设备编译、
+   私有 Release 发布及本地包校验已通过，尚未验证真机运行。
 - [project.models.yml](project.models.yml)：转换完成后的模型测试资源增量配置。
 - [App](App)：UI、PhotoKit、Core ML、SQLite、离线行政区查询及无可用包状态处理。
 - [Packages/ImageIQCore](Packages/ImageIQCore)：无第三方依赖的数学、检索、分词。
@@ -513,7 +535,8 @@ Unicode 小写（含 Final_Sigma）和全部 17 条文本的 token IDs／masks �
 通过精确原生对齐，不是沿用旧 WordPiece 结果；0.3.1 的原生 parity 也全部通过，
 历史 0.3.2 和 0.3.3 的 8 项原生 parity 均已在各自 CI 全部通过；历史 0.3.4 的
 8 项原生 parity 也已实际通过，含 20 槽工厂 120 次预测／252 项测量及原 23／58 门槛，
-不是借用更早版本通过结果。0.4.0 第二轮 8 项也已全部通过（83.298 秒），实际执行
+不是借用更早版本通过结果。0.4.0 第二轮 8 项通过（83.298 秒）保留为历史；本轮
+36387878343 的 8 项全部通过（81.423 秒），实际执行
 同样的 120／252 及原 23／58 检查，门槛未改；不是手机性能测量。
 `ImageIQCore` 自身仍是 Foundation-only；
 App 的上述依赖是另一个边界。
@@ -535,18 +558,18 @@ MultiPolygon 使用 `label`、`level` 等公开属性。固定来源、历史年
 [索引与地点说明](docs/INDEX_PIPELINE_PLACES.md)；0.3.1 的模拟器 App、设备 App 及 IPA
 资源检查已通过，0.3.2 对应检查也通过；历史 0.3.3 设备报告再次确认同一地点包身份。
 历史 0.3.4 设备资源检查已通过，设备报告确认同一 2,943 要素地点包及哈希；
-0.4.0 第二轮包验证已通过，job 日志中的设备报告确认同一地点包数量、字节数及哈希；
-报告与包未取回本地，不是下载后复验。
+0.4.0 本轮设备报告及已下载包再次确认同一地点包数量、字节数及哈希，
+完整身份与本地复验记录见 [构建记录](docs/BUILD_STATUS.md)。
 
-## 发布前仍需完成
+## 私有交付已完成；真机与正式分发仍待验证
 
-0.4.0 第二轮 **COMPLETED / FAILURE，仅两项上传配额失败**。
-**PASS-NATIVE／PASS-PACKAGE**：原生／UI 测试、iPhoneOS 构建及 runner 包验证已通过；
-截图生成测试／导出也通过。**BLOCKED-DELIVERY**：IPA 未上传、未完整下载／本地校验；
-新增截图未取回、未逐项核验／视觉审核。0.3.4 的通过和交付记录仅属历史。
+0.4.0 本轮 **COMPLETED / SUCCESS、PASS-NATIVE／PASS-PACKAGE／DELIVERED**：
+原生／UI 测试、iPhoneOS 构建、9 项私有 Release 资产验证及新 IPA 本地全量复验均完成；
+仅四张新增翻译截图已做有限视觉审核。前两轮配额失败、10 个旧云端 IPA 清理及全部本地
+备份保留的历史不变；只是交付路线改变，**不声称 Actions 配额已恢复**。
 **PENDING-DEVICE**：build 11 覆盖安装、系统语言包同意／下载、真机断网翻译、质量和延迟；
 既有 20 槽稳定性、内存／发热、照片离线／GPS 覆盖和文件保护边界仍保留。
-交付方案待用户商讨；只有新包完整下载并校验后才进入安装，当前不重试。
+现在可用页首本地 IPA 或私有 Release 中的同一包进行本机签名安装。
 已有 build 10 当前策略索引无需清库或重建图像／地点。
 不要为本次翻译更新执行历史迁移、整库诊断或清库测速步骤。
 **PENDING-LICENSE-REVIEW**：模型及地点数据再分发仍需人工审查；正式发布另需

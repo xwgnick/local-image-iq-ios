@@ -1,54 +1,50 @@
 # 中文搜索增强 · 0.4.0（build 11）
 
-## 状态：第二轮已完成，仅上传配额失败；原生／包验证通过，未交付
+## 状态：私有 Release 首次尝试成功；IPA 已完整下载并校验
 
-用户已批准使用系统 Apple Translation。交接证据：首轮源码
-`7b63e3539cdd34a2c7593b5f3431775af72e2dda` 的
-[CI 36382669765](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36382669765)
-／[job 108801470042](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36382669765/job/108801470042)
-最终 **FAILED**：仅 Upload UI／Keep evidence 因 artifact 存储配额失败。源码、核心、
-公开地点包、模型导出及原生／UI 测试通过；截图导出步骤 **SUCCESS**，但没有截图
-下载或审核，**设备编译／IPA 步骤 SKIPPED**，真实 App 系统翻译仍须真机验证。
+用户已批准 Apple Translation，现又明确批准**方案 2：同一私有仓库 Release＋job 级
+contents: write**。新源码 `844492b754f86d519c904da21cd80c1c814c056b` 相比原生／
+设备验证通过的 `0c09c46ff5edf74ffeb4a2cece2f7b9fd20a5910`，只改工作流和两个
+发布／测试脚本，**没有 App、翻译、索引或模型改动**。发布器 **83 项本地 Node 22 mock
+测试通过，CI 对应步骤也 PASS**。
+[CI 36387878343](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36387878343)
+／[job 108817040032](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36387878343/job/108817040032)，
+已 **COMPLETED / SUCCESS**，实际 `TEST SUCCEEDED` 和设备 `BUILD SUCCEEDED`。
+这是**两次 Actions artifact 配额失败后的首次私有 Release 尝试成功**，不改写前两轮历史。
+[私有 Release：ci-36387878343-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
+（ID **398009938**）于 **2026-09-28T06:55:36Z** 发布，**prerelease、非 draft、非 Latest**；
+9 项资产（8 载荷＋交付清单）全部上传并通过 API SHA-256 核验。
 
-当前源码 `0c09c46ff5edf74ffeb4a2cece2f7b9fd20a5910` 补充准确的语言包竞态 UI
-提示，并把设备构建移至首次产物上传之前，未跳过测试或放宽门槛；版本仍为 **0.4.0 / 11**。
-获批清理分两阶段完成 **9＋1＝10 个**旧 IPA 云端产物：首批 9 个 **9,906,302,776
-远端字节**，后补最早 IPA（run 35636586662／artifact 10656339002）**709,538,194
-远端字节**，合计 **10,615,840,970 远端字节**。各本地备份均在删除对应云端产物前
-核验长度／SHA-256；全部 10 份本地 IPA 保留并再次核验有效，源码、日志和测试报告保留。
-首批 9 个删除后的只读清单为 **31 个／1,837,708,271 字节**；最后 1 个删除后推算
-剩余 **30 个／1,128,170,077 字节**，不是重新完整盘点。其他测试／证据包未动，也未获准
-删除；这些数字不证明配额可用，账号套餐／全量存储／本月累计用量未知。未清理其他仓库或
-更改计费。清单、后补 IPA 校验值与旧链接失效说明见
+新交付使用同仓库私有 Release，不占 Actions artifact 存储配额；保留全部原生门槛，
+资产全量验证后才从唯一 DRAFT 发布为非 Latest 的 prerelease。失败／部分上传不是交付，
+不覆盖或删除旧 Release、tag、资产，不新增 PAT 或 Apple 凭据。私有访问控制、计费设置
+不变，macOS 分钟仍按原规则计量；不是公开分发或商店安装。契约与本机只读下载 helper
+见 [PRIVATE_RELEASE_DELIVERY.md](PRIVATE_RELEASE_DELIVERY.md)。
+
+**历史不改写**：[首轮 36382669765](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36382669765)
+仅两项上传配额失败，设备构建跳过；[第二轮 36383757627](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36383757627)
+原生、iPhoneOS 编译及 runner 包验证通过，仍因 Upload UI／Keep evidence 配额失败，
+IPA 上传跳过，artifacts API 为 `[]`。两轮截图导出通过但均未取回／审核。
+已获批删除的 **10 个旧 IPA 云端产物共 10,615,840,970 字节**，对应本地备份逐份核验
+长度／SHA-256 后保留；其余证据未删。只是交付路线改变，**不声称 Actions 配额恢复**。
+完整清理、配额说明与两轮账本见
 [BUILD_STATUS.md](BUILD_STATUS.md)。
 
-第二轮
-[CI 36383757627](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36383757627)
-／[job 108804722901](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36383757627/job/108804722901)
-已 **COMPLETED / FAILURE**。原生 `TEST SUCCEEDED`、iPhoneOS `BUILD SUCCEEDED`、
-包验证 **SUCCESS**；失败仅 **Upload UI／Keep evidence** 两项，错误为
-`Artifact storage quota has been hit`；**IPA 上传因 UI 上传失败而 SKIPPED**。
-artifacts API 返回 `[]`：设备报告与 IPA 身份仅来自 **job 日志中的 runner 本地产物**，
-不是已上传、Windows 本地完整下载或交付验证，截图也未取回／未视觉审核。
-
-GitHub 官方计费说明：删除不清除本月已累计的存储用量，用量每 **6–12 小时**更新，
-等待不保证恢复上传。用户拒绝预先授权 private Release：“**等真的被阻止了，我们再来
-商讨对策**”。**实际第二轮阻塞已确认，停在此处，待与用户商讨，不额外重试或删除**。
-private Release 或用户处理账号配额仅为后续选项，均未获实施授权；未创建 Release，
-未更改权限／计费／额外存储，不自动换发布路线。
-
-本次仅按已提供的最终证据编辑文档，不执行命令、查询 CI 或下载。**PASS-NATIVE／
-PASS-PACKAGE**：第二轮测试、设备构建及 runner 包验证已通过；**BLOCKED-DELIVERY**：
-新 IPA 未上传／未完整下载与本地校验，截图未取回／未审核；**PENDING-DEVICE**：真实
-系统翻译仍未测量。旧 IPA 不能代替翻译版。源码已提交，最终文档留待父流程提交。
+**DELIVERED**：[../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa)
+已实际全量下载，父进程直接流式复验长度／SHA-256 一致，`ipaVerifiedLocally: true`，
+报告／清单齐全，无部分下载残留，旧包保留。IPA asset **594739443**，**1,414,801,288 字节**，
+SHA-256：`6043afbe68a84edd16d1314ecf4369f308bff8d7cf676392aee5eee6a950ca71`，
+不复用第二轮 runner 身份。另一台电脑可登录 **xwgnick 或具私有仓库读取权限的账号**，
+从上述 Release 下载并核验同一包。**PENDING-DEVICE**：真实系统翻译仍未测量。此次只改文档，
+不执行命令、查询 CI、追加触发或下载；以下功能说明不构成真机验证声明。
 
 ## 支持范围与开关
 
 - App 最低系统仍为 **iOS 17**；系统翻译仅在 **iOS 18+ 物理 iPhone**启用，且还需
   系统支持对应语言对。iOS 17、模拟器及 Mac Catalyst 走原文回退；模拟器不运行真实
-  Apple Translation。第二轮 job 日志确认 **0.4.0 / 11、Xcode 16.4／iphoneos18.5、
-  arm64、未签名**，最低系统并未提升到 18。真机专用翻译分支编译通过，不是已在
-  物理手机运行；报告与包均未下载到本地。
+  Apple Translation。本轮设备报告确认 **0.4.0 / 11、Xcode 16.4／iphoneos18.5、
+  arm64 Release、未签名**，最低系统并未提升到 18。真机专用翻译分支编译通过，
+  报告与包已下载并校验，但不是物理手机运行证据。
 - 这是系统 Translation 框架，不是 Apple Intelligence／通用 LLM 接入；不声称需要
   Apple Intelligence 资格、特定 LLM 或其下载。语言对能否使用，以系统可用性检查为准。
 - **Settings → 中文搜索增强**默认开启。只有生产 App 入口注入 `UserDefaults.standard`，
@@ -86,9 +82,9 @@ PASS-PACKAGE**：第二轮测试、设备构建及 runner 包验证已通过；*
 **不是“任何情况下绝无 OS 下载提示”的保证**，也绝不表示 App 会改走云端翻译。
 
 语言包占用**系统管理的存储空间**，不打进 IPA；本次语言包实际大小未测量。
-job 日志中的 runner 包报告确认 SigLIP 2 **768 维／modelVersion**、Places **2,943 要素／
-15,175,079 字节**及模型／地点包身份未变。runner IPA **1,414,801,289 字节**，完整
-IPA／Places SHA-256 见[构建账本](BUILD_STATUS.md)；**仅为日志报告值，不是本地下载校验**。
+本轮设备报告确认 SigLIP 2 **768 维／modelVersion**、Places **2,943 要素／
+15,175,079 字节**及模型／地点包身份未变，完整身份见[构建账本](BUILD_STATUS.md)。
+新 IPA 实测 **1,414,801,288 字节（约 1.4 GB）**，不是手机所需总空间；哈希见上。
 原文／译文在设备上处理，不上传到 App 服务器；UI 同时提示系统可能收集不含原文或
 译文的使用与性能指标，不能将“本地翻译”写成整个系统绝无任何网络活动。
 
@@ -129,9 +125,15 @@ PhotoKit 联网默认关闭且继续独立显式授权；本功能不改变图�
 仍在更旧模型／输入策略的记录才适用历史迁移要求，不能把它当成翻译升级要求；新照片或
 变化照片的正常增量索引另当别论。20 worker 的既有内存风险不因翻译消失，也不新增提速承诺。
 
-## 测试与四张截图：第二轮已通过，图像未取回／未审核
+## 本轮测试通过；仅四张新增截图已做有限审核
 
-第二轮 **36383757627** 实测：核心 **79 通过**；App **349 项：348 通过、1 项真机
+**本轮 36387878343 实测**：核心 **79 通过**；App **349 项：348 通过、1 项真机文件保护在
+模拟器跳过、0 失败（108.139 秒）**。**42 状态（0.404 秒）＋32 桥接（0.310 秒）＋
+5 展示（0.438 秒）全部通过**；GeneratedModelParity **8 通过（81.423 秒）**，真实
+20 槽生产工厂 **120 次预测／252 项测量**及原 **23／58** 门槛均通过且未改。
+这些子套件已计入 App 总数；独立 UI **7 通过（199.344 秒）**。耗时不是手机性能。
+
+**第二轮历史（36383757627），不作为本轮结果**：核心 **79 通过**；App **349 项：348 通过、1 项真机
 文件保护在模拟器跳过、0 失败（118.821 秒）**。新增 **42 状态（0.435 秒）＋32 桥接
 （1.384 秒）＋5 展示（0.561 秒）全部通过**，已计入 App 总数；独立既有 UI **7 通过
 （202.326 秒）**。GeneratedModelParity **8 通过（83.298 秒）**，包括真实 20 槽生产
@@ -153,31 +155,36 @@ PhotoKit 联网默认关闭且继续独立显式授权；本功能不改变图�
   不是零 PhotoKit API；夹具要求模拟器无照片读取权限，不符可跳过。没有真实照片请求、
   编码器／数据库／网络或真实系统下载弹窗，也不是 XCUI 点按钮验证。
 
-两轮截图生成测试／导出步骤均通过，随后上传因配额失败；**生成／导出通过不等于
-图像视觉审核**。没有取回任何本轮截图，也未逐项核验附件内容。
+前两轮截图生成／导出通过但上传因配额失败，图像仍未取回／审核。本轮 UI 截图 ZIP
+（asset **594739319**，**3,116,697 字节**）已下载并验证 SHA-256：
+`dddc29df265e55276ffa5dd66c4ae18de7ad53b9fbc2d51716382baa2a6f2942`。
+**仅提取以下四张新增 PNG**，已实际查看
+[1340×758 联系图](../build/ui-review/36387878343/query-translation-contact.jpg)；
+其他图片未提取／查看，ZIP 内截图总数未核实。5 项展示测试不是按钮 UI 自动化。
 
-| 新增预期附件（尚未取得） | 设计场景 | 状态 |
+| 已提取／审核附件 | 场景 | 实际审核范围 |
 | --- | --- | --- |
-| UIReview-query-translation-translated | 393×852，有效英文与“使用原文” | 上传受阻；未逐项核验／未下载／未审核 |
-| UIReview-query-translation-missing-pack | 393×852，缺包回退提示 | 上传受阻；未逐项核验／未下载／未审核 |
-| UIReview-query-translation-settings-language-pack | 393×852，实际 Settings 语言包区域 | 上传受阻；未逐项核验／未下载／未审核 |
-| UIReview-query-translation-translated-accessibility-large | 375×667，大字号英文结果提示 | 上传受阻；未逐项核验／未下载／未审核 |
+| UIReview-query-translation-translated | 393×852，普通翻译态 | 原中文、有效英文与“使用原文”可读。 |
+| UIReview-query-translation-missing-pack | 393×852，缺包回退 | 回退提示及设置入口可见。 |
+| UIReview-query-translation-settings-language-pack | 393×852，Settings 语言包区域 | 四个控件可见，完整页脚在屏内且可读，但较密。 |
+| UIReview-query-translation-translated-accessibility-large | 375×667，大字号 | 原文、英文与“使用原文”可见；下方空状态延伸到屏外，不是整页可见性证明。 |
 
-Settings 测试设计只约束四个控件行可见，不保证完整页脚可见或文本不截断。以上均无
-已下载截图／联系图可引用，不能声称已做视觉审核。两轮模拟器测试及第二轮设备编译通过均**不能证明
+Settings 自动测试只约束四个控件行；本次页脚可读来自实际图像审核，不把它扩写为自动
+断言或所有字号保证。没有点击／滚动验收；均为假翻译／零结果合成截图，不是 Apple
+译文质量或真实下载弹窗证据。本轮模拟器测试及设备编译通过仍**不能证明
 真机离线翻译可用性、真实译文／检索质量、首次／后续延迟或系统同意弹窗行为**。
 
-## 仅供交付后使用的手机步骤（当前没有本地新 IPA）
+## 现在可用已校验的新 IPA：签名安装后准备语言包
 
-1. 原生及 runner 包验证已通过，但交付受阻；等交付路线另行确认、新 IPA **实际完整
-  下载并核验本地长度／SHA-256** 后，再用新包，当前不要开始 build 11 安装。
+1. 使用页首**已实际完整下载并校验的 build 11 IPA**，无需再等 CI；另一台电脑先登录
+  私有 Release 下载并核验同一包。
    原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引；现有 build 10
    当前策略索引无需重新编码图像或地点，不为此升级跑索引。
 2. Settings → 保持“中文搜索增强”开启 → 选“简体中文 → 英文” → “下载离线语言包”，
    联网并同意系统提示，确认“离线语言包已就绪”；繁体需求另选繁体准备。准备未完成时
    可稍后复查，不能把返回 App 当作下载已完成；照片 Network 开关可一直 OFF。
 3. 回首页搜索 **身份证**，看实际英文提示与结果；可把显示的英文直接搜索作对照（英文
-   绕过翻译），再以中文搜索后的“使用原文”比较。不预设系统一定译为某个英文词或必定改善。
+  绕过翻译），再以中文搜索后的“使用原文”比较。不预设系统一定译为 “ID card” 或必定改善。
 4. 可选：语言包就绪后，关闭 Wi-Fi 和蜂窝等全部网络（飞行模式后确认 Wi-Fi 也关闭），
    在物理手机重新提交中文搜索，检查英文提示／结果。这才是该手机当次离线行为的证据；
    App 不检测断网，不等于所有语言／查询均获验证。不要求清库、全图库重跑或诊断截图。
