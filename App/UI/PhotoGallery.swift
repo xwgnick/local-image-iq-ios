@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import Photos
 import UIKit
 import ImageIQCore
@@ -163,6 +164,7 @@ struct PhotoGalleryViewer: View {
     @State private var loadedPhoto: LoadedPhoto?
     @State private var failedPhoto: FailedPhoto?
     @State private var shareItem: ShareItem?
+    @State private var debugToolsEnabled = false
     @State private var photoCheckSelection: PhotoCheckSelection?
     @State private var previewComparisonSelection: PreviewComparisonSelection?
 
@@ -177,6 +179,17 @@ struct PhotoGalleryViewer: View {
 
     private var request: Request {
         Request(id: selectedID, networkAllowed: networkAllowed, attempt: attempt)
+    }
+
+    // Interactive dismissal must unregister the actual comparison before the
+    // sheet binding releases it, just like paging or turning debug tools off.
+    private var previewComparisonBinding: Binding<PreviewComparisonSelection?> {
+        Binding(get: { previewComparisonSelection }, set: { selection in
+            if let previous = previewComparisonSelection, previous.state !== selection?.state {
+                state?.unregisterDebugPreview(previous.state)
+            }
+            previewComparisonSelection = selection
+        })
     }
 
     // A page change invalidates sharing immediately, even before the new task
@@ -208,6 +221,10 @@ struct PhotoGalleryViewer: View {
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .task(id: request) { await load(request) }
+        .onReceive(state?.$debugToolsEnabled.eraseToAnyPublisher() ?? Just(false).eraseToAnyPublisher()) { enabled in
+            debugToolsEnabled = enabled
+            if !enabled { clearPhotoCheck() }
+        }
         .onChange(of: selectedID) { _, _ in
             shareItem = nil
             clearPhotoCheck()
@@ -234,12 +251,14 @@ struct PhotoGalleryViewer: View {
             }
         }
         .sheet(item: $photoCheckSelection, onDismiss: { state?.dismissPhotoCheck() }) { selection in
-            if let state {
+            if debugToolsEnabled, let state, state.debugToolsEnabled {
                 PhotoCheckSheet(state: state, photoID: selection.id, initialQuery: selection.initialQuery)
             }
         }
-        .sheet(item: $previewComparisonSelection) { selection in
-            LocalPreviewComparisonSheet(state: selection.state)
+        .sheet(item: previewComparisonBinding) { selection in
+            if debugToolsEnabled, state?.debugToolsEnabled == true {
+                LocalPreviewComparisonSheet(state: selection.state)
+            }
         }
     }
 
@@ -276,28 +295,25 @@ struct PhotoGalleryViewer: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
                     shareButton
-                    checkButton
+                    if debugToolsEnabled { checkButton }
                 }
                 .fixedSize(horizontal: true, vertical: false)
                 VStack(spacing: 8) {
                     shareButton
-                    checkButton
+                    if debugToolsEnabled { checkButton }
                 }
             }
-            Button {
-                guard ids.contains(selectedID), library.currentRevision(id: selectedID) != nil else { return }
-                clearPhotoCheck()
-                previewComparisonSelection = PreviewComparisonSelection(
-                    id: selectedID, state: LocalPreviewComparisonState(service: library, photoID: selectedID))
-            } label: {
-                Label("本地预览对比", systemImage: "photo.on.rectangle.angled")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(PhotoGalleryStyle.accent)
-                    .frame(minHeight: 44)
+            if debugToolsEnabled, state?.debugToolsEnabled == true {
+                Button(action: openPreviewComparison) {
+                    Label("本地预览对比", systemImage: "photo.on.rectangle.angled")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(PhotoGalleryStyle.accent)
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasCheckableSelection)
+                .accessibilityIdentifier("compare-local-previews")
             }
-            .buttonStyle(.plain)
-            .disabled(!hasCheckableSelection)
-            .accessibilityIdentifier("compare-local-previews")
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
@@ -323,17 +339,13 @@ struct PhotoGalleryViewer: View {
 
     private var checkButton: some View {
         Group {
-            if let state {
+            if let state, state.debugToolsEnabled {
                 PhotoCheckPreviewButton(state: state, hasSelection: hasCheckableSelection, action: openPhotoCheck)
-            } else {
-                Button {} label: { PhotoCheckPreviewLabel() }
-                    .disabled(true)
-                    .opacity(0.4)
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Compare the saved index with a fresh local preview without changing the index")
+                    .accessibilityIdentifier("check-photo-preview")
             }
         }
-        .buttonStyle(.plain)
-        .accessibilityHint("Compare the saved index with a fresh local preview without changing the index")
-        .accessibilityIdentifier("check-photo-preview")
     }
 
     private var hasCheckableSelection: Bool {
@@ -343,12 +355,13 @@ struct PhotoGalleryViewer: View {
     }
 
     private func openPhotoCheck() {
-        guard let state, state.canRead, hasCheckableSelection else { return }
+        guard let state, state.debugToolsEnabled, state.canRead, hasCheckableSelection else { return }
         guard library.currentRevision(id: selectedID) != nil else {
             recheckAccess()
             return
         }
         state.dismissPhotoCheck()
+        guard state.debugToolsEnabled else { return }
         // Independent of the display-image task, so this action works while
         // that image is loading. The sheet never follows subsequent paging.
         // Reproduce the text actually used for these results; never translate it
@@ -356,8 +369,20 @@ struct PhotoGalleryViewer: View {
         photoCheckSelection = PhotoCheckSelection(id: selectedID, initialQuery: state.photoCheckInitialQuery)
     }
 
+    private func openPreviewComparison() {
+        guard let state, state.debugToolsEnabled, hasCheckableSelection else { return }
+        guard library.currentRevision(id: selectedID) != nil else { return }
+        clearPhotoCheck()
+        guard state.debugToolsEnabled else { return }
+        let preview = LocalPreviewComparisonState(service: library, photoID: selectedID)
+        guard state.registerDebugPreview(preview) else { return }
+        previewComparisonSelection = PreviewComparisonSelection(id: selectedID, state: preview)
+    }
+
     private func clearPhotoCheck() {
-        previewComparisonSelection?.state.cancelAndClear()
+        if let selection = previewComparisonSelection {
+            state?.unregisterDebugPreview(selection.state)
+        }
         previewComparisonSelection = nil
         photoCheckSelection = nil
         state?.dismissPhotoCheck()
@@ -472,9 +497,12 @@ private struct PhotoCheckPreviewButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) { PhotoCheckPreviewLabel() }
-            .disabled(!hasSelection || !state.canRead)
-            .opacity(hasSelection && state.canRead ? 1 : 0.4)
+        Button {
+            guard state.debugToolsEnabled else { return }
+            action()
+        } label: { PhotoCheckPreviewLabel() }
+        .disabled(!state.debugToolsEnabled || !hasSelection || !state.canRead)
+        .opacity(state.debugToolsEnabled && hasSelection && state.canRead ? 1 : 0.4)
     }
 }
 

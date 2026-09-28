@@ -5,6 +5,8 @@ struct SettingsSheet: View {
     @ObservedObject var state: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var confirmClear = false
+    @State private var advancedExpanded = false
+    @State private var diagnosticsExpanded = false
 
     var body: some View {
         NavigationStack {
@@ -12,8 +14,11 @@ struct SettingsSheet: View {
                 searchSection
                 translationSection
                 maintenanceSection
-                diagnosticsSection
+                if state.debugToolsEnabled {
+                    diagnosticsSection
+                }
                 privacySection
+                debugToolsSection
             }
             .scrollContentBackground(.hidden)
             .background(IQStyle.background)
@@ -37,6 +42,12 @@ struct SettingsSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onChange(of: state.debugToolsEnabled) { _, enabled in
+            if !enabled {
+                advancedExpanded = false
+                diagnosticsExpanded = false
+            }
+        }
         .background {
             if let service = state.appleTranslationService {
                 AppleQueryTranslationHost(service: service, purpose: .preparation)
@@ -79,7 +90,7 @@ struct SettingsSheet: View {
         } header: {
             Text("中文搜索")
         } footer: {
-            Text("中文及中英混合查询在手机上翻译成英文，纯英文不翻译。搜索前检查语言包，已知缺包时使用原文，不请求下载。准备语言包需联网、存储空间及系统确认，与照片 iCloud 开关无关。系统管理的语言包若在检查后被移除，仍可能出现系统下载提示。译文显示在结果上方，可切回原文。系统可能收集不含原文或译文的使用与性能指标。")
+            Text("中文或中英混合搜索在手机上译成英文，纯英文不变；可在结果上方切回原文。\n\n搜索前检查离线语言包，已知缺包时用原文，不请求下载。下载需联网、存储空间及系统确认，与照片 iCloud 设置无关。若语言包在检查后被移除，仍可能出现系统下载提示。")
         }
         .listRowBackground(IQStyle.surface)
     }
@@ -93,51 +104,54 @@ struct SettingsSheet: View {
             .pickerStyle(.menu)
             .accessibilityIdentifier("result-limit")
 
-            DisclosureGroup("Advanced") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Location contribution")
-                        .font(.subheadline.weight(.semibold))
-                    Text(state.locationWeight, format: .percent.precision(.fractionLength(0)))
-                        .font(.title2.weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(IQStyle.accent)
-                    Slider(value: $state.locationWeight, in: 0...1, step: 0.01) {
+            if state.debugToolsEnabled {
+                DisclosureGroup("Advanced", isExpanded: $advancedExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
                         Text("Location contribution")
+                            .font(.subheadline.weight(.semibold))
+                        Text(state.locationWeight, format: .percent.precision(.fractionLength(0)))
+                            .font(.title2.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(IQStyle.accent)
+                        Slider(value: $state.locationWeight, in: 0...1, step: 0.01) {
+                            Text("Location contribution")
+                        }
+                        .accessibilityValue(state.locationWeight.formatted(.percent.precision(.fractionLength(0))))
+                        .accessibilityIdentifier("location-weight")
+                        Text("0% uses image similarity; 100% uses place-label similarity. This changes ranking, not which places are allowed.")
+                            .font(.footnote)
+                            .foregroundStyle(IQStyle.secondary)
+                        Text("Labels use GPS saved with a photo, not your live location. Raw coordinates aren't used for ranking.")
+                            .font(.footnote)
+                            .foregroundStyle(IQStyle.secondary)
+                        Text(placeAvailability)
+                            .font(.footnote)
+                            .foregroundStyle(IQStyle.secondary)
+                        Text("Saved index: \(state.summary.locatedCount.formatted()) of \(state.summary.indexedCount.formatted()) photos had place labels at the last library check. This is not a GPS count; scan observations are in Library.")
+                            .font(.footnote)
+                            .foregroundStyle(IQStyle.secondary)
                     }
-                    .accessibilityValue(state.locationWeight.formatted(.percent.precision(.fractionLength(0))))
-                    .accessibilityIdentifier("location-weight")
-                    Text("0% uses image similarity; 100% uses place-label similarity. This changes ranking, not which places are allowed.")
-                        .font(.footnote)
-                        .foregroundStyle(IQStyle.secondary)
-                    Text("Labels use GPS saved with a photo, not your live location. Raw coordinates aren't used for ranking.")
-                        .font(.footnote)
-                        .foregroundStyle(IQStyle.secondary)
-                    Text(placeAvailability)
-                        .font(.footnote)
-                        .foregroundStyle(IQStyle.secondary)
-                    Text("Saved index: \(state.summary.locatedCount.formatted()) of \(state.summary.indexedCount.formatted()) photos had place labels at the last library check. This is not a GPS count; scan observations are in Library.")
-                        .font(.footnote)
-                        .foregroundStyle(IQStyle.secondary)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 6)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 6)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("About scores").font(.subheadline.weight(.semibold))
-                    Text("Scores measure similarity, not probability. Place scores are centered over distinct place labels before blending with image scores. Missing labels add zero place contribution; at 100%, those photos score zero and can rank above negative place matches.")
-                        .font(.footnote)
-                        .foregroundStyle(IQStyle.secondary)
-                    if !state.results.isEmpty {
-                        Text("Current match scores").font(.caption.weight(.semibold))
-                        ForEach(Array(state.results.enumerated()), id: \.element.id) { entry in
-                            LabeledContent("Match \(entry.offset + 1)", value: entry.element.score.formatted(.number.precision(.fractionLength(3))))
-                                .font(.footnote)
-                                .monospacedDigit()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("About scores").font(.subheadline.weight(.semibold))
+                        Text("Scores measure similarity, not probability. Place scores are centered over distinct place labels before blending with image scores. Missing labels add zero place contribution; at 100%, those photos score zero and can rank above negative place matches.")
+                            .font(.footnote)
+                            .foregroundStyle(IQStyle.secondary)
+                        if !state.results.isEmpty {
+                            Text("Current match scores").font(.caption.weight(.semibold))
+                            ForEach(Array(state.results.enumerated()), id: \.element.id) { entry in
+                                LabeledContent("Match \(entry.offset + 1)", value: entry.element.score.formatted(.number.precision(.fractionLength(3))))
+                                    .font(.footnote)
+                                    .monospacedDigit()
+                            }
                         }
                     }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 6)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 6)
+                .accessibilityIdentifier("debug-advanced")
             }
         } header: {
             Text("Search")
@@ -152,18 +166,20 @@ struct SettingsSheet: View {
             Button("Refresh library", systemImage: "arrow.clockwise") { state.refresh() }
                 .disabled(state.isBusy)
                 .frame(minHeight: 44)
+                .accessibilityIdentifier("refresh-library")
             Button(role: .destructive) { confirmClear = true } label: {
                 Label("Clear index", systemImage: "trash")
                     .frame(minHeight: 44)
             }
             .disabled(state.isBusy)
+            .accessibilityIdentifier("clear-index")
             if state.activity == .refreshing || state.activity == .clearing {
                 ProgressView(state.activity == .clearing ? "Clearing local index…" : "Refreshing library…")
             }
             if let error = state.errorMessage {
                 Text(state.summary.modelIssue != nil || error.hasPrefix("Models unavailable:") || error.hasPrefix("Model contract mismatch:")
-                     ? "Requires a model-enabled build. You can still manage Photos access in Library."
-                     : "The last action couldn't finish. Check Photos access in Library, then refresh and try again; technical details are below.")
+                     ? "Search isn't available right now. You can still manage Photos access in Library."
+                     : "The last action couldn't finish. Check Photos access in Library, then refresh and try again. Your original photos are unchanged.")
                     .font(.footnote)
                     .foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -178,13 +194,14 @@ struct SettingsSheet: View {
 
     private var diagnosticsSection: some View {
         Section {
-            DisclosureGroup("Diagnostics") {
+            DisclosureGroup("Diagnostics", isExpanded: $diagnosticsExpanded) {
                 diagnostic("Status", state.status)
                 diagnostic("Model version", state.summary.modelVersion ?? "Not available")
                 if let issue = state.summary.modelIssue { diagnostic("Model check", issue) }
                 diagnostic("Offline places", state.summary.placesDescription)
                 if let error = state.errorMessage { diagnostic("Last operation issue", error) }
             }
+            .accessibilityIdentifier("debug-diagnostics")
         }
         .listRowBackground(IQStyle.surface)
     }
@@ -196,6 +213,23 @@ struct SettingsSheet: View {
                 .foregroundStyle(IQStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.vertical, 4)
+            Text("Apple's translation system may collect usage and performance metrics that do not include your original text or its translation.")
+                .font(.subheadline)
+                .foregroundStyle(IQStyle.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.vertical, 4)
+        }
+        .listRowBackground(IQStyle.surface)
+    }
+
+    private var debugToolsSection: some View {
+        Section {
+            Toggle("Show debug tools", isOn: $state.debugToolsEnabled)
+                .accessibilityIdentifier("show-debug-tools")
+        } header: {
+            Text("Debug tools")
+        } footer: {
+            Text("This switch is session-only and will be off on the next launch. Hiding tools keeps your search results and does not reset settings changed with the tools.")
         }
         .listRowBackground(IQStyle.surface)
     }

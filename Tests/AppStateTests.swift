@@ -8,6 +8,7 @@ final class AppStateTests: XCTestCase {
     func testDefaultsAreExplicitCloudOptOutAndSixtyPercentLocation() {
         let state = AppState(worker: StateTestWorker(), authorizationStatus: { .notDetermined })
         XCTAssertFalse(state.allowICloudDownload)
+        XCTAssertFalse(state.debugToolsEnabled)
         XCTAssertEqual(state.locationWeight, 0.6)
         XCTAssertEqual(state.resultLimit, 3)
         XCTAssertTrue(state.results.isEmpty)

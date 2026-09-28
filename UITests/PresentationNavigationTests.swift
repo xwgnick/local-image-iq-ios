@@ -43,13 +43,13 @@ final class PresentationNavigationTests: XCTestCase {
         assertHomeControls()
     }
 
-    func testClearQueryKeepsKeyboardAndSettingsAdvancedStartsCollapsed() {
+    func testClearQueryKeepsKeyboardAndSettingsAdvancedStartsCollapsed() throws {
         launch()
         assertHomeControls()
         let field = app.textFields["photo-query"]
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        field.typeText("TEST FIXTURE coast")
+        typeExactly("TEST FIXTURE coast", into: field)
         let clear = app.buttons["clear-query"]
         XCTAssertTrue(clear.waitForExistence(timeout: 5))
         clear.tap()
@@ -59,11 +59,14 @@ final class PresentationNavigationTests: XCTestCase {
         let value = field.value as? String
         XCTAssertTrue(value == "" || value == field.placeholderValue)
         XCTAssertTrue(app.keyboards.firstMatch.exists, "Clear must retain search focus")
+        let preservedQuery = "TEST FIXTURE coast"
+        typeExactly(preservedQuery, into: field)
         let keyboardDone = app.buttons["keyboard-done"]
         XCTAssertTrue(keyboardDone.waitForExistence(timeout: 5))
         keyboardDone.tap()
         expectAbsent(app.keyboards.firstMatch)
         XCTAssertFalse(app.buttons["hide-search-keyboard"].exists)
+        XCTAssertEqual(field.value as? String, preservedQuery)
 
         app.buttons["open-settings"].tap()
         let done = app.buttons["close-settings"]
@@ -73,18 +76,39 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
         // Production uses a menu Picker with Top 3 / Top 12, not a segmented
         // control. Check its stable identifier; do not guess private menu nodes.
+        let form = try sheetForm()
         let advanced = app.buttons["Advanced"]
-        XCTAssertTrue(advanced.waitForExistence(timeout: 5))
         let weight = app.sliders["location-weight"]
-        XCTAssertFalse(weight.exists, "Advanced must start collapsed")
+        for element in settingsDebugElements { expectAbsent(element) }
         attach("settings-live")
+        picker.tap()
+        let topTwelve = app.buttons["Top 12"]
+        expectHittable(topTwelve)
+        topTwelve.tap()
+        expectResultLimit("Top 12", picker: picker)
+
+        assertSettingsDebugOff(in: form)
+        setDebugTools(true, in: form)
+        scrollTo(advanced, in: form, swipeUp: false)
+        XCTAssertFalse(weight.exists, "Advanced must start collapsed after opting in")
         advanced.tap()
-        XCTAssertTrue(weight.waitForExistence(timeout: 5), "Expanding Advanced reveals the actual slider")
+        scrollTo(weight, in: form)
+        XCTAssertEqual(weight.value as? String, "60%", "The actual location-weight slider keeps its default")
+        scrollTo(advanced, in: form, swipeUp: false)
         advanced.tap()
         expectAbsent(weight)
+        advanced.tap()
+        scrollTo(weight, in: form)
+        scrollTo(app.buttons["Diagnostics"], in: form)
+        // Advanced is expanded: hiding tools must remove it, not merely collapse it.
+        setDebugTools(false, in: form)
+        assertSettingsDebugOff(in: form)
+        scrollTo(picker, in: form, swipeUp: false)
+        expectResultLimit("Top 12", picker: picker)
         done.tap()
         expectAbsent(done)
         expectHittable(field)
+        XCTAssertEqual(field.value as? String, preservedQuery)
         assertHomeControls()
     }
 
@@ -105,6 +129,84 @@ final class PresentationNavigationTests: XCTestCase {
         expectHittable(settings)
     }
 
+    func testOneGlobalDebugToggleStartsOffAndResetsOnRelaunch() throws {
+        launch()
+        app.buttons["open-library"].tap()
+        let libraryDone = app.buttons["close-library"]
+        expectHittable(libraryDone)
+        assertUserLibrary(in: try sheetForm())
+        libraryDone.tap()
+        expectAbsent(libraryDone)
+
+        app.buttons["open-settings"].tap()
+        let settingsDone = app.buttons["close-settings"]
+        expectHittable(settingsDone)
+        let settingsForm = try sheetForm()
+        assertSettingsDebugOff(in: settingsForm)
+        setDebugTools(true, in: settingsForm)
+        settingsDone.tap()
+        expectAbsent(settingsDone)
+
+        app.buttons["open-library"].tap()
+        expectHittable(libraryDone)
+        XCTAssertTrue(app.buttons["authorize-photos"].waitForExistence(timeout: 5))
+        let details = app.buttons["Details"]
+        scrollTo(details, in: try sheetForm())
+        XCTAssertFalse(debugToggle.exists, "Library uses the single Settings toggle, not a second switch")
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        libraryDone.tap()
+        expectAbsent(libraryDone)
+
+        app.buttons["open-settings"].tap()
+        expectHittable(settingsDone)
+        scrollTo(debugToggle, in: try sheetForm())
+        expectSwitch(debugToggle, enabled: true)
+        // Terminate while ON: turning it off first would not test session-only reset.
+        app.terminate()
+        launch()
+        app.buttons["open-settings"].tap()
+        expectHittable(settingsDone)
+        assertSettingsDebugOff(in: try sheetForm())
+        settingsDone.tap()
+        expectAbsent(settingsDone)
+
+        app.buttons["open-library"].tap()
+        expectHittable(libraryDone)
+        assertUserLibrary(in: try sheetForm())
+        libraryDone.tap()
+        expectAbsent(libraryDone)
+        assertHomeControls()
+    }
+
+    func testChineseTranslationControlsRemainAccessibleWithDebugToolsOff() throws {
+        launch()
+        app.buttons["open-settings"].tap()
+        let done = app.buttons["close-settings"]
+        expectHittable(done)
+        let form = try sheetForm()
+        assertSettingsDebugOff(in: form)
+        let chineseSearch = app.switches["chinese-search-enabled"]
+        scrollTo(chineseSearch, in: form, swipeUp: false, expectingAbsent: settingsDebugElements)
+        XCTAssertTrue(chineseSearch.isEnabled)
+        let language = app.descendants(matching: .any).matching(identifier: "translation-language").firstMatch
+        scrollTo(language, in: form, expectingAbsent: settingsDebugElements)
+        XCTAssertTrue(language.isEnabled)
+        let availability = app.staticTexts["translation-availability"]
+        scrollTo(availability, in: form, expectingAbsent: settingsDebugElements)
+        XCTAssertFalse(availability.label.isEmpty)
+        let prepare = app.buttons["prepare-translation"]
+        scrollTo(prepare, in: form, expectingAbsent: settingsDebugElements, allowDisabled: true)
+        // The real simulator may report unsupported and disable preparation.
+        // Reachability is required; do not download a pack or fake support.
+        if availability.label == "需要 iOS 18+ 真机；仍可原文搜索" {
+            XCTAssertFalse(prepare.isEnabled)
+        }
+        assertSettingsDebugOff(in: form)
+        done.tap()
+        expectAbsent(done)
+        assertHomeControls()
+    }
+
     private func launch(largeText: Bool = false) {
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-UIPreferredContentSizeCategoryName",
@@ -113,6 +215,102 @@ final class PresentationNavigationTests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         app.launch()
         XCTAssertTrue(app.buttons["open-settings"].waitForExistence(timeout: 10))
+    }
+
+    private var debugToggle: XCUIElement { app.switches["show-debug-tools"] }
+
+    private var settingsDebugElements: [XCUIElement] {
+        [app.descendants(matching: .any).matching(identifier: "debug-advanced").firstMatch,
+         app.descendants(matching: .any).matching(identifier: "debug-diagnostics").firstMatch,
+         app.buttons["Advanced"], app.buttons["Diagnostics"], app.sliders["location-weight"]]
+    }
+
+    private func sheetForm() throws -> XCUIElement {
+        // SwiftUI Form is backed by a collection/table/scroll view depending on
+        // iOS. Only use a hittable sheet container, never the home library-scroll.
+        let candidates = app.collectionViews.allElementsBoundByIndex
+            + app.tables.allElementsBoundByIndex
+            + app.scrollViews.matching(NSPredicate(format: "identifier != %@", "library-scroll")).allElementsBoundByIndex
+        return try XCTUnwrap(candidates.first(where: { $0.exists && $0.isHittable }),
+                             "The presented sheet must expose its real scrollable Form")
+    }
+
+    private func scrollTo(_ element: XCUIElement, in form: XCUIElement, swipeUp: Bool = true,
+                          expectingAbsent hidden: [XCUIElement] = [],
+                          allowDisabled: Bool = false,
+                          file: StaticString = #filePath, line: UInt = #line) {
+        // At most eight real Form gestures per lookup, TEST ONLY. Check each
+        // viewport so lazy off-screen rows cannot alone prove debug UI is absent.
+        for attempt in 0...8 {
+            for candidate in hidden {
+                XCTAssertFalse(candidate.exists, "Debug controls must be absent, not just off screen",
+                               file: file, line: line)
+            }
+            if element.exists && element.isHittable { return }
+            // Unsupported translation can expose a disabled button without a
+            // hit point. Still require its complete, nonempty frame on screen.
+            if allowDisabled, element.exists, !element.isEnabled, !element.frame.isEmpty,
+               form.frame.contains(element.frame), app.frame.contains(element.frame) { return }
+            if attempt < 8 {
+                if swipeUp { form.swipeUp() } else { form.swipeDown() }
+            }
+        }
+        XCTFail("Control was not reachable within eight sheet Form swipes: \(element)", file: file, line: line)
+    }
+
+    private func expectSwitch(_ element: XCUIElement, enabled: Bool,
+                              file: StaticString = #filePath, line: UInt = #line) {
+        let changed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", enabled ? "1" : "0"), object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed, file: file, line: line)
+    }
+
+    private func setDebugTools(_ enabled: Bool, in form: XCUIElement) {
+        scrollTo(debugToggle, in: form)
+        XCTAssertEqual(app.switches.matching(identifier: "show-debug-tools").count, 1)
+        expectSwitch(debugToggle, enabled: !enabled)
+        debugToggle.tap() // Never tap switches.firstMatch: Chinese search and iCloud are unrelated.
+        expectSwitch(debugToggle, enabled: enabled)
+    }
+
+    private func assertSettingsDebugOff(in form: XCUIElement) {
+        let picker = app.descendants(matching: .any).matching(identifier: "result-limit").firstMatch
+        scrollTo(picker, in: form, swipeUp: false, expectingAbsent: settingsDebugElements)
+        scrollTo(debugToggle, in: form, expectingAbsent: settingsDebugElements)
+        XCTAssertEqual(app.switches.matching(identifier: "show-debug-tools").count, 1)
+        expectSwitch(debugToggle, enabled: false)
+    }
+
+    private func assertUserLibrary(in form: XCUIElement) {
+        XCTAssertTrue(app.navigationBars["Library"].exists)
+        let details = app.descendants(matching: .any).matching(identifier: "debug-library-details").firstMatch
+        let hidden = [details, app.buttons["Details"], debugToggle]
+        scrollTo(app.buttons["authorize-photos"], in: form, swipeUp: false, expectingAbsent: hidden)
+        let cloud = app.switches["icloud-download-opt-in"]
+        scrollTo(cloud, in: form, expectingAbsent: hidden)
+        expectSwitch(cloud, enabled: false)
+        // Details would follow the iCloud footer; inspect that lower viewport too.
+        form.swipeUp()
+        for element in hidden { expectAbsent(element) }
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    private func expectResultLimit(_ title: String, picker: XCUIElement) {
+        // SwiftUI menu Picker exposes the selected title as its label or value.
+        let selected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", title, title), object: picker)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+    }
+
+    private func typeExactly(_ text: String, into field: XCUIElement) {
+        // Match SearchKeyboardTests: synchronize every key, never repair lost input.
+        var expected = ""
+        for character in text {
+            field.typeText(String(character))
+            expected.append(character)
+            let entered = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: field)
+            XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 5), .completed)
+        }
     }
 
     private func assertHomeControls(file: StaticString = #filePath, line: UInt = #line) {

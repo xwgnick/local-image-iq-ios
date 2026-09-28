@@ -20,19 +20,46 @@ struct PhotoCheckSheet: View {
     }
 
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var isChecking: Bool { state.activity == .checkingPhoto }
+    private var isChecking: Bool { state.debugToolsEnabled && state.activity == .checkingPhoto }
     private var canCheck: Bool {
-        !state.isBusy && state.canRead && !photoID.isEmpty && !trimmedQuery.isEmpty
+        state.debugToolsEnabled && !state.isBusy && state.canRead && !photoID.isEmpty && !trimmedQuery.isEmpty
     }
 
     private var currentReport: PhotoDiagnosticReport? {
-        guard let report = state.photoCheckReport,
+        guard state.debugToolsEnabled, let report = state.photoCheckReport,
               report.photoID == photoID,
               report.query.utf8.elementsEqual(query.utf8) else { return nil }
         return report
     }
 
     var body: some View {
+        Group {
+            if state.debugToolsEnabled { debugContent }
+        }
+        .tint(IQStyle.accent)
+        .preferredColorScheme(.dark)
+        .onChange(of: state.debugToolsEnabled, initial: true) { _, enabled in
+            guard !enabled else { return }
+            isQueryFocused = false
+            state.dismissPhotoCheck()
+            dismiss()
+        }
+        .onChange(of: query) { previous, updated in
+            // Local edits only: never write back to the gallery's search query
+            // or seed this field from a report, which could create a feedback loop.
+            guard previous != updated else { return }
+            state.dismissPhotoCheck()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                isQueryFocused = false
+                state.dismissPhotoCheck()
+            }
+        }
+        .onDisappear { state.dismissPhotoCheck() }
+    }
+
+    private var debugContent: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
@@ -82,21 +109,6 @@ struct PhotoCheckSheet: View {
                 }
             }
         }
-        .tint(IQStyle.accent)
-        .preferredColorScheme(.dark)
-        .onChange(of: query) { previous, updated in
-            // Local edits only: never write back to the gallery's search query
-            // or seed this field from a report, which could create a feedback loop.
-            guard previous != updated else { return }
-            state.dismissPhotoCheck()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active {
-                isQueryFocused = false
-                state.dismissPhotoCheck()
-            }
-        }
-        .onDisappear { state.dismissPhotoCheck() }
     }
 
     private var queryControls: some View {

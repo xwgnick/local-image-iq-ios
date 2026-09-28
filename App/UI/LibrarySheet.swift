@@ -8,6 +8,8 @@ struct LibrarySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var showLimitedPicker = false
+    @State private var detailsExpanded = false
+    @State private var placesExpanded = false
 
     var body: some View {
         NavigationStack {
@@ -21,7 +23,9 @@ struct LibrarySheet: View {
                 }
                 errorSection
                 cloudSection
-                detailsSection
+                if state.debugToolsEnabled {
+                    detailsSection
+                }
             }
             .scrollContentBackground(.hidden)
             .background(IQStyle.background)
@@ -38,6 +42,12 @@ struct LibrarySheet: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onChange(of: state.debugToolsEnabled) { _, enabled in
+            if !enabled {
+                detailsExpanded = false
+                placesExpanded = false
+            }
+        }
         .sheet(isPresented: $showLimitedPicker, onDismiss: {
             // The completion only dismisses. Refresh once here, including swipe dismissal.
             state.libraryChanged()
@@ -112,9 +122,9 @@ struct LibrarySheet: View {
 
             if modelProblem != nil {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("Requires a model-enabled build", systemImage: "shippingbox")
+                    Label("Search isn't ready", systemImage: "exclamationmark.circle")
                         .font(.headline)
-                    Text("Install a build with the on-device models to index and search. You can still choose Photos access. Technical information is in Details.")
+                    Text("Indexing and search are unavailable right now. You can still choose Photos access; your original photos are unchanged.")
                         .font(.subheadline)
                         .foregroundStyle(IQStyle.secondary)
                 }
@@ -176,7 +186,9 @@ struct LibrarySheet: View {
             if state.progress.failed > 0 {
                 LabeledContent("Read errors", value: state.progress.failed.formatted())
             }
-            placeProgress
+            if state.debugToolsEnabled {
+                placeProgress
+            }
             Text(state.activity == .indexing
                  ? "This scan only; saved index totals update when it finishes."
                  : "Last scan only, including any work completed before stopping. Not whole-library totals.")
@@ -195,7 +207,7 @@ struct LibrarySheet: View {
     }
 
     private var placeProgress: some View {
-        DisclosureGroup {
+        DisclosureGroup(isExpanded: $placesExpanded) {
             if state.progress.placeChecked > 0 {
                 LabeledContent("Locations checked", value: state.progress.placeChecked.formatted())
                 LabeledContent("With GPS", value: state.progress.gpsCount.formatted())
@@ -227,6 +239,7 @@ struct LibrarySheet: View {
                     .foregroundStyle(IQStyle.secondary)
             }
         }
+        .accessibilityIdentifier("debug-scan-places")
     }
 
     @ViewBuilder private var errorSection: some View {
@@ -258,14 +271,14 @@ struct LibrarySheet: View {
         } header: {
             Text("iCloud")
         } footer: {
-            Text("Indexing tries a high-quality local preview at short edge 224 first, then a fast local preview if unavailable. Originals are not requested. Only when both are unavailable and this is on may Photos download image data using Wi-Fi or mobile data; Photos controls the download size. Off keeps both preview requests offline.")
+            Text("Indexing uses previews already on your phone. Off means no image downloads for indexing. On lets Photos download missing image data over Wi-Fi or mobile data only when no local preview is available. Photos controls the download size; the app doesn't request originals.")
         }
         .listRowBackground(IQStyle.surface)
     }
 
     private var detailsSection: some View {
         Section {
-            DisclosureGroup("Details") {
+            DisclosureGroup("Details", isExpanded: $detailsExpanded) {
                 diagnostic("Status", state.status)
                 LabeledContent("Authorized photos", value: state.summary.authorizedCount.formatted())
                 LabeledContent("Current index at last check", value: state.summary.indexedCount.formatted())
@@ -283,6 +296,8 @@ struct LibrarySheet: View {
                 if let error = state.errorMessage, error != modelProblem {
                     diagnostic("Last operation issue", error)
                 }
+                diagnostic("Preview requests", "Indexing tries a high-quality local preview at short edge 224 first, then a fast local preview if unavailable. Originals are not requested. Only when both are unavailable and iCloud access is on may Photos download image data using Wi-Fi or mobile data; Photos controls the download size. Off keeps both preview requests offline.")
+                    .accessibilityIdentifier("debug-indexing-info")
                 Text("\(PhotoIndexWorker.indexingWorkerCount) image workers · reads and encodes photos concurrently")
                     .font(.footnote)
                     .foregroundStyle(IQStyle.secondary)
@@ -296,6 +311,7 @@ struct LibrarySheet: View {
                     .foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .accessibilityIdentifier("debug-library-details")
         }
         .listRowBackground(IQStyle.surface)
     }

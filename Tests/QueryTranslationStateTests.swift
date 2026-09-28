@@ -317,6 +317,8 @@ final class QueryTranslationStateTests: XCTestCase {
         state.selection = AppState.Selection(id: selectedID)
         XCTAssertEqual(state.photoCheckInitialQuery, QueryTranslationFixtures.english)
 
+        XCTAssertFalse(state.debugToolsEnabled)
+        state.debugToolsEnabled = true // Only this test invokes the debug-only diagnostic operation.
         for diagnosticQuery in [state.photoCheckInitialQuery, " \t诊断编辑后的中文查询\n "] {
             state.checkPhoto(id: selectedID, query: diagnosticQuery)
             await drain(context)

@@ -355,6 +355,8 @@ final class PhotoCheckPresentationTests: XCTestCase {
         let authorizationBefore = PhotoLibraryClient.authorization
         let worker = PhotoCheckTestWorker()
         let state = AppState(worker: worker, authorizationStatus: { .notDetermined })
+        XCTAssertFalse(state.debugToolsEnabled)
+        state.debugToolsEnabled = true // This snapshot explicitly reviews the debug-only viewer control.
         let hit = PhotoCheckFixtures.hits[0]
         XCTAssertFalse(state.canRead)
         XCTAssertNil(state.library.currentRevision(id: hit.id))
@@ -379,6 +381,8 @@ final class PhotoCheckPresentationTests: XCTestCase {
     private func readyState(worker: PhotoCheckTestWorker) async -> AppState {
         // Injected authorization only gates AppState. It does not grant PhotoKit access.
         let state = AppState(worker: worker, authorizationStatus: { .authorized })
+        XCTAssertFalse(state.debugToolsEnabled)
+        state.debugToolsEnabled = true // Positive diagnostic contracts opt in; production defaults stay off.
         state.refresh()
         await state.waitUntilIdle()
         XCTAssertTrue(state.modelsReady)

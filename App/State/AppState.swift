@@ -8,6 +8,18 @@ final class AppState: ObservableObject {
     enum Activity: Equatable { case refreshing, indexing, searching, clearing, checkingPhoto, preparingTranslation }
     struct Selection: Identifiable { let id: String }
 
+    /// Session-only presentation preference: each app launch starts in user mode.
+    /// Hiding tools must never reset search settings or cancel normal work.
+    @Published var debugToolsEnabled = false {
+        didSet {
+            guard oldValue != debugToolsEnabled, !debugToolsEnabled else { return }
+            dismissPhotoCheck()
+            debugPreviewState?.cancelAndClear()
+            debugPreviewState = nil
+        }
+    }
+    private weak var debugPreviewState: LocalPreviewComparisonState?
+
     @Published private(set) var authorization = PhotoLibraryClient.authorization
     @Published private(set) var summary = LibrarySummary()
     @Published private(set) var results: [SearchHit] = []
@@ -236,7 +248,7 @@ final class AppState: ObservableObject {
     /// The worker reads a separate read-only SQLite snapshot and never saves the
     /// new vector. Closing/editing the sheet invalidates even late completions.
     func checkPhoto(id: String, query: String) {
-        guard isForeground, canRead, !isBusy,
+        guard debugToolsEnabled, isForeground, canRead, !isBusy,
               !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let token = UUID()
         photoCheckID = token
@@ -253,6 +265,20 @@ final class AppState: ObservableObject {
         photoCheckReport = nil
         photoCheckIssue = nil
         if activity == .checkingPhoto { operationTask?.cancel() }
+    }
+
+    /// The viewer owns the sheet; this weak registration also clears its pixels
+    /// immediately when the global switch is turned off, before a UI update.
+    func registerDebugPreview(_ preview: LocalPreviewComparisonState) -> Bool {
+        guard debugToolsEnabled else { preview.cancelAndClear(); return false }
+        if debugPreviewState !== preview { debugPreviewState?.cancelAndClear() }
+        debugPreviewState = preview
+        return true
+    }
+
+    func unregisterDebugPreview(_ preview: LocalPreviewComparisonState) {
+        preview.cancelAndClear()
+        if debugPreviewState === preview { debugPreviewState = nil }
     }
 
     func cancel() {
@@ -322,7 +348,7 @@ final class AppState: ObservableObject {
                         self.status = availability.message
                     }
                 case .photoCheck(let report, let checkID):
-                    if self.photoCheckID == checkID {
+                    if self.debugToolsEnabled, self.photoCheckID == checkID {
                         self.photoCheckReport = report
                         self.status = "Photo check complete. Your index is unchanged."
                     }
@@ -337,7 +363,7 @@ final class AppState: ObservableObject {
                         : "语言包准备未完成。请检查网络和设备空间后重试；原文搜索仍然可用。"
                     self.status = "Translation preparation stopped. Photo downloads remain unchanged."
                 } else if activity == .checkingPhoto {
-                    if !(error is CancellationError), !Task.isCancelled {
+                    if self.debugToolsEnabled, !(error is CancellationError), !Task.isCancelled {
                         self.photoCheckIssue = "Could not finish this check. Keep the app open and confirm this photo is still accessible, then try again."
                     }
                     self.status = "Photo check stopped. Your index is unchanged."
