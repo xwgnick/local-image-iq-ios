@@ -109,13 +109,6 @@ jobs:
           if [ -d build/TestResults.xcresult ]; then
             xcrun xcresulttool export attachments --path build/TestResults.xcresult --output-path build/UIReview
           fi
-      - name: Upload native UI review evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: local-image-iq-ui-review-${{ github.run_number }}
-          if-no-files-found: warn
-          path: build/UIReview
       - name: Build native arm64 device app without Apple credentials
         if: inputs.build_device_ipa
         run: |
@@ -126,6 +119,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
             ENABLE_DEBUG_DYLIB=NO
           node scripts/package_device.mjs build/DeviceProducts/Release-iphoneos/LocalImageIQ.app build/device
+      # Compile/validate BOTH simulator and device code before any artifact upload.
+      # An exhausted upload quota must not hide device-only compiler diagnostics.
+      - name: Upload native UI review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-image-iq-ui-review-${{ github.run_number }}
+          if-no-files-found: warn
+          path: build/UIReview
       - name: Upload unsigned iPhone IPA separately
         if: inputs.build_device_ipa && success()
         uses: actions/upload-artifact@v4
