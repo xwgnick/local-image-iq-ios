@@ -222,6 +222,9 @@ struct PhotoGalleryViewer: View {
         .statusBarHidden()
         .task(id: request) { await load(request) }
         .onReceive(state?.$debugToolsEnabled.eraseToAnyPublisher() ?? Just(false).eraseToAnyPublisher()) { enabled in
+            // A rebuilt subscription can replay the same value. Do not clear
+            // AppState's published diagnostics again on a replay of user mode.
+            guard enabled != debugToolsEnabled else { return }
             debugToolsEnabled = enabled
             if !enabled { clearPhotoCheck() }
         }

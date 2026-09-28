@@ -270,6 +270,9 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertEqual(app.switches.matching(identifier: "show-debug-tools").count, 1)
         expectSwitch(debugToggle, enabled: !enabled)
         debugToggle.tap() // Never tap switches.firstMatch: Chinese search and iCloud are unrelated.
+        // Inserting Advanced/Diagnostics above the bottom switch can move it
+        // out of the Form's realized viewport. Reacquire it after layout changes.
+        scrollTo(debugToggle, in: form)
         expectSwitch(debugToggle, enabled: enabled)
     }
 

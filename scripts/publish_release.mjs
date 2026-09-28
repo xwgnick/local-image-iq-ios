@@ -354,6 +354,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env,
       await checkIdentity(client, run); await checkCollisions(client, run, release.id);
       boundary = 'publication'; release.state = 'unknown';
       const published = await client.json(`/releases/${release.id}`, { method: 'PATCH', body: {
+        tag_name: run.tag, target_commitish: run.sha,
         draft: false, prerelease: true, make_latest: 'false', name: `CI ${run.tag} SUCCESS`,
         body: description(run, flags, 'all delivery assets verified; upstream status supplied by workflow'),
       } });
@@ -364,6 +365,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env,
     } else {
       boundary = 'failure-draft-status';
       checkRelease(await client.json(`/releases/${release.id}`, { method: 'PATCH', body: {
+        tag_name: run.tag, target_commitish: run.sha,
         draft: true, prerelease: true, make_latest: 'false', name: `DRAFT ${run.tag} FAILURE — evidence verified`,
         body: description(run, flags, 'upstream-workflow; available delivery evidence verified'),
       } }), run, release.id, true);
@@ -379,6 +381,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env,
       // A failed publication response is ambiguous until this re-draft is confirmed.
       try {
         const retained = await client.json(`/releases/${release.id}`, { method: 'PATCH', body: {
+          tag_name: run.tag, target_commitish: run.sha,
           draft: true, prerelease: true, make_latest: 'false', name: `DRAFT ${run.tag} FAILURE — delivery incomplete`,
           body: description(run, { ...flags, status: 'failure' }, boundary),
         } });

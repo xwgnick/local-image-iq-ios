@@ -13,6 +13,7 @@ import { ASSET_PATHS, MAX_ASSET_BYTES, REPOSITORY, collectAssets, createClient,
 const SHA = 'a'.repeat(40), MODEL = `siglip2-b16-224-v1-${'b'.repeat(64)}`;
 const IPA = 'LocalImageIQ-iphoneos-unsigned.ipa';
 const TAG = 'ci-12345-2';
+const UNTAGGED = 'untagged-e8f3a293686e58364ecc';
 const DRAFT_URL = `https://github.com/${REPOSITORY}/releases/tag/untagged-${'d'.repeat(40)}`;
 const SECRET = 'SYNTHETIC_TOKEN_NOT_A_REAL_CREDENTIAL';
 const SIGNED = 'https://release-assets.githubusercontent.com/synthetic/blob?signature=DO_NOT_LOG';
@@ -140,6 +141,9 @@ function github(options = {}) {
           events.push('retain-draft');
           if (options.redraftFails) throw new Error(SECRET);
           Object.assign(release, entry.body);
+          // GitHub may replace an unpublished semantic tag when a draft PATCH omits it.
+          // html_url is independent: an untagged draft URL is valid even with the intended tag_name.
+          if (!Object.hasOwn(entry.body, 'tag_name') || options.draftTagMismatch) release.tag_name = UNTAGGED;
         }
       }
       return json(release);
@@ -152,6 +156,29 @@ function github(options = {}) {
 const noCreate = mock => assert.ok(!mock.events.includes('create-draft'));
 const noPublish = mock => assert.ok(!mock.events.includes('publish'));
 const noDelete = mock => assert.ok(mock.requests.every(r => r.method !== 'DELETE' && r.method !== 'PUT'));
+const checkPatchIdentity = mock => {
+  const patches = mock.requests.filter(r => r.method === 'PATCH');
+  assert.ok(patches.length > 0);
+  for (const request of patches) {
+    assert.equal(request.url, `https://api.github.com/repos/${REPOSITORY}/releases/700`);
+    assert.equal(request.body.tag_name, TAG); assert.equal(request.body.target_commitish, SHA);
+  }
+};
+
+test('mock drops an omitted draft tag; explicit identity preserves it independently of the untagged URL', async () => {
+  const mock = github(), client = createClient(SECRET, mock.transport);
+  await client.json('/releases', { method: 'POST', body: {
+    tag_name: TAG, target_commitish: SHA, draft: true, prerelease: true, make_latest: 'false',
+  } });
+  const dropped = await client.json('/releases/700', { method: 'PATCH', body: { draft: true } });
+  assert.equal(dropped.tag_name, UNTAGGED); assert.equal(mock.release.tag_name, UNTAGGED);
+  assert.equal(dropped.target_commitish, SHA); assert.equal(dropped.html_url, DRAFT_URL);
+  const retained = await client.json('/releases/700', { method: 'PATCH', body: {
+    draft: true, tag_name: TAG, target_commitish: SHA,
+  } });
+  assert.equal(retained.tag_name, TAG); assert.equal(retained.target_commitish, SHA);
+  assert.equal(retained.html_url, DRAFT_URL); noPublish(mock); noDelete(mock);
+});
 
 test('strict CLI/environment; reject wrong repo, URL/ID injection and duplicate switches', () => {
   assert.deepEqual(parseArgs(argv(flags())), flags());
@@ -292,6 +319,7 @@ test('existing tags, releases and unpublished drafts are never overwritten or de
     await t.test(Object.keys(options)[0], async t => {
       const f = await fixture(t), mock = github(options);
       assert.equal((await f.run(mock)).ok, false); noCreate(mock); noDelete(mock);
+      assert.ok(mock.requests.every(r => r.method === 'GET'), 'Existing releases are never patched');
     });
   }
 });
@@ -303,6 +331,7 @@ test('success: stream/verify ALL payload + manifest, then publish prerelease, ne
   assert.equal(result.deviceReport.appBuild, '11'); assert.equal(result.model.version, MODEL);
   assert.equal(result.places.featureCount, f.report.places.featureCount);
   assert.equal(result.assets.length, 9); noDelete(mock);
+  checkPatchIdentity(mock);
   const publish = mock.events.indexOf('publish');
   assert.ok(mock.events.indexOf('verify:delivery.json') < publish && publish > 0);
   assert.ok(mock.events.filter(e => e.startsWith('verify:')).length === 9);
@@ -333,6 +362,45 @@ test('failure: best available evidence only, never IPA/report/checksums/simulato
   assert.equal(result.deviceReport, null); assert.equal(result.model.exportParityPassed, null);
 });
 
+// Historical regression: CI 36394279080 / release 398051690 verified six evidence assets,
+// then the draft PATCH omitted tag_name: ci-36394279080-1 became UNTAGGED above,
+// causing failure-draft-status / state unknown. Reproduce in memory; leave the real evidence untouched.
+test('failure evidence keeps the intended tag and SHA after all six assets are verified', async t => {
+  const f = await fixture(t), mock = github(), result = await f.run(mock, flags('failure'));
+  assert.equal(result.ok, true); assert.equal(result.outcome, 'failure-evidence-draft');
+  assert.equal(result.boundary, 'upstream-workflow'); assert.equal(result.release.state, 'draft');
+  assert.equal(result.release.tag, TAG); assert.equal(result.release.url, DRAFT_URL);
+  assert.equal(mock.release.tag_name, TAG); assert.equal(mock.release.target_commitish, SHA);
+  assert.equal(mock.release.draft, true); assert.equal(mock.release.prerelease, true);
+  assert.equal(result.assets.length, 6); assert.equal(mock.assets.size, 6);
+  assert.equal(mock.events.filter(e => e.startsWith('verify:')).length, 6);
+  assert.equal(mock.events.filter(e => e === 'retain-draft').length, 1);
+  assert.ok(mock.events.indexOf('verify:delivery.json') < mock.events.indexOf('retain-draft'));
+  checkPatchIdentity(mock); noPublish(mock); noDelete(mock);
+  const manifest = JSON.parse([...mock.assets.values()].find(a => a.name === 'delivery.json').data.toString());
+  assert.deepEqual(manifest.release, { id: 700, tag: TAG, url: DRAFT_URL });
+  assert.equal(manifest.run.tag, TAG); assert.equal(manifest.run.sha, SHA);
+  assert.deepEqual(manifest.assets, result.assets.slice(0, -1));
+  const record = JSON.parse(await readFile(path.join(f.root, 'build/release-evidence/release-delivery.json'), 'utf8'));
+  assert.deepEqual(record.release, result.release); assert.deepEqual(record.assets, result.assets);
+  assert.equal(record.outcome, 'failure-evidence-draft');
+  assert.ok((await readFile(f.environment.GITHUB_OUTPUT, 'utf8')).includes(`release_tag=${TAG}\n`));
+  assert.match(await readFile(f.environment.GITHUB_STEP_SUMMARY, 'utf8'), /verifiedAssets=6;.*state=draft/);
+});
+
+test('an untagged semantic tag still fails strict identity even when the draft URL is valid', async t => {
+  const f = await fixture(t), mock = github({ draftTagMismatch: true });
+  const result = await f.run(mock, flags('failure'));
+  assert.equal(result.ok, false); assert.equal(result.outcome, 'delivery-failed');
+  assert.equal(result.boundary, 'failure-draft-status'); assert.equal(result.release.state, 'unknown');
+  assert.equal(mock.release.tag_name, UNTAGGED); assert.equal(mock.release.target_commitish, SHA);
+  assert.equal(mock.release.html_url, DRAFT_URL); assert.equal(mock.release.draft, true);
+  assert.equal(result.assets.length, 6); assert.equal(mock.assets.size, 6);
+  assert.equal(mock.events.filter(e => e === 'retain-draft').length, 2);
+  checkPatchIdentity(mock); noPublish(mock); noDelete(mock);
+  await assert.rejects(access(path.join(f.root, 'build/release-evidence/release-delivery.json')));
+});
+
 test('failure without evidence creates no empty release', async t => {
   const f = await fixture(t), mock = github(); await rm(path.join(f.root, 'build/release-evidence'), { recursive: true });
   await f.put(ASSET_PATHS['UIReview.zip'], ''); // An interrupted zero-byte ZIP is not usable evidence.
@@ -351,12 +419,24 @@ test('simulator success requires its ZIP; model-free ignores even existing model
 });
 
 test('partial upload failure retains created draft, does not retry/delete/publish or write final record', async t => {
-  const f = await fixture(t), mock = github({ failUploadAt: 2 });
-  const result = await f.run(mock); assert.equal(result.ok, false); assert.equal(result.release.id, 700);
-  assert.equal(result.release.state, 'draft'); assert.equal(mock.assets.size, 1);
-  assert.match(mock.release.name, /DRAFT.*FAILURE/); assert.match(mock.release.body, /upload-verify:TestResults.xcresult.zip/);
-  assert.equal(mock.events.filter(e => e.startsWith('upload:')).length, 2); noPublish(mock); noDelete(mock);
-  await assert.rejects(access(path.join(f.root, 'build/release-evidence/release-delivery.json')));
+  for (const status of ['success', 'failure']) {
+    await t.test(status, async t => {
+      const f = await fixture(t), mock = github({ failUploadAt: 2 });
+      const result = await f.run(mock, flags(status));
+      assert.equal(result.ok, false); assert.equal(result.release.id, 700);
+      assert.equal(result.boundary, 'upload-verify:TestResults.xcresult.zip');
+      assert.equal(result.release.state, 'draft'); assert.equal(result.release.tag, TAG);
+      assert.equal(result.release.url, DRAFT_URL); assert.equal(mock.release.tag_name, TAG);
+      assert.equal(mock.release.target_commitish, SHA); assert.equal(mock.release.draft, true);
+      assert.equal(mock.release.prerelease, true); assert.equal(mock.assets.size, 1);
+      assert.equal(result.assets.length, 1); assert.equal(result.assets[0].id, [...mock.assets.keys()][0]);
+      assert.match(mock.release.name, /DRAFT.*FAILURE/); assert.match(mock.release.body, /upload-verify:TestResults.xcresult.zip/);
+      assert.equal(mock.events.filter(e => e.startsWith('upload:')).length, 2);
+      assert.equal(mock.events.filter(e => e === 'retain-draft').length, 1);
+      checkPatchIdentity(mock); noPublish(mock); noDelete(mock);
+      await assert.rejects(access(path.join(f.root, 'build/release-evidence/release-delivery.json')));
+    });
+  }
 });
 
 test('remote digest/state/size/ID mismatch never publishes', async t => {
@@ -419,6 +499,7 @@ test('ambiguous publication is re-drafted once; failed rollback is reported unkn
       assert.equal(result.release.state, redraftFails ? 'unknown' : 'draft');
       assert.equal(mock.events.filter(e => e === 'publish').length, 1);
       assert.equal(mock.events.filter(e => e === 'retain-draft').length, 1); noDelete(mock);
+      checkPatchIdentity(mock);
     });
   }
 });
