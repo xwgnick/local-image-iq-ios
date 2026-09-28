@@ -1,4 +1,5 @@
-// Node 22; no dependencies. Only this approved PRIVATE repository may receive assets.
+// Node 22; no dependencies. Only this explicitly authorized PUBLIC repository may receive assets.
+// Public visibility does not establish third-party redistribution approval.
 // Workflow stages public reports/ZIPs in build/release-evidence; see ASSET_PATHS.
 // Never retries, overwrites/deletes remote assets, follows authenticated redirects,
 // shells out, signs an IPA, or claims native/device validation from export parity.
@@ -173,7 +174,7 @@ export function createClient(token, transport = globalThis.fetch) {
       (target.pathname === `/repos/${REPOSITORY}` || target.pathname.startsWith(`/repos/${REPOSITORY}/`)), 'request-target');
     return transport(url, { ...options, redirect: 'manual', headers: {
       Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'local-image-iq-private-ci', ...options.headers, Authorization: `Bearer ${token}`,
+      'User-Agent': 'local-image-iq-public-ci', ...options.headers, Authorization: `Bearer ${token}`,
     } });
   }
   async function json(route, { method = 'GET', body, missing = false } = {}) {
@@ -245,7 +246,7 @@ function checkAsset(remote, asset) {
 
 async function checkIdentity(client, run) {
   const repo = await client.json('');
-  requireThat(repo.full_name === REPOSITORY && repo.private === true, 'private-repository');
+  requireThat(repo.full_name === REPOSITORY && repo.private === false, 'public-repository');
   const commit = await client.json(`/commits/${run.sha}`);
   requireThat(commit.sha === run.sha, 'commit-identity');
   const actual = await client.json(`/actions/runs/${run.id}`);
@@ -280,10 +281,11 @@ function draftURL(release) {
 }
 
 function description(run, flags, boundary) {
-  return `Private CI delivery: ${flags.status}; device=${flags.device}; models=${flags.models}.\n` +
+  return `Public CI release delivery: ${flags.status}; device=${flags.device}; models=${flags.models}.\n` +
     `Run: ${run.url}\nCommit: ${run.sha}\nError/validation boundary: ${boundary}.\n` +
-    'Unsigned builds require local re-signing. No Apple credentials, private photos, physical-device validation, ' +
-    'or public redistribution approval are supplied by this delivery. Failure evidence remains DRAFT; inspect the run for upstream errors.';
+    'Unsigned builds require local re-signing. No Apple credentials, private photos, or physical-device validation ' +
+    'are supplied by this release. Public availability does not grant third-party redistribution approval; legal review remains pending. ' +
+    'Failure evidence remains DRAFT; inspect the run for upstream errors.';
 }
 
 async function writeJSON(root, name, data) {
@@ -299,12 +301,12 @@ async function writeJSON(root, name, data) {
 
 async function announce(result, env, log) {
   // Only constructed identifiers/statuses; NEVER error.message, response bodies, tokens or signed URLs.
-  const text = `Private CI delivery: ${result.outcome}; boundary=${result.boundary}; ` +
+  const text = `Public CI release delivery: ${result.outcome}; boundary=${result.boundary}; ` +
     `verifiedAssets=${result.assets?.length ?? 0}` + (result.release ?
       `; releaseID=${result.release.id}; tag=${result.release.tag}; state=${result.release.state}; ${result.release.url}` : '; no release recorded');
   log(text);
   try {
-    if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, `### Private CI release delivery\n${text}\n` +
+    if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, `### Public CI release delivery\n${text}\n` +
       (result.assets ?? []).map(a => `- ${a.name}: id=${a.id}, ${a.bytes} bytes, SHA256=${a.sha256}, ${a.verification}\n`).join(''));
     if (env.GITHUB_OUTPUT) await appendFile(env.GITHUB_OUTPUT, `delivery_status=${result.outcome}\n` +
       `release_id=${result.release?.id ?? ''}\nrelease_tag=${result.release?.tag ?? ''}\nrelease_url=${result.release?.url ?? ''}\n`);

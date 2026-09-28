@@ -51,7 +51,7 @@ async function fixture(t, { appVersion = '0.4.0', appBuild = '11' } = {}) {
   await putJSON('device-build.json', report);
   await put(ASSET_PATHS['SHA256SUMS.txt'], `${digest(ipa)}  ${IPA}\n`);
   await putJSON('parity-report.json', { schemaVersion: 2, modelVersion: MODEL, passed: true });
-  await putJSON('provenance.json', { schemaVersion: 2, modelVersion: MODEL, training: false });
+  await putJSON('provenance.json', { schemaVersion: 2, modelVersion: MODEL, training: false, redistributionApproved: false });
   const logs = [], environment = { ...env(), GITHUB_STEP_SUMMARY: path.join(root, 'summary.md'), GITHUB_OUTPUT: path.join(root, 'outputs.txt') };
   return { root, put, putJSON, project, report, ipa, logs, environment,
     run(mock, f = flags()) { return main({ root, argv: argv(f), env: environment, transport: mock.transport, log: line => logs.push(line) }); } };
@@ -95,7 +95,8 @@ function github(options = {}) {
       assets.set(remote.id, remote);
       return json({ ...remote, data: undefined, digest: options.noDigest ? null : remote.digest }, 201);
     }
-    if (route === '') return json({ full_name: options.repositoryName ?? REPOSITORY, private: options.public !== true });
+    if (route === '') return json({ full_name: options.repositoryName ?? REPOSITORY,
+      private: Object.hasOwn(options, 'private') ? options.private : false });
     if (route.startsWith('/commits/')) return json({ sha: options.commitMismatch ? 'd'.repeat(40) : SHA });
     if (route.startsWith('/actions/runs/')) return json({ id: 12345, run_attempt: options.attemptMismatch ? 1 : 2,
       status: 'in_progress', conclusion: null, head_sha: options.runMismatch ? 'e'.repeat(40) : SHA,
@@ -300,8 +301,8 @@ test('device identity, version/build, real IPA bytes/hash and checksum gate crea
   });
 });
 
-test('wrong/private repository, target commit, run SHA and attempt are verified before creation', async t => {
-  for (const options of [{ public: true }, { repositoryName: 'other/repo' }, { commitMismatch: true },
+test('exact public repository, target commit, run SHA and attempt are verified before creation', async t => {
+  for (const options of [{ private: true }, { repositoryName: 'other/repo' }, { commitMismatch: true },
     { runMismatch: true }, { attemptMismatch: true }]) {
     await t.test(Object.keys(options)[0], async t => {
       const f = await fixture(t), mock = github(options);
@@ -312,6 +313,20 @@ test('wrong/private repository, target commit, run SHA and attempt are verified 
     const f = await fixture(t), mock = github(); f.environment.GITHUB_REPOSITORY = 'other/repo';
     assert.equal((await f.run(mock)).ok, false); assert.equal(mock.requests.length, 0);
   });
+});
+
+test('repository visibility requires boolean false; missing or unexpected values are rejected', async t => {
+  for (const [name, value] of [['missing', undefined], ['null', null], ['string false', 'false'],
+    ['numeric zero', 0], ['object', {}]]) {
+    await t.test(name, async t => {
+      const f = await fixture(t), mock = github({ private: value });
+      const result = await f.run(mock);
+      assert.equal(result.ok, false); assert.equal(result.boundary, 'repository-commit-run');
+      assert.equal(mock.requests.length, 1);
+      assert.equal(mock.requests[0].url, `https://api.github.com/repos/${REPOSITORY}`);
+      assert.equal(mock.requests[0].method, 'GET'); noCreate(mock); noPublish(mock); noDelete(mock);
+    });
+  }
 });
 
 test('existing tags, releases and unpublished drafts are never overwritten or deleted', async t => {
@@ -339,6 +354,11 @@ test('success: stream/verify ALL payload + manifest, then publish prerelease, ne
   const delivery = JSON.parse(deliveryAsset.data.toString());
   assert.equal(delivery.release.url, DRAFT_URL);
   assert.equal(delivery.assets.length, 8); assert.ok(delivery.assets.every(a => a.name !== 'delivery.json'));
+  const provenance = JSON.parse([...mock.assets.values()].find(a => a.name === 'provenance.json').data.toString());
+  assert.equal(provenance.redistributionApproved, false);
+  assert.match(mock.release.body, /^Public CI release delivery:/);
+  assert.match(mock.release.body, /does not grant third-party redistribution approval; legal review remains pending/);
+  assert.ok(f.logs.some(line => line.startsWith('Public CI release delivery:')));
   for (const asset of result.assets) {
     const uploaded = mock.assets.get(asset.id);
     assert.equal(asset.sha256, digest(uploaded.data)); assert.equal(asset.bytes, uploaded.data.length);
@@ -347,6 +367,7 @@ test('success: stream/verify ALL payload + manifest, then publish prerelease, ne
   assert.equal(record.outcome, 'published-prerelease'); assert.equal(record.assets.length, 9);
   assert.match(await readFile(f.environment.GITHUB_OUTPUT, 'utf8'), /release_id=700/);
   assert.match(await readFile(f.environment.GITHUB_STEP_SUMMARY, 'utf8'), /SHA256=/);
+  assert.match(await readFile(f.environment.GITHUB_STEP_SUMMARY, 'utf8'), /^### Public CI release delivery/);
 });
 
 test('failure: best available evidence only, never IPA/report/checksums/simulator or publish', async t => {
@@ -536,11 +557,12 @@ test('early HTTP rejection closes upload streams without consuming the entire in
   assert.equal(body.destroyed, true);
 });
 
-test('privacy is checked again immediately before publication', async t => {
+test('public repository visibility is checked again immediately before publication', async t => {
   const f = await fixture(t), options = {};
-  options.onCreate = async () => { options.public = true; };
+  options.onCreate = async () => { options.private = true; };
   const mock = github(options), result = await f.run(mock);
   assert.equal(result.ok, false); assert.equal(result.boundary, 'pre-publication-identity');
+  assert.equal(mock.requests.filter(r => r.url === `https://api.github.com/repos/${REPOSITORY}`).length, 2);
   noPublish(mock); assert.equal(mock.release.draft, true);
 });
 

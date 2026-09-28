@@ -21,10 +21,12 @@ permissions:
 
 jobs:
   simulator:
-    # This source directory must be the PRIVATE repo root. No photos/database/videos.
-    if: github.event.repository.private == true && github.repository == 'xwgnick/local-image-iq-ios'
+    # User-approved public source repository; generated fixtures only, no personal data.
+    # This remains manual workflow_dispatch, never privileged pull-request execution.
+    if: github.event.repository.private == false && github.repository == 'xwgnick/local-image-iq-ios'
     runs-on: macos-15
-    # User-approved private Release delivery; no repository visibility/billing change.
+    # Standard hosted runner in the approved PUBLIC repository; no paid larger runner.
+    # Write permission is used only for the existing exact-repository Release delivery.
     permissions:
       contents: write
       actions: read
@@ -139,7 +141,7 @@ jobs:
           for report in Resources/Models/parity-report.json Resources/Models/provenance.json Resources/Places/places-manifest.json; do
             if [ -f "$report" ]; then cp "$report" build/release-evidence/; fi
           done
-      - name: Upload verified assets to this private repository Release
+      - name: Upload verified assets to this public repository Release
         if: always()
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -154,6 +156,6 @@ jobs:
         if: always()
         run: |
           echo '### Native iOS milestone' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Build/test assets are delivered only through this private repository Release. This run does not sign, distribute publicly, upload to TestFlight, or prove physical-iPhone performance.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Build/test assets are delivered through this public repository Release. This run does not sign, upload to TestFlight, grant third-party licenses, or prove physical-iPhone performance.' >> "$GITHUB_STEP_SUMMARY"
           echo "Models requested: $IMAGEIQ_REQUIRE_MODELS. Model-free tests skip generated numerical parity; read xcresult for actual test outcomes." >> "$GITHUB_STEP_SUMMARY"
           echo 'All runs require the pinned CHN/FRA/DEU/NLD ADM1/ADM2 Places pack and bundled manifest. Check step outcomes; coverage is historical administrative boundaries, not global addresses or a phone-speed measurement.' >> "$GITHUB_STEP_SUMMARY"
