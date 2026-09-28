@@ -1,6 +1,6 @@
 # Cloud build status — 2026-09-28
 
-## Current: 0.4.1 (12) public CI RUNNING; 94 local publisher tests PASS; NO NEW IPA
+## Current: 0.4.1 (12), CI 36403948150 native build/tests IN PROGRESS; no confirmed new IPA
 
 用户明确批准**公开仓库＋免费标准 runner**，并再次确认历史作者邮箱／机器路径／测试
 查询、Actions 日志及已发布 Releases 可公开。同一
@@ -15,14 +15,38 @@
 | 可下载的旧包 | Release 398009938／ci-36387878343-1 为已交付 0.4.0 / build 11，现公开可访问、无需 GitHub 登录；不是 build 12。原身份、大小和哈希不变。 |
 | 旧失败证据 | Draft 398051690／398066345 保持原状；仓库公开不自动发布草稿，不作为安装入口。 |
 | 工程与不变项 | 仍为 0.4.1 / 12；引擎、模型、20 worker、HQ224／Fast、翻译、索引／缓存身份不因公开转换改变。 |
-| 新源码 | f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5 已推送 personal；不是旧第三轮的 70ad74b0。 |
-| 公开手动运行 | [Run 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)／[job 108858329166](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391/job/108858329166)：2026-09-28 最新检查点为 IN_PROGRESS，已实际启动，不是计费阻塞的未启动 job。 |
-| 已知 CI 进度 | 源码检查步骤已通过；当前正在生成公开地点包，尚不声称整轮测试／回归通过。 |
-| 本地发布器测试 | 指定的 Node 22 可执行文件实测，父流程实际计数 94 项全部 PASS；不是预期数，也不沿用旧 88 项结果。 |
+| 首轮公开运行源码（历史） | f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5；下述首轮结果不转记为新运行通过。 |
+| 首轮公开手动运行 | [Run 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)／[job 108858329166](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391/job/108858329166)：COMPLETED / FAILURE，仅 1 项原生 UI 测试失败。公开路线计费启动阻塞已解除，原生 App／UI 确实执行。 |
+| 首轮公开 App XCTest（历史） | 370 项：369 通过、1 项真机文件保护在模拟器跳过、0 失败；217.028 秒。 |
+| 首轮公开调试子套件（历史） | `DebugToolsStateTests` 14 项、`DebugToolsPresentationTests` 7 项全部 PASS，已计入 App 总数；不补写未提供的子套件耗时。 |
+| 首轮公开独立 UI（历史） | 9 项：8 通过、1 失败；514.171 秒。其他 8 项包括全局开关／重启测试均 PASS，开关本体点击修复已验证；唯一失败在第一次 Advanced 点击后滑块不可达，详见下方 trace。 |
+| 新的仅测试源码 | cfd2943cbec28bf02c1fe2597921cb12ffdec317 已推送 personal；App 代码与上述首轮公开源码相同，仅 UI 测试三次 Advanced 展开／收起改点显式 ID 的尾部箭头，第二次展开前重取 header，全部断言保留。 |
+| 当前手动运行 | [Run 36403948150](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36403948150)／[job 108868075667](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36403948150/job/108868075667)：原生构建／测试 IN PROGRESS，结果待验证。第三次实际 UI 测试修复迭代；若再失败，停止并讨论，不无限修补／重跑。 |
+| 当前预期发布 | tag ci-36403948150-1 尚未发布，不是下载入口；工作流仅在全部门槛通过后自动发布。尚无已确认的 0.4.1 IPA 或新包下载。 |
+| 本地发布器测试 | 指定 Node 22 的既有实测 94 项全部 PASS；此次仅测试补丁未改发布器，结果记录不变，不冒充重新执行。 |
 | 其他本地检查 | Node／源码／工程／打包检查 PASS；本地结果不代替原生测试或设备构建。 |
-| 原生待验证 | App 370／UI 9 为本轮待验证规模；最终开关本体点击修复尚未完成原生 UI 验证，不把历史通过项记作新运行通过。 |
-| 预期公开 Release | tag ci-36400923391-1 目前尚不存在；只是预期身份，不是已发布 Release 或安装入口。 |
-| 设备与交付 | 尚无 0.4.1 IPA；等待本轮完整门槛、设备构建、发布及新 IPA 本地长度／SHA-256 核验，旧 0.4.0 链接不是新版。 |
+| 失败证据 Release | 发布步骤 SUCCESS；Release 398104580／tag ci-36400923391-1 已存在，DRAFT、6 项证据资产、无 IPA。预期 tag、清单、正文 run／target 与实际元数据一致，`draft: true`；不是普通成功发布。 |
+| 设备与交付 | 首轮公开原生编译通过且 App／UI 实际执行，但不等于 iPhoneOS 编译通过；设备构建因 UI 门槛失败 SKIPPED。无 0.4.1 IPA；旧 0.4.0 仍是可下载交付物。 |
+
+### 首轮公开运行的实际失败 trace 与第三次测试修复
+
+唯一失败：`testClearQueryKeepsKeyboardAndSettingsAdvancedStartsCollapsed`，trace 报告
+[滑块可达性断言](../UITests/PresentationNavigationTests.swift#L95)失败。
+
+- **09:20:21**：开关本体 `tap` 使用归一化 **(0.9, 0.5)**，随后值为 **1**。
+- **09:20:25**：**第一次** `debug-advanced` 点击命中整行中心；滑块始终未暴露，
+  随后 **8 次向下滚动**仍不可达。**更正此前口头说明：不是第二次展开失败**。
+- 新源码 `cfd2943cbec28bf02c1fe2597921cb12ffdec317` 仅改测试：全部 **3 次展开／收起**
+  均用显式 ID `debug-advanced` 和尾部箭头归一化 **(0.95, 0.5)** 点击，
+  **第二次展开前重新获取 header**。全部断言保留，未新增跳过、未降低任何门槛；
+  App／发布器没有随此补丁改变。修复效果须由已触发的新运行验证，失败则停止讨论。
+
+首轮公开失败证据的 UI ZIP asset **595016915**，精确 **27,650,839 字节**，SHA-256：
+`37a68bcc6b15da775230ce198525131a4d7e07aedf6115637d2e3f94b88c908b`。
+已下载并校验至 [../build/ui-review/36400923391/UIReview.zip](../build/ui-review/36400923391/UIReview.zip)。
+**仅查看清单与测试 trace，没有查看本轮图片，没有新的视觉审核结论**；下方第二轮私有
+运行的四张已审图仅是旧参考，不能当作本次公开运行或新补丁的视觉验证。
+测试耗时不是手机性能；App 子套件不重复相加。
 
 ### 当前构建与发布控制
 
@@ -35,17 +59,18 @@
   白名单资产、身份／字节／SHA-256 核验、成功才发布非 Latest prerelease 的协议保留。
   文案标识 public CI，不声明第三方再分发已获许可。新交付不使用 Actions artifact 存储。
 - 公开仓库标准 hosted runner 用量按 GitHub 规则免费，受平台政策、运行限制及可用性约束，
-  不是无限额度保证；本次公开 job **已实际启动并在运行**，不等于账号旧限制已清除。
+  不是无限额度保证；首轮公开 job **已实际完成原生 App／UI 执行**，公开路线的计费启动
+  阻塞已解除，不等于账号旧限制已清除。
   **不重置旧私有分钟、累计存储用量或账号限制**。
   未修改计费、预算、卡片或付费限额，不要求付费以恢复此次构建。
 - 用户选择不设置项目级许可证；第三方模型卡 Apache-2.0、geoBoundaries 许可元数据及
   Pillow MIT-CMU 源码头不改变项目整体授权。`redistributionApproved: false` 保留，
   人工再分发审查仍未完成。
 
-下一步是等待上述**已在运行的完整公开原生构建**完成全部门槛，记录实际测试、设备包与
-Release 结果，再完成新 IPA 的长度／SHA-256 核验。当前只确认已知步骤进度及本地通过项，
-不声称全套测试／回归、设备构建或发布已成功，也不把预期 tag 当作现有 Release。
-本次文档编辑不执行命令、Git、CI 查询／触发、测试、下载或可见性操作。
+新运行 36403948150 的原生构建／测试正在进行，实际结果待验证；**若测试再失败，停止并讨论，不追加无限
+修复／重跑**。只有全部门槛、设备构建、公开发布及新 IPA 全量长度／SHA-256 核验通过，
+才报告 build 12 交付；已保存的失败证据 draft 不满足交付条件。
+本次仅依据提供事实编辑指定六份文档，不执行命令、Git、CI 查询／触发、Python、测试、下载或可见性操作。
 安装入口见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
 
 ## Historical checkpoint (2026-09-28, before public transition): 0.4.1 (12) — billing startup failure; NO IPA

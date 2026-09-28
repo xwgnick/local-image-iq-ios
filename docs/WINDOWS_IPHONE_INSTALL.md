@@ -5,7 +5,7 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.4.1（build 12）公开 CI 正在运行、尚无 IPA；下载入口仍是旧版 0.4.0
+## 当前：build 12 CI 36403948150 原生构建／测试进行中；可下载的仍仅旧版 0.4.0
 
 2026-09-28，同一仓库已确认 **PUBLIC／`private: false`**。用户已确认既有历史、
 Actions 日志及已发布 Releases 公开；详见 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md)。
@@ -18,20 +18,39 @@ Actions 日志及已发布 Releases 公开；详见 [PUBLIC_REPOSITORY.md](PUBLI
   本工作区已校验的副本是
   [../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa)。
   另一台电脑下载后仍须核验同一长度／哈希，再用 Sideloadly 本机签名；公开不等于免签安装。
-- 已装 0.4.0 可继续使用，**不要求重装或回退**。工程仍是 0.4.1 / 12，但最终开关点击
-  修复尚未完成原生 UI 验证，无新设备包；两个旧失败 draft 未发布，不能用作安装入口。
-- 新源码 **`f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5`** 已推送 `personal`。
-  2026-09-28 最新检查点：[公开手动 CI 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)
+- 已装 0.4.0 可继续使用，**不要求重装或回退**。工程仍是 **0.4.1 / 12**，没有新设备包；
+  两个旧失败 draft 未发布，新失败证据 draft 也不能用作安装入口。
+- **首轮公开历史结果，不是新运行通过记录**：源码 **`f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5`** 的
+  [CI 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)
   ／[job 108858329166](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391/job/108858329166)
-  **已实际启动、IN_PROGRESS**，源码检查步骤已通过，当前正在生成公开地点包；
-  **不是旧私有运行的计费启动阻塞**，保留全部构建门槛。
-- 本地指定的 **Node 22** 可执行文件实测发布器 mock **94 项全部 PASS**，为父流程
-  实际计数；Node／源码／工程／打包检查也已本地 PASS。App **370**／UI **9** 仍为
-  本轮待验证规模，不能据本地结果宣称新 CI 全套测试／回归通过。
-- 预期公开 Release tag **`ci-36400923391-1` 目前尚不存在**，不是下载入口。
-  标准 `macos-15` 的公开仓库 hosted runner 用量免费，仍受平台政策／限制约束；
-  不要求提高付费额度，也**不重置旧私有分钟或历史累计用量**。本次文档编辑不触发 CI。
-- 只有新运行通过测试／设备构建、完成公开 Release 发布及新 IPA 长度／SHA-256 核验后，
+  已 **COMPLETED / FAILURE，仅 1 项原生 UI 失败**；公开路线计费启动阻塞已解除，
+  App／UI 确实运行。App **370 项：369 通过、1 项真机文件保护模拟器跳过、0 失败
+  （217.028 秒）**，状态 **14**／展示 **7** 项全通过；UI **9 项：8 通过、1 失败
+  （514.171 秒）**，包括全局开关／重启在内的其他 8 项通过，开关本体点击修复已验证。
+- 唯一失败为 `testClearQueryKeepsKeyboardAndSettingsAdvancedStartsCollapsed` 的
+  [滑块可达性断言](../UITests/PresentationNavigationTests.swift#L95)：**第一次 Advanced
+  整行中心点击后**滑块未暴露，8 次向下滚动仍失败，**不是第二次展开失败**。
+  实际 trace 的时间／点击坐标见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+- 新的**仅测试改动**源码 **`cfd2943cbec28bf02c1fe2597921cb12ffdec317`** 已推送 `personal`：
+  三次展开／收起均以显式 ID `debug-advanced` 点击尾部箭头 **(0.95, 0.5)**，
+  第二次展开前重新获取 header；全部断言保留，不新增跳过、不降低门槛。
+  当前 [CI 36403948150](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36403948150)
+  ／[job 108868075667](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36403948150/job/108868075667)
+  的**原生构建／测试 IN PROGRESS，结果待验证**。App 代码与首轮公开源码相同；
+  旧 App 370 项／UI 8 通过、1 失败不转记为本轮通过。这是第三次实际 UI 测试修复迭代；
+  若再失败，停止并讨论，不无限修补／重跑。
+- 首轮公开原生编译通过并执行了 App／UI，**不等于 iPhoneOS 编译通过**。
+  设备构建因 UI 门槛失败 **SKIPPED，无 build 12 IPA**。失败证据发布步骤 **SUCCESS**，
+  Release **398104580**／tag **`ci-36400923391-1`** 已存在但为 **DRAFT**，身份元数据
+  与预期一致；**6 项资产仅为证据，不含 IPA，不是安装入口**。
+  本轮 UI ZIP 已下载校验，仅查看清单／trace，**未看图片、无新视觉结论**；
+  第二轮私有运行四图仍仅是旧参考，证据身份及哈希见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+- 本地 **Node 22 发布器 94 项 PASS** 记录不变；仅测试补丁未改发布器，本次不重跑。
+  标准 `macos-15` 公开 hosted runner 用量免费，仍受平台政策／限制约束；未改计费或
+  付费限额，**不重置旧私有分钟或历史累计用量**。本次只改指定六份文档，不执行
+  命令、Git、CI、Python、测试或下载。
+- 当前预期 tag **`ci-36403948150-1` 尚未发布**，不是安装入口；工作流只在全部门槛通过后
+  自动发布。尚无已确认的 0.4.1 IPA 或新包下载；完成公开发布及新 IPA 长度／SHA-256 核验后，
   才按 **0.4.1 / 12** 更新。仍用原 Sideloadly 账号／有效 Bundle ID 覆盖安装；
   已有 build 11／10 当前策略索引、就绪语言包沿用，不卸载、不清库、不要求重建或诊断。
 
