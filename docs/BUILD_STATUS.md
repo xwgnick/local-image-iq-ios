@@ -1,6 +1,174 @@
 # Cloud build status — 2026-09-28
 
-## Current: 0.4.0 (11) — SUCCESS; private Release published, local IPA verified
+## Current: 0.4.1 (12) — third run FAILURE before startup (account billing); NO IPA, NOT DELIVERED
+
+- **第三轮已结束但未启动 job**：
+  [Run 36397742264](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264)
+  ／[job 108848065780](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264/job/108848065780)，
+  **COMPLETED / FAILURE；STARTUP / NOT STARTED；`steps: []`**。没有执行 App／UI 测试、
+  设备构建或发布。准确 annotation：
+
+  > The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings
+
+  只能确定为**账号付款／支出限额相关的启动阻塞**，不能区分付款失败还是预算／限额问题。
+  **不是 Actions artifact 存储问题，不是 Release 发布器 bug**；不自动修改计费、
+  不建议自动提高限额或增加支出、不索取凭据、不追加重试。
+
+- **第二轮已结束**：`d2174787c1bd276c9bc38e6d6d2f1efe28ef0015` 已推送个人私有仓库
+  `xwgnick/local-image-iq-ios`（`personal`）。
+  [Run 36396468128](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36396468128)
+  ／[job 108843930321](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36396468128/job/108843930321)
+  已 **COMPLETED / FAILURE**，仅 2 项原生 UI 测试因同一整行点击未命中开关、等待 ON
+  失败；App 全部通过（除既有 1 项真机文件保护模拟器跳过）。设备构建 **SKIPPED，无 IPA**。
+  发布器**失败证据 draft 路径 SUCCEEDED**，不是普通成功 Release 或设备交付。
+- **当前 HEAD／第三轮**：`70ad74b0f5e411ca60f741b1300545d1dbaf25c9` 已提交并推送，
+  相比第二轮仅新增 UI 测试行内归一化 **(0.9, 0.5)** 点击修复；全部用户 App 代码与
+  第二轮 App 测试通过的版本相同。坐标依据已捕获的实际行／开关本体位置，但**第三轮
+  未启动，新点击修复未执行验证，不能声称全部 9 项 UI 通过**。App 370／UI 9 仅为
+  待运行测试规模；第二轮不含这项点击修复。
+- **首轮已结束**：源码 `2af11f6d759bcf7c021c20d73878cf4e5376dac4`，
+  [Run 36394279080](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36394279080)
+  ／[job 108836892722](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36394279080/job/108836892722)，
+  **FAILED**。失败涉及展示测试的进程内 AX 读取、UI 测试点中整行标签而非开关本体，
+  以及失败证据 Release 的身份检查，**不是 Actions 存储配额问题**。设备构建跳过，无 IPA。
+- **实现范围**：全部调试界面由 Settings 底部唯一 **Show debug tools** 开关控制，
+  每次启动 OFF、仅会话有效。`AppState` 标志及检查执行入口守卫、查看器 `onReceive`
+  实时响应均纳入；可选状态的旧调用无 `AppState` 时不显示调试。关闭收起照片检查／
+  本地比较 sheet，清除报告／问题，弱引用注册的活动预览取消；不取消索引／搜索／
+  语言包准备，不改变查询／结果／权重／模型／缓存。普通功能与完整边界见
+  [USER_MODE.md](USER_MODE.md)，不是全 App 本地化重做。
+- **兼容性**：索引 API、模型、Photos 取图、翻译引擎无改动；20 worker、HQ224／Fast
+  及缓存身份不变。0.4.0 或 0.3.4 已有当前策略有效索引无需迁移、清库或重建。
+- **交付契约不变**：同一私有 Release，不用 Actions artifact 存储；全局
+  `contents: read`，job `contents: write`／`actions: read`，不增加权限／凭据。
+  build 12 **未交付**，尚无设备编译成功、新 IPA 或本地下载校验证据；下方 build 11 包
+  及哈希仅是历史身份。首轮预期 tag `ci-36394279080-1` 不是有效安装入口。
+
+### 首轮验证账本：36394279080／2af11f6d
+
+以下仅为首轮实际结果，不转记为修复源码通过；App 子套件已计入 370 项，耗时不是手机性能。
+
+| 项目 | 首轮已知结果／边界 |
+| --- | --- |
+| 原生 App XCTest | 370 项、1 跳过；25 个断言失败全部来自 7 项 `DebugToolsPresentationTests`，不是 25 项测试失败；原生测试失败。 |
+| `DebugToolsStateTests` | 14 项全部通过，0.140 秒。 |
+| 展示失败原因 | 进程内 AX 读取对全部元素都返回零，包括普通控件；不能把这种读取失败当成调试门控隐藏了正常界面的证据。 |
+| 独立 UI | 9 项中 2 项失败、7 项通过；`row.tap()` 点中整行中心的标签区域而非右侧开关，两项点击后值均为 0，等待 ON 失败。此前“视口移动”根因猜测已撤回。 |
+| 其他回归 | 其余回归通过；不补写未提供的单项计数、耗时或数值极值。 |
+| 设备构建／IPA | 设备构建 SKIPPED；无 build 12 IPA，不是已编译但未下载的设备包。 |
+| 失败证据上传 | 6 项资产已上传并核验至 Release 398051690；后续身份检查失败，无 IPA、未交付。 |
+
+### 首轮 UI 根因更正：整行中心不是开关本体
+
+父流程已下载并校验既有首轮失败 UI ZIP：asset **594867187**，**28,595,052 字节**，
+SHA-256：`6e38218ebb4d0d59eddcb4668c319f8337a5b027aacce99b7beabbf826e10082`。
+**仅读取两份 debugDescription 文本，没有查看图片**；本次文档编辑不重复下载或读取该包。
+
+- AX 中 `show-debug-tools` 对应**整行**：x **20**、y **730.3**、宽 **362**、高 **44**。
+- 右侧实际开关本体是另一个元素：x **313**、y **737**、宽 **51**、高 **31**。
+- `row.tap()` 点整行中心，即约 **(201, 752.3)**，落在标签区域，不在开关本体内；
+  两项失败测试点击后值都仍为 **0**，并非已经开启后因 Form 插入行而丢失 ON 状态。
+- 因此撤回此前“视口移动导致失败”的根因猜测。首轮 `AppState` 相关的 14 项
+  `DebugToolsStateTests` 已全部通过，**未观察到生产开关失效**；不据此宣称真机已验证。
+
+当前 HEAD 已提交／推送**一处 UI 测试点击修复**：在已识别整行内点击归一化坐标
+**(0.9, 0.5)**，该位置命中右侧开关本体。原有滚动／重新获取元素／等待值的处理仍保留，
+无需撤回；但它本身不能修复点中标签的问题。**第二轮不含新点击修复，仍有相同的两项
+UI 失败；第三轮已因账号计费阻塞在启动前失败，新修复尚未执行验证**。这里只记录已有改动，
+本次不修改测试或 App。
+
+### 首轮 Release 异常：资产已核验，但严格身份检查失败
+
+首轮失败证据 Release ID **398051690** 的 **6 项资产上传／核验已完成**。随后更新
+draft 状态的 PATCH **未显式传入 tag**，触发 GitHub 对未发布 Release 的行为：
+`tag_name` 变为 **`untaged-e8f3a293686e58364ecc`**，不再匹配预期的
+`ci-36394279080-1`。实际 API 回读为 **`draft: true`、无 IPA**。
+
+原发布器日志状态为 **`unknown`**，原因是严格身份检查失败；不能因此把已回读的
+draft 状态说成未知，也不能把六项证据上传说成成功发布。该问题**不是 Actions 配额**。
+修复源码已推送不代表这个既有 draft 已修复或发布；本次不对远端 Release 作任何操作。
+
+第二轮**失败证据 draft 路径已 SUCCEEDED**，显式 tag 修复已在线上这条路径验证，
+首轮发布器 bug 已解决；不代表首轮既有 draft 被追溯修复，也不是普通成功 Release 发布。
+
+### 第二轮已验证的修复与结果（不含当前 HEAD 的点击修复）
+
+- **原生展示测试**：改用公开 UIKit 的真实行布局、渲染像素非空白及同一 host 的
+  **OFF → ON → OFF** 稳定性检查。不再依赖首轮全零的进程内 AX 读取；这些断言只
+  证明原生视觉行为，**不声称验证了 AX 语义，也不表示 App 没有 AX**。这是测试方法
+  的边界；真实 Settings／Library 的语义断言仍由跨进程 XCUI 明确覆盖，未删除或削弱。
+- **UI 测试**：保留滚动／视口变化后重新获取开关并等待目标值的处理，不复用变化前
+  的元素；仍验证 ON／OFF、普通控件、调试项及重启后的会话重置。这不是首轮点击
+  位置根因的修复；行内 **(0.9, 0.5)** 点击改动已提交／推送，**不属于第二轮**。
+- **唯一 App 运行时修正**：查看器 Combine 订阅忽略未变化的值，避免重复订阅回放
+  引发反复清空 nil 的反馈，令响应幂等。正常看图、搜索、索引逻辑没有改动；核心、
+  模型、翻译及缓存身份不变。
+- **发布器**：自己发起的每次 PATCH 均显式携带 `tag_name`（`run.tag`）及
+  `target_commitish`（运行源码 SHA），保留严格 tag／SHA 身份检查，不接受错 tag
+  作为成功。模拟上述真实 GitHub 行为的回归已加入，本地 **88 项 Node 测试 PASS**
+  （此前 **83**）；第二轮另已验证线上失败证据 draft 路径成功，不以 mock 替代线上证据，
+  不将该路径成功说成普通成功 Release 发布。本次文档编辑未重跑测试。
+
+| 第二轮项目 | 实际结果／边界 |
+| --- | --- |
+| 源码／运行 | d2174787c1bd276c9bc38e6d6d2f1efe28ef0015；run 36396468128／job 108843930321，COMPLETED / FAILURE；仅两项原生 UI 失败，不含当前 HEAD 的点击修复。 |
+| App XCTest | 370 项：369 通过、1 项真机文件保护在模拟器跳过、0 失败；130.279 秒。 |
+| `DebugToolsPresentationTests` | 7 项全部通过，已计入 App 总数；本轮精确耗时未提供，不补写。 |
+| `DebugToolsStateTests` | 14 项全部通过，已计入 App 总数；本轮精确耗时未提供，不沿用首轮 0.140 秒。 |
+| 独立 UI | 9 项：7 通过、2 失败；319.699 秒。两项仍是整行点击未命中开关，等待 ON 失败，与首轮同一根因。 |
+| 原生与跨进程语义 | 原生视觉验证通过不等于 XCUI 语义验证全部通过；语义断言仍保留。默认 Settings 仍滚动检查普通控件，单一视口只有一个 Show debug tools 开关，不声称整页只有一个开关。 |
+| 数值门槛 | 真实 20 槽工厂 120 次预测／252 项测量和旧 23／58 全部保留、未削弱；包含在已通过 App 测试中，不补写未提供的子套件耗时或数值极值。 |
+| 失败证据发布器 | 步骤 SUCCESS；Release 398066345／tag ci-36396468128-1 仍为 DRAFT、无 IPA。显式 tag 修复在失败证据路径有效，首轮发布器 bug 已解决；不是普通成功 Release 发布。 |
+| 截图 | UI ZIP 已下载并校验；仅提取四张用户模式合成图，父流程已实际查看 1340×758 联系图，范围及边界见下文。 |
+| 设备／交付 | 设备构建 SKIPPED，无 build 12 IPA；未交付／未完成本地校验，真机验证待完成。 |
+
+App 子套件不重复相加，测试耗时不是手机性能。**未削弱调试功能、语义断言或数值门槛，
+未新增跳过测试**；唯一既有跳过仍是真机文件保护的模拟器限制。
+
+### 第二轮失败证据与有限视觉审核：36396468128
+
+第二轮 **Release 398066345／tag `ci-36396468128-1`** 保留为 **DRAFT、无 IPA**，
+发布器步骤 **SUCCESS**；这是已保存的失败证据，不是安装入口，也不修复首轮旧 draft。
+UI ZIP asset **594909127**，精确 **32,920,094 字节**，SHA-256：
+`59e77bd362d1ed25a38b5c06a2b11df2f512b09e2c52b09eeed6e0031c4530d7`。
+已下载并校验至 [../build/ui-review/36396468128/UIReview.zip](../build/ui-review/36396468128/UIReview.zip)。
+
+仅提取以下四张 `UIReview-user-mode-*` 图，父流程已实际查看
+[1340×758 联系图](../build/ui-review/36396468128/user-mode-contact.jpg)：
+
+| 已审核附件名 | 实际可见范围 |
+| --- | --- |
+| UIReview-user-mode-settings-default | Settings 底部 Show debug tools 为 OFF；Maintenance 与隐私说明仍可见。 |
+| UIReview-user-mode-library-default | 连接 Photos 入口及 iCloud 控件可见，索引按钮禁用；没有 Details。 |
+| UIReview-user-mode-viewer-default | 空查看器、调试 OFF；仅分享入口可见。 |
+| UIReview-user-mode-viewer-debug | 空查看器、调试 ON；分享、照片检查、本地预览对比三入口均可见且禁用。 |
+
+这是合成空状态／未授权场景，空查看器不读取 Photos；**不是私人照片、真实图库或真机
+证据，也不能证明开关语义点击成功**。其他 ZIP 图片未查看，不声称总数或全部审核。
+当前 HEAD 只改 UI 测试，App 源码与第二轮相同，因此上述有限视觉结论适用于当前 App
+的相同场景，**不是第三轮的新产物或新运行验证**，也不代替待验证的 9 项 UI 测试。
+
+### 第三轮结论与当前操作边界：启动前失败，不重试
+
+当前 HEAD **70ad74b0f5e411ca60f741b1300545d1dbaf25c9** 的第三轮
+**36397742264／108848065780** 已 **COMPLETED / FAILURE**。先前 dispatch 的 HTTP 204
+仅表示请求被接受；最终 job 未启动、`steps: []`。App **370**／UI **9** 均未执行，
+没有设备构建、IPA 或发布步骤结果，不能把第二轮通过项记成第三轮通过。
+
+账号所有者需要手动查看 GitHub **Settings → Billing & plans** 的付款及支出限额状态；
+当前不代改计费、不追加重试、不要求提供任何凭据。继续使用已有 **0.4.0 / build 11**，
+不安装新版。只有计费阻塞解决、后续新运行通过测试和设备构建，才进入既有私有 Release
+上传、新 IPA 下载及长度／SHA-256 核验；这些是后续交付条件，**不是已启动任务或交付承诺**。
+核验完成后按 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md) 覆盖更新；正常行为、
+20 worker、翻译、模型及索引策略不变，已有当前策略索引不清库、不重建、不必 Index / resume。
+
+本次仅依据提供的事实编辑指定四份文档，不执行 Git、命令、CI 查询／触发、测试或下载，
+不读取／上传私人照片，不修改其他文档；下方 build 11 及更早记录保持原样。
+
+## Historical: 0.4.0 (11) — SUCCESS; private Release published, local IPA verified
+
+以下保留 build 11 的完整历史；“本轮／新包／现在”只指对应旧版本。其测试、截图、
+Release 与本地 IPA 校验均不能作为 build 12 的结果，当前状态以上方为准。
 
 用户现已明确批准**方案 2：同一私有仓库 Release＋job 级 contents: write**，不改公开
 可见性或计费。新源码 **`844492b754f86d519c904da21cd80c1c814c056b`** 相比已通过

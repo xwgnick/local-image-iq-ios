@@ -5,7 +5,113 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.4.0（build 11）— 私有 Release 已发布，本地 IPA 已校验，可签名安装
+## 当前：0.4.1（build 12）— 第三轮因账号计费阻塞未启动；暂无 IPA，不安装新版
+
+[第三轮 CI 36397742264](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264)
+／[job 108848065780](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264/job/108848065780)
+已 **COMPLETED / FAILURE**，job **STARTUP / NOT STARTED，`steps: []`**。准确 annotation：
+
+> The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings
+
+现有证据只能确定为**账号付款／支出限额相关的启动阻塞**，不能判断是付款失败还是预算／
+限额问题；**不是 Actions artifact 存储问题，也不是 Release 发布器 bug**。账号所有者
+需要手动查看 GitHub **Settings → Billing & plans** 的付款及限额状态。不自动修改计费、
+不建议自动提高限额或增加支出、不索取凭据，也不追加重试。**继续使用现有 0.4.0 / build 11**；
+第三轮没有运行测试、设备构建或发布，没有可安装的新包。
+
+第二轮源码 `d2174787c1bd276c9bc38e6d6d2f1efe28ef0015` 已推送同一 `personal` 私有仓库。
+[CI 36396468128](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36396468128)
+／[job 108843930321](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36396468128/job/108843930321)
+已 **COMPLETED / FAILURE**，仅两项原生 UI 测试仍因整行点击未命中开关、等待 ON 失败，
+与首轮是同一根因。App **370 项：369 通过、1 项真机文件保护在模拟器跳过、0 失败
+（130.279 秒）**；展示 **7 项**、状态 **14 项**全部通过且已计入总数，精确子套件耗时
+未提供，不补写。独立 UI **9 项：7 通过、2 失败（319.699 秒）**。
+
+当前 HEAD **`70ad74b0f5e411ca60f741b1300545d1dbaf25c9`** 已提交并推送，相比第二轮
+仅新增 UI 测试的行内 **(0.9, 0.5)** 点击修复；用户 App 代码与第二轮 App 测试通过时
+相同。位置依据已捕获的实际行／开关本体坐标，但**第三轮未启动，修复未执行验证，
+不能声称 9 项 UI 全通过**。App **370**／UI **9** 只是待运行规模；第二轮不含这项点击修复。
+
+首轮源码 `2af11f6d759bcf7c021c20d73878cf4e5376dac4` 的
+[CI 36394279080](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36394279080)
+／[job 108836892722](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36394279080/job/108836892722)，
+已 **FAILED**，不是 Actions 配额问题：App **370 项、1 跳过**，仅 7 项展示测试产生
+**25 个断言失败**，进程内 AX 对所有元素（包括普通控件）读到零；14 项状态测试全部
+通过（**0.140 秒**）。UI **9 项中 2 项失败**：已下载校验的首轮失败 UI ZIP 中，两份
+debugDescription 文本显示 `show-debug-tools` 标识整行，`row.tap()` 点中行中心的标签，
+未命中右侧开关本体，两项点击后值均仍为 **0**。**此前“视口移动”的根因猜测已撤回，
+未观察到生产开关失效**；其余回归通过。仅检查文本、未查看图片，坐标及证据身份见
+[BUILD_STATUS.md](BUILD_STATUS.md)。
+
+**首轮、第二轮设备构建均 SKIPPED，没有 build 12 IPA**。
+失败证据 **6 项资产已上传并核验至 Release 398051690**，但随后更新 draft 状态的
+PATCH 漏传 tag，使 GitHub 将未发布 Release 的 `tag_name` 改为
+`untaged-e8f3a293686e58364ecc`。实际回读 **`draft: true`、无 IPA**；原发布器日志
+状态为 `unknown`，严格身份检查失败。**证据不是安装包，也不等于成功发布。**
+`ci-36394279080-1` 仅为首轮预期 tag，不能当作下载入口；本次未修复或发布该远端 draft。
+
+**第二轮发布器的失败证据 draft 路径 SUCCEEDED**，显式 tag 修复已在该真实路径验证，
+首轮发布器 bug 已解决；不是普通成功 Release 发布，不代表首轮旧 draft 已修复，
+更不是新 IPA 就绪。第二轮 **Release 398066345／tag `ci-36396468128-1`** 仍为
+**DRAFT、无 IPA**，发布器步骤 **SUCCESS**，不能作为安装入口。
+
+第二轮 UI ZIP（asset **594909127**，**32,920,094 字节**）已下载并校验至
+[../build/ui-review/36396468128/UIReview.zip](../build/ui-review/36396468128/UIReview.zip)，
+SHA-256：`59e77bd362d1ed25a38b5c06a2b11df2f512b09e2c52b09eeed6e0031c4530d7`。
+仅提取四张用户模式图，父流程已实际查看
+[1340×758 联系图](../build/ui-review/36396468128/user-mode-contact.jpg)：Settings 底部开关 OFF，
+Maintenance／隐私说明可见；Library 连接入口、iCloud 控件可见，索引禁用、无 Details；
+空查看器 OFF 时只有分享入口，ON 时分享／照片检查／本地预览对比均可见且禁用。
+这些是合成空状态／未授权场景，**不是私人 Photos 或真机照片，不证明开关语义点击成功**。
+其他 ZIP 图片未查看，不声称总数或全部审核。当前 App 源码未变，第二轮的有限视觉结论
+适用于相同场景，**但不是第三轮产物或新运行验证**。
+
+继续现有私有 Release 路线，仓库权限不变，不从 Actions artifact 交付新包；
+**build 12 未交付／未完成本地校验**。
+下方 build 11 的下载链接／字节数／哈希只属于旧包，不能作为 build 12 安装证明。
+
+### 现在保留旧版；后续满足条件才覆盖安装
+
+1. **现在不安装新版，继续用现有 0.4.0**。账号所有者先检查上述 Billing & plans；
+  当前不自动改计费、不追加 CI。只有阻塞解决、后续新运行通过测试和设备构建后，才进入
+  私有 Release 上传、新 IPA 下载和长度／SHA-256 核验；这不是已启动或排队的新任务。
+2. 届时确认 Release／设备报告为 **0.4.1 / build 12**，并完成对应新包核验后再签名；
+  当前不提供或猜测新包链接。仍需用 Sideloadly 本机签名。
+3. 用**原 Sideloadly 账号、原有效 Bundle ID 覆盖安装**；**不卸载、不清库、不重建索引**。
+  已有 **0.4.0 或 0.3.4 当前策略有效索引**无需迁移，也不用为了升级点 Index / resume。
+4. 已有当前策略索引／就绪语言包直接沿用，打开 App 正常搜索／看图即可；
+  不要求诊断、重新准备已有语言包、测试指定查询或重复旧截图流程。
+  升级到 build 12 后，需要调试时才到 **Settings 最底部 → Show debug tools**；每次启动默认 OFF，
+  只在本次会话有效，不保存。页脚提醒：隐藏工具**不会重置先前调整的权重等设置**。
+
+普通模式仍保留 Photos 权限、Ready／数量／进度、缺预览／读取失败友好提示和 iCloud
+显式许可；Settings 的结果数量、中文增强／语言选择／准备、Maintenance Refresh／
+Clear 确认，以及搜索的英文提示／“使用原文”都可正常使用。关闭调试只收起诊断界面、
+清理临时报告／问题并取消活动预览，不取消索引／搜索／语言包准备，也不改查询／结果／缓存。
+
+第二轮已包含的修复集中在测试与发布器：原生展示改用公开 UIKit 的真实行布局、非空白渲染像素及
+**OFF → ON → OFF** 稳定性检查，**不是 AX 语义证明**；真实 Settings／Library 语义
+仍由跨进程 UI 测试明确断言，未削弱。不使用进程内 AX 是测试方法的边界，**不表示 App
+没有 AX**。原有滚动／重新获取开关再等待值的处理仍保留，但不解决误点标签。
+当前 HEAD 的点击修复已提交／推送，按捕获坐标定位右侧开关本体；**不在第二轮中，第三轮
+未启动，修复尚未执行验证**。
+唯一 App 运行时小改动是查看器 Combine 忽略未变化的值，避免回放触发反复清空 nil；
+该改动已包含在第二轮通过的 App 代码中，此后未再改 App。正常看图、搜索、索引逻辑及
+20 worker／HQ224／Fast／模型／翻译／缓存不变，未削弱调试功能，未新增跳过测试，
+既有 1 项真机文件保护跳过不变。
+
+发布器每次自身 PATCH 显式传入 `run.tag` 与运行源码 SHA，并保留严格身份检查；
+模拟真实 GitHub 行为的本地发布器测试为 **88 项 PASS（此前 83 项）**，第二轮另已验证
+失败证据 draft 路径成功，不据此宣称普通成功发布。第三轮未执行 App **370（349＋14＋7）**／
+UI **9**；第二轮四张用户模式合成图已按上述范围审核，不代替点击语义或真机验证。
+详见 [USER_MODE.md](USER_MODE.md)、[BUILD_STATUS.md](BUILD_STATUS.md)。本次仅依据
+提供事实更新指定四份文档，不执行命令、Git、CI、测试或下载，不读取／上传私人照片；
+build 11 及更早记录保留。
+
+## 历史：0.4.0（build 11）— 私有 Release 已发布，本地 IPA 已校验，可签名安装
+
+以下保留 build 11 当时的包身份与步骤；“现在／新包／无需等待”仅指 build 11，
+不是 build 12 已就绪。当前升级无需照做历史诊断或迁移步骤，以上方为准。
 
 用户已明确批准**方案 2：同一私有仓库 Release＋job 级 contents: write**，不改公开
 可见性或计费。新源码 `844492b754f86d519c904da21cd80c1c814c056b` 相比已通过
@@ -488,8 +594,14 @@ Library 区分扫描时有 GPS／找到标签／无 GPS／无可用包／包外�
 设备运行比构建 SDK 更新的 iOS，不代表应用一定不能运行；最终仍需测试实际
 安装、系统授权、内存和推理行为，不声称云端模拟器替代了 iOS 26.6.1 真机验证。
 
-**以下通用步骤可用于已经交付并校验的 build 11 IPA**；本机文件及另一台电脑的私有
-Release 入口见页首。另一台电脑需自行下载并核验同一包；签名／真机表现仍待确认。
+**当前升级目标是 0.4.1 / build 12，须等实际交付并校验新包后再执行下方签名／安装步骤**。
+首轮 CI **36394279080** 已失败；第二轮 **36396468128／d2174787** 已结束，仅 2 项
+UI 因同一整行误点而失败，App 369 通过／1 跳过／0 失败；设备构建跳过，无 IPA。
+第二轮失败证据 draft 路径成功，不是普通成功发布。当前 HEAD
+**70ad74b0f5e411ca60f741b1300545d1dbaf25c9** 仅新增已提交／推送的 UI 点击修复，
+App 代码未变；第三轮手动触发 **一次、HTTP 204**，ID／结果待确认，预期 App 370／UI 9，
+不预记通过。build 12 IPA 未交付／未完成本地校验。历史 build 11 只作为旧版可选回退包，
+不是本次新包，入口见第 3 节。
 
 ## 1. 安装工具（由你操作）
 
@@ -512,19 +624,23 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 3. 等 Sideloadly 中的设备列表显示你的 iPhone。没有识别时先排查驱动／线缆，
    不反复提交 Apple 登录。
 
-## 3. 签名安装
+## 3. 签名安装（build 12 实际交付并校验后）
 
-1. 将已完整下载并校验的
-  [../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa)
-  拖进 Sideloadly；另一台电脑先登录页首私有 Release 下载并校验同一包。
-  历史 build 10／9／8 包都不含本次翻译功能，不作替代。
-   新 Release 单独提供 IPA，无需解压外层 Actions ZIP；**不解压或修改 IPA 的 Payload**。
+1. **当前 build 12 新包尚未交付，此步先等待**。交付后确认 Release／设备报告为
+  **0.4.1 / build 12**，完整下载并核验对应 IPA，再拖进 Sideloadly；另一台电脑也须
+  下载并校验同一新包。目前不提供或猜测 build 12 下载链接，不用 build 11 冒充新包。
+  私有 Release 单独提供 IPA，无需解压外层 Actions ZIP；**不解压或修改 IPA 的 Payload**。
 2. 选择已连接的 iPhone，使用原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，
    不卸载、不清索引；Apple Account 必须是本人有权使用的账号。
 3. 点击 Start；密码及双重认证仅由你在工具／Apple 登录流程中手动输入。
    如工具明确要求普通密码或 App 专用密码，以当前官方说明为准，不互相替代试错。
 4. 不启用 dylib 注入、插件或其它改包功能。首次签名可能需要调整开发用 Bundle ID；
    保持之后重签所用账号／标识一致，不随意删除旧 App 以免丢失其本地索引。
+
+**旧版可选回退，不是本次新包**：历史 **0.4.0 / build 11** 的已校验本机 IPA 为
+[../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa)；
+另一台电脑可从历史[私有 Release：ci-36387878343-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
+下载并按上方 build 11 历史记录核验。此包不含 build 12 用户模式更新，不要求回退或重装。
 
 ## 4. 手机上完成信任
 
@@ -534,13 +650,20 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
   要求重启和确认。菜单暂时不出现时，先完成一次配对／开发签名安装再检查。
 - 若遇到账户或设备管理政策禁止开发者模式，停止并确认政策，不绕过设备管理。
 
-## 5. build 11 安装后：准备语言包，沿用已有索引
+## 5. build 12 交付并覆盖安装后：沿用已有状态，正常使用
 
-新包已交付并完成本地校验；覆盖安装后，打开 **Settings → 中文搜索增强 → 简体中文 →
-英文 → 下载离线语言包**，同意系统下载并确认就绪，再搜索 **身份证**，查看实际英文及
-“使用原文”对照，不保证输出 “ID card”。可选断开全部网络验证真机；照片 Network 保持 OFF。
-已有 build 10 当前策略索引不清库、不重建图像或地点、不必跑 Index / resume。
-更早模型／输入策略尚未迁移的情况才参考历史迁移；不因翻译升级重做整库诊断。
+本节仅适用于 **build 12 实际交付、校验并安装之后**，不是已交付或已安装声明。
+已装 build 11 且当前策略索引／语言包已就绪时，覆盖安装后直接正常搜索／看图；
+已有 build 11／10 当前策略有效索引无需迁移，**不卸载、不清库、不重建图像或地点，
+不必 Index / resume**。不要求重新下载语言包、测试“身份证”或其他指定查询、
+断网验证、诊断或截图；这些都不是升级或正常使用的前置任务。尚缺语言包且需要中文增强时，
+可自行在 Settings 准备；已有语言包无需重做，原文搜索仍可使用。照片 Network 默认 OFF，
+仅按需要显式允许，不因升级改变。
+
+调试工具仅在需要时从 **Settings 最底部 → Show debug tools** 打开；**每次启动默认 OFF**，
+仅当前会话有效。关闭会隐藏诊断界面、清理临时报告／问题并取消活动预览，
+**保留先前调整的权重**，不取消索引／搜索／语言包准备，不重置查询／结果／模型／缓存。
+更早模型／输入策略尚未迁移的情况才参考历史迁移；不因本次用户模式更新重做历史流程。
 
 ## 隐私与模型许可不因本次更新而放宽
 
