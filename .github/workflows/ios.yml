@@ -22,8 +22,12 @@ permissions:
 jobs:
   simulator:
     # This source directory must be the PRIVATE repo root. No photos/database/videos.
-    if: github.event.repository.private == true
+    if: github.event.repository.private == true && github.repository == 'xwgnick/local-image-iq-ios'
     runs-on: macos-15
+    # User-approved private Release delivery; no repository visibility/billing change.
+    permissions:
+      contents: write
+      actions: read
     env:
       IMAGEIQ_REQUIRE_MODELS: ${{ inputs.include_models && '1' || '0' }}
       IMAGEIQ_TEST_ALL_COMPUTE_UNITS: ${{ inputs.all_compute_units && '1' || '0' }}
@@ -55,6 +59,7 @@ jobs:
           node scripts/check_places.mjs --self-test
           node scripts/check_places.mjs
           node scripts/package_device.mjs --self-test
+          node --test scripts/test_publish_release.mjs
           python scripts/test_static.py
           plutil -lint App/Info.plist
           swift test --package-path Packages/ImageIQCore
@@ -119,42 +124,36 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
             ENABLE_DEBUG_DYLIB=NO
           node scripts/package_device.mjs build/DeviceProducts/Release-iphoneos/LocalImageIQ.app build/device
-      # Compile/validate BOTH simulator and device code before any artifact upload.
-      # An exhausted upload quota must not hide device-only compiler diagnostics.
-      - name: Upload native UI review evidence
+      # Only generated test evidence and public model/place reports are collected.
+      # App packages remain separate, and failed runs never publish an installable package.
+      - name: Bundle release evidence
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: local-image-iq-ui-review-${{ github.run_number }}
-          if-no-files-found: warn
-          path: build/UIReview
-      - name: Upload unsigned iPhone IPA separately
-        if: inputs.build_device_ipa && success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: local-image-iq-iphone-unsigned-${{ github.run_number }}
-          compression-level: 0
-          if-no-files-found: error
-          path: |
-            build/device/LocalImageIQ-iphoneos-unsigned.ipa
-            build/device/device-build.json
-            build/device/SHA256SUMS.txt
-      - name: Keep build/test evidence in this private repository
+        run: |
+          mkdir -p build/release-evidence
+          if [ -d build/UIReview ]; then
+            ditto -c -k --keepParent --norsrc build/UIReview build/release-evidence/UIReview.zip
+          fi
+          if [ -d build/TestResults.xcresult ]; then
+            ditto -c -k --keepParent --norsrc build/TestResults.xcresult build/release-evidence/TestResults.xcresult.zip
+          fi
+          for report in Resources/Models/parity-report.json Resources/Models/provenance.json Resources/Places/places-manifest.json; do
+            if [ -f "$report" ]; then cp "$report" build/release-evidence/; fi
+          done
+      - name: Upload verified assets to this private repository Release
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: local-image-iq-${{ inputs.include_models && 'with-models' || 'model-free' }}-${{ github.run_number }}
-          if-no-files-found: warn
-          path: |
-            build/TestResults.xcresult
-            build/LocalImageIQ-Simulator.zip
-            Resources/Models/parity-report.json
-            Resources/Models/provenance.json
-            Resources/Places/places-manifest.json
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          UPSTREAM_STATUS: ${{ job.status }}
+          BUILD_DEVICE: ${{ inputs.build_device_ipa }}
+          INCLUDE_MODELS: ${{ inputs.include_models }}
+        run: |
+          status=failure
+          if [ "$UPSTREAM_STATUS" = "success" ]; then status=success; fi
+          node scripts/publish_release.mjs --status "$status" --device "$BUILD_DEVICE" --models "$INCLUDE_MODELS"
       - name: Summarize validation boundary
         if: always()
         run: |
           echo '### Native iOS milestone' >> "$GITHUB_STEP_SUMMARY"
-          echo 'This run does not sign, publish, upload to TestFlight, or prove physical-iPhone performance.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Build/test assets are delivered only through this private repository Release. This run does not sign, distribute publicly, upload to TestFlight, or prove physical-iPhone performance.' >> "$GITHUB_STEP_SUMMARY"
           echo "Models requested: $IMAGEIQ_REQUIRE_MODELS. Model-free tests skip generated numerical parity; read xcresult for actual test outcomes." >> "$GITHUB_STEP_SUMMARY"
           echo 'All runs require the pinned CHN/FRA/DEU/NLD ADM1/ADM2 Places pack and bundled manifest. Check step outcomes; coverage is historical administrative boundaries, not global addresses or a phone-speed measurement.' >> "$GITHUB_STEP_SUMMARY"
