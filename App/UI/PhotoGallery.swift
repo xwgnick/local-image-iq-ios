@@ -351,7 +351,9 @@ struct PhotoGalleryViewer: View {
         state.dismissPhotoCheck()
         // Independent of the display-image task, so this action works while
         // that image is loading. The sheet never follows subsequent paging.
-        photoCheckSelection = PhotoCheckSelection(id: selectedID, initialQuery: state.completedQuery ?? state.query)
+        // Reproduce the text actually used for these results; never translate it
+        // a second time or pass Chinese while the visible ranking used English.
+        photoCheckSelection = PhotoCheckSelection(id: selectedID, initialQuery: state.photoCheckInitialQuery)
     }
 
     private func clearPhotoCheck() {

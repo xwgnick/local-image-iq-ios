@@ -18,6 +18,7 @@ struct ContentView: View {
                         if !showingResults { introduction }
                         libraryStatus
                         searchField
+                        translationSummary
                         if !showingResults && !isSearchFocused { suggestions }
                         searchContent
                     }
@@ -64,6 +65,42 @@ struct ContentView: View {
                                    library: state.library, networkAllowed: state.allowICloudDownload, state: state)
             }
         }.tint(IQStyle.accent)
+        .background {
+            if let service = state.appleTranslationService {
+                AppleQueryTranslationHost(service: service, purpose: .search)
+            }
+        }
+    }
+
+    @ViewBuilder private var translationSummary: some View {
+        if let resolution = state.completedSearchQuery {
+            if resolution.translated {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("已用英文搜索：\(resolution.effective)")
+                        .font(.subheadline).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("effective-search-query")
+                    Button("使用原文") { isSearchFocused = false; state.search(useOriginal: true) }
+                        .frame(minHeight: 44).disabled(!state.canSearch)
+                        .accessibilityIdentifier("search-original")
+                }
+                .foregroundStyle(IQStyle.accent)
+            } else if let notice = resolution.notice {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(notice).font(.caption).foregroundStyle(IQStyle.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("translation-fallback-notice")
+                    Button("中文搜索设置") { isSearchFocused = false; showSettings = true }
+                        .frame(minHeight: 44)
+                }
+            } else if state.chineseSearchEnabled, ChineseQueryRouter.sourceLanguage(for: resolution.original) != nil {
+                HStack {
+                    Text("本次使用原文").font(.caption).foregroundStyle(IQStyle.secondary)
+                    Button("使用英文翻译") { submitSearch() }.disabled(!state.canSearch).frame(minHeight: 44)
+                        .accessibilityIdentifier("search-translated")
+                }
+            }
+        }
     }
 
     private var introduction: some View {

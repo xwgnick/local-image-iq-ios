@@ -3,7 +3,7 @@ import SwiftUI
 @main
 @MainActor
 struct LocalImageIQApp: App {
-    @StateObject private var state = AppState()
+    @StateObject private var state = AppState(translationPreferences: .standard)
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {

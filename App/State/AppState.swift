@@ -5,13 +5,32 @@ import ImageIQCore
 
 @MainActor
 final class AppState: ObservableObject {
-    enum Activity: Equatable { case refreshing, indexing, searching, clearing, checkingPhoto }
+    enum Activity: Equatable { case refreshing, indexing, searching, clearing, checkingPhoto, preparingTranslation }
     struct Selection: Identifiable { let id: String }
 
     @Published private(set) var authorization = PhotoLibraryClient.authorization
     @Published private(set) var summary = LibrarySummary()
     @Published private(set) var results: [SearchHit] = []
     @Published private(set) var completedQuery: String?
+    @Published private(set) var completedSearchQuery: SearchQueryResolution?
+    @Published private(set) var translationAvailability: QueryTranslationAvailability = .unchecked
+    @Published private(set) var translationPreparationIssue: String?
+    @Published var chineseSearchEnabled = true {
+        didSet {
+            guard oldValue != chineseSearchEnabled else { return }
+            translationPreferences?.set(chineseSearchEnabled, forKey: Self.translationPreferenceKey)
+            searchSettingsChanged()
+        }
+    }
+    @Published var translationLanguage: QueryTranslationLanguage = .simplified {
+        didSet {
+            guard oldValue != translationLanguage else { return }
+            translationAvailabilityID = UUID()
+            translationAvailability = .unchecked
+            translationPreparationIssue = nil
+            if activity == .preparingTranslation { operationTask?.cancel() }
+        }
+    }
     @Published private(set) var photoCheckReport: PhotoDiagnosticReport?
     @Published private(set) var photoCheckIssue: String?
     @Published private(set) var progress = IndexProgress()
@@ -27,17 +46,35 @@ final class AppState: ObservableObject {
 
     let library: PhotoLibraryClient
     let thumbnails: PhotoThumbnailCache
+    let appleTranslationService: AppleQueryTranslationService?
+    private let queryTranslator: any QueryTranslating
+    private let translationPreferences: UserDefaults?
+    private static let translationPreferenceKey = "chineseSearchEnabled.v1"
     private let worker: any PhotoWorkServicing
     private let authorizationStatus: () -> PHAuthorizationStatus
     private var operationTask: Task<Void, Never>?
     private var operationID = UUID()
     private var photoCheckID = UUID()
+    private var translationAvailabilityID = UUID()
     private var isForeground = true
 
     init(library: PhotoLibraryClient = PhotoLibraryClient(), worker: (any PhotoWorkServicing)? = nil,
-         authorizationStatus: @escaping () -> PHAuthorizationStatus = { PhotoLibraryClient.authorization }) {
+         authorizationStatus: @escaping () -> PHAuthorizationStatus = { PhotoLibraryClient.authorization },
+         queryTranslator: (any QueryTranslating)? = nil, translationPreferences: UserDefaults? = nil) {
         self.library = library
         self.worker = worker ?? PhotoIndexWorker(library: library)
+        if let queryTranslator {
+            self.queryTranslator = queryTranslator
+            appleTranslationService = nil
+        } else {
+            let service = AppleQueryTranslationService()
+            self.queryTranslator = service
+            appleTranslationService = service
+        }
+        self.translationPreferences = translationPreferences
+        if let saved = translationPreferences?.object(forKey: Self.translationPreferenceKey) as? Bool {
+            chineseSearchEnabled = saved
+        }
         self.authorizationStatus = authorizationStatus
         authorization = authorizationStatus()
         thumbnails = PhotoThumbnailCache(library: library)
@@ -49,11 +86,13 @@ final class AppState: ObservableObject {
     deinit { operationTask?.cancel() }
 
     var isBusy: Bool { activity != nil }
+    var translationSupported: Bool { queryTranslator.isSupported }
+    var photoCheckInitialQuery: String { completedSearchQuery?.effective ?? completedQuery ?? query }
     var canRead: Bool { authorization == .authorized || authorization == .limited }
     var modelsReady: Bool { summary.modelVersion != nil && summary.modelIssue == nil }
     var canIndex: Bool { canRead && modelsReady && !isBusy }
     var canSearch: Bool {
-        canRead && modelsReady && summary.indexedCount > 0 && !isBusy && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        isForeground && canRead && modelsReady && summary.indexedCount > 0 && !isBusy && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     func authorize() {
@@ -80,6 +119,7 @@ final class AppState: ObservableObject {
 
     func enterBackground() {
         isForeground = false
+        translationAvailabilityID = UUID()
         operationTask?.cancel()
         invalidateDisplayedPhotos()
         thumbnails.clear()
@@ -87,6 +127,9 @@ final class AppState: ObservableObject {
     }
 
     func enterForeground() {
+        // Translation download consent can make the scene inactive, then active,
+        // without backgrounding. Do not cancel preparation on that transition.
+        guard !isForeground else { return }
         isForeground = true
         refresh()
     }
@@ -115,11 +158,78 @@ final class AppState: ObservableObject {
         }
     }
 
-    func search() {
+    func search(useOriginal: Bool = false) {
         guard canSearch else { return }
         let text = query, limit = resultLimit, weight = Float(locationWeight)
+        let translate = chineseSearchEnabled && !useOriginal
         invalidateDisplayedPhotos()
-        schedule(.searching) { [worker] _ in .search(try await worker.search(text: text, limit: limit, locationWeight: weight), text) }
+        schedule(.searching) { [worker, queryTranslator] _ in
+            let resolved = try await Self.resolve(text, translate: translate, using: queryTranslator)
+            try Task.checkCancellation()
+            let response = try await worker.search(text: resolved.effective, limit: limit, locationWeight: weight)
+            try Task.checkCancellation()
+            return .search(response, resolved)
+        }
+    }
+
+    private static func resolve(_ text: String, translate: Bool,
+                                using translator: any QueryTranslating) async throws -> SearchQueryResolution {
+        try Task.checkCancellation()
+        guard translate, let language = ChineseQueryRouter.sourceLanguage(for: text) else {
+            return SearchQueryResolution(original: text, effective: text, translated: false, notice: nil)
+        }
+        do {
+            guard translator.isSupported else { throw QueryTranslationFailure.unsupported }
+            let available = await translator.availability(for: language)
+            try Task.checkCancellation()
+            switch available {
+            case .installed: break
+            case .downloadRequired: throw QueryTranslationFailure.notInstalled
+            case .unsupported: throw QueryTranslationFailure.unsupported
+            case .unchecked, .unavailable: throw QueryTranslationFailure.unavailable
+            }
+            let english = try await translator.translate(text, from: language)
+            try Task.checkCancellation()
+            guard !english.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw QueryTranslationFailure.emptyResult
+            }
+            return SearchQueryResolution(original: text, effective: english, translated: true, notice: nil)
+        } catch {
+            try Task.checkCancellation()
+            if error is CancellationError { throw error }
+            let failure = (error as? QueryTranslationFailure) ?? .unavailable
+            return SearchQueryResolution(original: text, effective: text, translated: false,
+                                         notice: failure.fallbackMessage)
+        }
+    }
+
+    func checkTranslationAvailability() async {
+        let token = UUID()
+        translationAvailabilityID = token
+        let language = translationLanguage
+        let value = await queryTranslator.availability(for: language)
+        guard !Task.isCancelled, isForeground, translationLanguage == language,
+              translationAvailabilityID == token else { return }
+        translationAvailability = value
+    }
+
+    func prepareTranslation() {
+        guard isForeground, !isBusy, translationSupported else { return }
+        translationAvailabilityID = UUID()
+        let language = translationLanguage
+        translationPreparationIssue = nil
+        schedule(.preparingTranslation) { [queryTranslator] _ in
+            // This is the ONLY user action allowed to ask for language downloads.
+            try await queryTranslator.prepare(language)
+            try Task.checkCancellation()
+            let value = await queryTranslator.availability(for: language)
+            try Task.checkCancellation()
+            return .translationPrepared(language, value)
+        }
+    }
+
+    func dismissTranslationPreparation() {
+        if activity == .preparingTranslation { operationTask?.cancel() }
     }
 
     /// Uses the same serialized task chain without clearing the visible results.
@@ -165,7 +275,7 @@ final class AppState: ObservableObject {
 
     private func invalidateDisplayedPhotos() {
         dismissPhotoCheck()
-        results = []; selection = nil; completedQuery = nil
+        results = []; selection = nil; completedQuery = nil; completedSearchQuery = nil
     }
 
     private func accept(progress: IndexProgress, token: UUID) {
@@ -175,8 +285,9 @@ final class AppState: ObservableObject {
 
     private enum Outcome {
         case summary(LibrarySummary, String)
-        case search(SearchResponse, String)
+        case search(SearchResponse, SearchQueryResolution)
         case photoCheck(PhotoDiagnosticReport, UUID)
+        case translationPrepared(QueryTranslationLanguage, QueryTranslationAvailability)
     }
 
     private func schedule(_ activity: Activity, operation: @escaping @MainActor (UUID) async throws -> Outcome) {
@@ -201,8 +312,15 @@ final class AppState: ObservableObject {
                 case .search(let response, let query):
                     self.summary = response.summary
                     self.results = response.hits
-                    self.completedQuery = query
+                    self.completedSearchQuery = query
+                    self.completedQuery = query.original
                     self.status = "\(response.hits.count) results · exact local scores, not probabilities."
+                case .translationPrepared(let language, let availability):
+                    if self.translationLanguage == language {
+                        self.translationAvailability = availability
+                        self.translationPreparationIssue = availability == .installed ? nil : "语言包尚未就绪，请稍后检查。"
+                        self.status = availability.message
+                    }
                 case .photoCheck(let report, let checkID):
                     if self.photoCheckID == checkID {
                         self.photoCheckReport = report
@@ -213,7 +331,12 @@ final class AppState: ObservableObject {
             } catch {
                 guard let self, self.operationID == token else { return }
                 self.activity = nil
-                if activity == .checkingPhoto {
+                if activity == .preparingTranslation {
+                    self.translationPreparationIssue = (error is CancellationError || Task.isCancelled)
+                        ? "语言包准备已取消。原文搜索仍然可用。"
+                        : "语言包准备未完成。请检查网络和设备空间后重试；原文搜索仍然可用。"
+                    self.status = "Translation preparation stopped. Photo downloads remain unchanged."
+                } else if activity == .checkingPhoto {
                     if !(error is CancellationError), !Task.isCancelled {
                         self.photoCheckIssue = "Could not finish this check. Keep the app open and confirm this photo is still accessible, then try again."
                     }
