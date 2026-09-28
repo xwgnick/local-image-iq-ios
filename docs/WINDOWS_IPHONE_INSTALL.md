@@ -5,7 +5,45 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.4.1（build 12）— 第三轮因账号计费阻塞未启动；暂无 IPA，不安装新版
+## 当前：0.4.1（build 12）公开 CI 正在运行、尚无 IPA；下载入口仍是旧版 0.4.0
+
+2026-09-28，同一仓库已确认 **PUBLIC／`private: false`**。用户已确认既有历史、
+Actions 日志及已发布 Releases 公开；详见 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md)。
+
+- **另一台电脑无需 GitHub 登录**：打开
+  [旧版 0.4.0 / build 11 Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
+  （ID **398009938**），下载未签名 IPA。这是既有旧包，**不是 build 12**。
+- 旧包 asset **594739443**，精确 **1,414,801,288 字节**；SHA-256：
+  `6043afbe68a84edd16d1314ecf4369f308bff8d7cf676392aee5eee6a950ca71`。
+  本工作区已校验的副本是
+  [../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa)。
+  另一台电脑下载后仍须核验同一长度／哈希，再用 Sideloadly 本机签名；公开不等于免签安装。
+- 已装 0.4.0 可继续使用，**不要求重装或回退**。工程仍是 0.4.1 / 12，但最终开关点击
+  修复尚未完成原生 UI 验证，无新设备包；两个旧失败 draft 未发布，不能用作安装入口。
+- 新源码 **`f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5`** 已推送 `personal`。
+  2026-09-28 最新检查点：[公开手动 CI 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)
+  ／[job 108858329166](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391/job/108858329166)
+  **已实际启动、IN_PROGRESS**，源码检查步骤已通过，当前正在生成公开地点包；
+  **不是旧私有运行的计费启动阻塞**，保留全部构建门槛。
+- 本地指定的 **Node 22** 可执行文件实测发布器 mock **94 项全部 PASS**，为父流程
+  实际计数；Node／源码／工程／打包检查也已本地 PASS。App **370**／UI **9** 仍为
+  本轮待验证规模，不能据本地结果宣称新 CI 全套测试／回归通过。
+- 预期公开 Release tag **`ci-36400923391-1` 目前尚不存在**，不是下载入口。
+  标准 `macos-15` 的公开仓库 hosted runner 用量免费，仍受平台政策／限制约束；
+  不要求提高付费额度，也**不重置旧私有分钟或历史累计用量**。本次文档编辑不触发 CI。
+- 只有新运行通过测试／设备构建、完成公开 Release 发布及新 IPA 长度／SHA-256 核验后，
+  才按 **0.4.1 / 12** 更新。仍用原 Sideloadly 账号／有效 Bundle ID 覆盖安装；
+  已有 build 11／10 当前策略索引、就绪语言包沿用，不卸载、不清库、不要求重建或诊断。
+
+公开转换不改模型、20 worker、HQ224／Fast、翻译或索引策略；项目不设置项目级许可证，
+第三方再分发审查仍未完成。公开下载这一事实不等于一般复用授权或法律许可批准。
+最新验证账本见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+## 历史检查点（2026-09-28，转公开前）：0.4.1（build 12）— 第三轮未启动，无新包
+
+以下版本历史保留当时错误、校验值和步骤；“私有／需登录／先查计费／不重试”是旧阶段
+条件，**不适用于现在公开的 build 11 下载**。现行入口与 build 12 待办以上方为准，
+不要重复历史查询、诊断或迁移步骤。
 
 [第三轮 CI 36397742264](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264)
 ／[job 108848065780](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264/job/108848065780)
@@ -131,9 +169,9 @@ CI 对应步骤也 PASS**。
   已实际全量下载，父进程直接流式复验长度／SHA-256 一致，`ipaVerifiedLocally: true`；
   设备报告、校验文件、交付清单及下载记录齐全，无部分下载残留，所有旧本地包保留。
 - **另一台 Windows 电脑**：打开
-  [私有 Release：ci-36387878343-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)，
-  登录 **xwgnick 或具有该私有仓库读取权限的账号**，下载同一未签名 IPA，核验以下
-  长度／SHA-256 后再签名。本地工作区链接不会把文件自动传到另一台电脑；Release 不是公开下载。
+  [旧版 Release：ci-36387878343-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)。
+  发布当时私有，须登录有读取权限的账号；**2026-09-28 转公开后不再要求 GitHub 登录**。
+  下载同一未签名 IPA，核验以下长度／SHA-256 后再签名；本地工作区链接不会自动传送文件。
 - IPA asset **594739443**，精确 **1,414,801,288 字节**；SHA-256：
   `6043afbe68a84edd16d1314ecf4369f308bff8d7cf676392aee5eee6a950ca71`。
   不使用第二轮 runner 的 **1,414,801,289 字节／fc449b…** 校验值。
@@ -595,13 +633,21 @@ Library 区分扫描时有 GPS／找到标签／无 GPS／无可用包／包外�
 安装、系统授权、内存和推理行为，不声称云端模拟器替代了 iOS 26.6.1 真机验证。
 
 **当前升级目标是 0.4.1 / build 12，须等实际交付并校验新包后再执行下方签名／安装步骤**。
-首轮 CI **36394279080** 已失败；第二轮 **36396468128／d2174787** 已结束，仅 2 项
+**历史（2026-09-28，转公开前）**：首轮 CI **36394279080** 已失败；第二轮 **36396468128／d2174787** 已结束，仅 2 项
 UI 因同一整行误点而失败，App 369 通过／1 跳过／0 失败；设备构建跳过，无 IPA。
-第二轮失败证据 draft 路径成功，不是普通成功发布。当前 HEAD
+第二轮失败证据 draft 路径成功，不是普通成功发布。第三轮源码
 **70ad74b0f5e411ca60f741b1300545d1dbaf25c9** 仅新增已提交／推送的 UI 点击修复，
-App 代码未变；第三轮手动触发 **一次、HTTP 204**，ID／结果待确认，预期 App 370／UI 9，
-不预记通过。build 12 IPA 未交付／未完成本地校验。历史 build 11 只作为旧版可选回退包，
-不是本次新包，入口见第 3 节。
+App 代码未变；第三轮 **36397742264** 因计费 annotation 在启动前失败、`steps: []`。
+
+**当前公开运行（2026-09-28 最新检查点）**：源码
+**f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5** 已推送 `personal`；
+**36400923391／job 108858329166** 已实际启动、**IN_PROGRESS**，源码检查步骤通过，
+正在生成公开地点包，**不是计费启动阻塞**。指定 Node 22 的本地发布器 mock 测试由
+父流程实际计数 **94 项全部 PASS**；Node／源码／工程／打包检查本地 PASS。
+App **370**／UI **9** 仍为本轮待验证规模，不预记全套测试／回归通过。
+预期公开 tag **`ci-36400923391-1` 尚不存在**，不能作为安装入口。
+build 12 IPA 未交付／未完成本地校验。历史 build 11 是现有公开旧包，不是本次新包，
+入口见页首及第 3 节。
 
 ## 1. 安装工具（由你操作）
 
@@ -629,7 +675,7 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 1. **当前 build 12 新包尚未交付，此步先等待**。交付后确认 Release／设备报告为
   **0.4.1 / build 12**，完整下载并核验对应 IPA，再拖进 Sideloadly；另一台电脑也须
   下载并校验同一新包。目前不提供或猜测 build 12 下载链接，不用 build 11 冒充新包。
-  私有 Release 单独提供 IPA，无需解压外层 Actions ZIP；**不解压或修改 IPA 的 Payload**。
+  公开 Release 单独提供 IPA，无需 GitHub 登录或解压外层 Actions ZIP；**不解压或修改 IPA 的 Payload**。
 2. 选择已连接的 iPhone，使用原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，
    不卸载、不清索引；Apple Account 必须是本人有权使用的账号。
 3. 点击 Start；密码及双重认证仅由你在工具／Apple 登录流程中手动输入。
@@ -639,8 +685,8 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 
 **旧版可选回退，不是本次新包**：历史 **0.4.0 / build 11** 的已校验本机 IPA 为
 [../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa)；
-另一台电脑可从历史[私有 Release：ci-36387878343-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
-下载并按上方 build 11 历史记录核验。此包不含 build 12 用户模式更新，不要求回退或重装。
+另一台电脑可从[现已公开的旧版 Release：ci-36387878343-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
+无需 GitHub 登录下载，并按上方 build 11 记录核验。此包不含 build 12 用户模式更新，不要求回退或重装。
 
 ## 4. 手机上完成信任
 

@@ -1,6 +1,31 @@
 # 用户模式与调试工具 — 0.4.1（build 12）
 
-**当前未交付：第三轮因账号计费阻塞未启动，没有 build 12 设备构建或 IPA。**
+## 当前：build 12 公开 CI 正在运行，完整原生验证／交付尚未完成
+
+同一 [xwgnick/local-image-iq-ios](https://github.com/xwgnick/local-image-iq-ios) 已确认
+**PUBLIC／`private: false`**；用户已明确同意历史作者邮箱、机器路径、测试查询、
+Actions 日志和已发布 Releases 公开。范围、免费标准 runner 条件及不设置项目级许可证的
+边界见 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md)；第三方再分发审查没有因此完成。
+
+旧版 [0.4.0 / build 11 Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
+（398009938）现公开可下载，无需 GitHub 登录；两个旧失败 draft 未发布。
+
+2026-09-28 最新检查点：新源码 **`f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5`** 已推送
+`personal`；[公开手动 CI 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)
+／[job 108858329166](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391/job/108858329166)
+**IN_PROGRESS、确实已启动**，源码检查步骤已通过，当前正在生成公开地点包。
+这不是旧 `70ad74b0` 第三轮的计费启动阻塞；旧阻塞仅作为下方带日期的历史保留。
+
+本地指定的 **Node 22** 可执行文件实测发布器 mock **94 项全部 PASS**，为父流程实际计数；
+Node／源码／工程／打包检查也已本地 PASS。**不代表新 CI 全套测试／回归通过**；App
+**370**／UI **9** 仍只是本轮待验证规模，最终开关本体点击修复仍待原生 UI 验证。
+标准 `macos-15` 公开仓库 hosted runner 用量免费，仍受平台政策／限制约束，
+**不重置旧私有分钟或历史累计用量**；没有调整付费额度。
+
+预期公开 Release tag **`ci-36400923391-1` 目前尚不存在**，不是安装入口。
+**没有 build 12 IPA**，需等待正在运行的完整构建通过全部门槛，再发布、下载并核验新包。
+本次文档编辑不执行命令或查询／触发 CI，不承诺构建成功。
+
 继续使用已安装的 **0.4.0 / build 11**；下述用户模式是 build 12 的实现说明，不表示
 现有旧包已含该功能，也不是当前安装指令。
 
@@ -41,6 +66,15 @@ Settings 页脚明确提醒：**开关只控制调试工具的显示，不重置
 引擎没有变更。20 worker、HQ224／Fast、模型与图像／地点缓存身份不变。从 **0.4.0 或
 0.3.4 已有当前策略 `photokit-hq224-fast-fallback-v1` 的有效索引**升级无需迁移，
 不卸载、不清库，也不用为了升级执行 Index / resume。更早版本迁移要求不因此取消。
+
+公开转换本身不改上述引擎、模型、20 worker、HQ224／Fast、翻译或缓存契约。
+只有新完整构建通过、公开 Release 发布且新 IPA 全量长度／SHA-256 校验完成后才报告
+build 12 交付，再按 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md) 覆盖安装。
+
+### 2026-09-28 转公开前的构建与交付历史
+
+以下“当前 HEAD／私有／先处理计费／不重试”保留当时检查点含义，不是现行条件。
+当前路线以页首和 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md) 为准；历史失败不改写。
 
 第二轮源码 **`d2174787c1bd276c9bc38e6d6d2f1efe28ef0015`** 已推送同一 `personal`
 私有仓库。[CI 36396468128](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36396468128)
@@ -88,7 +122,7 @@ PATCH 漏传 tag，GitHub 将未发布 Release 的 `tag_name` 改为
 完成后用原 Sideloadly 账号／有效 Bundle ID 覆盖安装；已有当前策略索引与就绪语言包
 继续沿用，不清库、不重建、不必 Index / resume，也不要求重复诊断、准备语言包或测试指定查询。
 
-## 已知结果与尚未完成的验证
+## 历史验证账本（2026-09-28，转公开前；不是当前公开 CI 结果）
 
 ### 首轮实际结果（不是修复版通过记录）
 
@@ -166,6 +200,6 @@ App **370（349＋14＋7）**／UI **9** 没有执行，点击修复尚未验证
 状态见 [BUILD_STATUS.md](BUILD_STATUS.md)，安装见
 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)；翻译与交付契约分别见
 [QUERY_TRANSLATION.md](QUERY_TRANSLATION.md)、
-[PRIVATE_RELEASE_DELIVERY.md](PRIVATE_RELEASE_DELIVERY.md)，本轮未修改后二者。
-本次仅依据提供的事实编辑指定四份文档，不执行命令、Git、CI 查询／触发、测试或下载，
-不读取／上传私人照片，不修改其他文档。
+[PRIVATE_RELEASE_DELIVERY.md](PRIVATE_RELEASE_DELIVERY.md)。历史构建结果不作为新公开运行结果；
+当前公开约束见 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md)。本次仅编辑指定文档，
+不执行命令、Git、CI 查询／触发、测试或下载，不读取／上传私人照片，不改源码或远端设置。

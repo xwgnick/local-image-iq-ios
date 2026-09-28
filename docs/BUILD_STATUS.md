@@ -1,6 +1,58 @@
 # Cloud build status — 2026-09-28
 
-## Current: 0.4.1 (12) — third run FAILURE before startup (account billing); NO IPA, NOT DELIVERED
+## Current: 0.4.1 (12) public CI RUNNING; 94 local publisher tests PASS; NO NEW IPA
+
+用户明确批准**公开仓库＋免费标准 runner**，并再次确认历史作者邮箱／机器路径／测试
+查询、Actions 日志及已发布 Releases 可公开。同一
+[xwgnick/local-image-iq-ios](https://github.com/xwgnick/local-image-iq-ios)
+已由 GitHub API 与匿名 GET 确认为 **PUBLIC／`private: false`**；不是仅修改文档的计划。
+完整控制、费用与许可边界见 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md)。
+
+| 项目 | 当前证据／待办 |
+| --- | --- |
+| 公开范围 | 同一独立 iOS 仓库及既有历史、历史 Actions 日志、已发布 Releases；未重写历史、删除内容或改变企业 origin。 |
+| 有限历史检查 | 277 个文本 blob，共 4,653,437 字节，最大 101,959 字节；检查范围内无 NUL 二进制、图像／数据库／模型 blob，未命中 .env、私钥、令牌、带凭据 URL 相关模式。有限模式扫描不是无秘密保证；已知邮箱、路径、查询已获准公开。本机 .git helper 未发布。 |
+| 可下载的旧包 | Release 398009938／ci-36387878343-1 为已交付 0.4.0 / build 11，现公开可访问、无需 GitHub 登录；不是 build 12。原身份、大小和哈希不变。 |
+| 旧失败证据 | Draft 398051690／398066345 保持原状；仓库公开不自动发布草稿，不作为安装入口。 |
+| 工程与不变项 | 仍为 0.4.1 / 12；引擎、模型、20 worker、HQ224／Fast、翻译、索引／缓存身份不因公开转换改变。 |
+| 新源码 | f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5 已推送 personal；不是旧第三轮的 70ad74b0。 |
+| 公开手动运行 | [Run 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)／[job 108858329166](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391/job/108858329166)：2026-09-28 最新检查点为 IN_PROGRESS，已实际启动，不是计费阻塞的未启动 job。 |
+| 已知 CI 进度 | 源码检查步骤已通过；当前正在生成公开地点包，尚不声称整轮测试／回归通过。 |
+| 本地发布器测试 | 指定的 Node 22 可执行文件实测，父流程实际计数 94 项全部 PASS；不是预期数，也不沿用旧 88 项结果。 |
+| 其他本地检查 | Node／源码／工程／打包检查 PASS；本地结果不代替原生测试或设备构建。 |
+| 原生待验证 | App 370／UI 9 为本轮待验证规模；最终开关本体点击修复尚未完成原生 UI 验证，不把历史通过项记作新运行通过。 |
+| 预期公开 Release | tag ci-36400923391-1 目前尚不存在；只是预期身份，不是已发布 Release 或安装入口。 |
+| 设备与交付 | 尚无 0.4.1 IPA；等待本轮完整门槛、设备构建、发布及新 IPA 本地长度／SHA-256 核验，旧 0.4.0 链接不是新版。 |
+
+### 当前构建与发布控制
+
+- 只允许 `workflow_dispatch`，精确仓库名且 `private == false`，使用标准 `macos-15`；
+  无付费 larger runner、self-hosted runner、自动 push／PR 或 fork 特权触发。
+- 全局 `contents: read`；构建 job 的 `contents: write`／`actions: read` 可用于 Release，
+  只使用 `GITHUB_TOKEN`，不用 PAT／Apple 凭据。保留全部源码、核心、地点、模型导出／
+  数值对齐、App／UI、设备编译和包验证门槛，不跳过失败断言。
+- 发布器在 preflight／prepublish 两处拒绝私有或错误仓库，要求明确公开；唯一 draft、
+  白名单资产、身份／字节／SHA-256 核验、成功才发布非 Latest prerelease 的协议保留。
+  文案标识 public CI，不声明第三方再分发已获许可。新交付不使用 Actions artifact 存储。
+- 公开仓库标准 hosted runner 用量按 GitHub 规则免费，受平台政策、运行限制及可用性约束，
+  不是无限额度保证；本次公开 job **已实际启动并在运行**，不等于账号旧限制已清除。
+  **不重置旧私有分钟、累计存储用量或账号限制**。
+  未修改计费、预算、卡片或付费限额，不要求付费以恢复此次构建。
+- 用户选择不设置项目级许可证；第三方模型卡 Apache-2.0、geoBoundaries 许可元数据及
+  Pillow MIT-CMU 源码头不改变项目整体授权。`redistributionApproved: false` 保留，
+  人工再分发审查仍未完成。
+
+下一步是等待上述**已在运行的完整公开原生构建**完成全部门槛，记录实际测试、设备包与
+Release 结果，再完成新 IPA 的长度／SHA-256 核验。当前只确认已知步骤进度及本地通过项，
+不声称全套测试／回归、设备构建或发布已成功，也不把预期 tag 当作现有 Release。
+本次文档编辑不执行命令、Git、CI 查询／触发、测试、下载或可见性操作。
+安装入口见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
+
+## Historical checkpoint (2026-09-28, before public transition): 0.4.1 (12) — billing startup failure; NO IPA
+
+以下历史账本保留原错误、测试、包身份与当时操作边界。其“当前 HEAD／私有／需登录／
+先处理计费／不重试”只指对应旧阶段，不是现在的条件；当前路线以上方和
+[PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md) 为准。公开不会使旧失败变成成功。
 
 - **第三轮已结束但未启动 job**：
   [Run 36397742264](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264)

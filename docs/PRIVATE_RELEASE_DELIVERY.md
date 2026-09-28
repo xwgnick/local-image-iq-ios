@@ -1,6 +1,49 @@
-# 私有 Release 交付
+# Release 交付（含私有阶段历史）
 
-## 当前状态：0.4.0（build 11）首次私有 Release 尝试成功，IPA 已下载校验
+## 当前：build 12 公开 CI 正在运行；本地发布器 94 项 PASS，尚未交付
+
+2026-09-28，用户明确选择公开仓库＋免费标准托管 runner，并再次确认既有历史中的
+作者邮箱／机器路径／测试查询、历史 Actions 日志与已发布 Releases 可以公开。
+同一 [xwgnick/local-image-iq-ios](https://github.com/xwgnick/local-image-iq-ios) 已由
+GitHub API 与匿名 GET 确认为 **PUBLIC／`private: false`**。
+现行公开范围、安全、费用和无项目级许可证说明见 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md)。
+
+- 已发布 [0.4.0 / build 11 Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
+  （**398009938**）现公开可访问，下载无需 GitHub 登录；包身份和哈希不变，**不是 build 12**。
+  两个旧失败 draft **398051690／398066345** 保持原状，公开仓库不会自动发布草稿。
+- 仅手动 `workflow_dispatch`，精确仓库名且 `private == false`，只用标准 `macos-15`；
+  无付费 larger／self-hosted runner、自动 push／PR 或 fork 特权触发。
+  全局 `contents: read`、job `contents: write`／`actions: read` 保留，使用 `GITHUB_TOKEN`
+  而非 PAT，不接收 Apple 凭据。所有源码／模型／原生／UI／设备包门槛保留。
+- 发布器 preflight 和 prepublish 都要求精确目标且明确公开，拒绝私有或错误仓库。
+  唯一 draft、固定白名单、身份／字节／SHA-256 核验后才发布非 Latest prerelease 的
+  协议不变；失败保留 draft，无覆盖／删除。发布消息标识 **public CI**，不是第三方许可批准。
+- 公开仓库标准 hosted runner 用量按 GitHub 规则免费，仍受政策、运行限制及可用性约束；
+  **不重置已用私有分钟或历史累计用量**。未改预算、卡片、计费或付费限额，也未改企业 `origin`。
+- 工程仍是 **0.4.1 / 12**；引擎、模型、20 worker、HQ224／Fast、翻译及缓存不变。
+- 新源码 **`f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5`** 已推送 `personal`。
+  2026-09-28 最新检查点：[公开手动 CI 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)
+  ／[job 108858329166](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391/job/108858329166)
+  **IN_PROGRESS、已实际启动**，源码检查步骤已通过，当前正在生成公开地点包；
+  **不是旧私有运行的计费启动阻塞**。
+- 本地指定的 **Node 22** 可执行文件实测发布器 mock **94 项全部 PASS**，为父流程
+  实际计数；Node／源码／工程／打包检查也已本地 PASS。不沿用旧 88 项作新结果，
+  也不据此声称新 CI 全套测试／回归通过。App **370**／UI **9** 仍为本轮待验证规模，
+  最终开关点击修复仍待原生 UI 验证。
+- 预期公开 Release tag **`ci-36400923391-1` 目前尚不存在**，不是已发布 Release 或下载入口。
+  **无 build 12 IPA**；等待本轮完整构建通过全部门槛、成功发布并完成新包全量
+  长度／SHA-256 核验后才能报告交付，旧版 0.4.0 的链接不能作为新包入口。
+- 不设置项目级许可证，不授予一般源码复用权；模型卡 Apache-2.0、geoBoundaries 元数据、
+  Pillow MIT-CMU 源码头各自的权利不变，`redistributionApproved: false` 保留、人工审查未完成。
+
+本次只编辑指定文档，不执行命令、Git、CI、下载、测试或可见性变更。操作见
+[WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)，状态见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+## 历史（2026-09-28，转公开前）：0.4.0（build 11）首次私有 Release 尝试成功，IPA 已下载校验
+
+**以下全部保留为私有阶段历史**：当时的授权、登录要求、费用、83 项测试及本机 helper
+说明不是现行公开 guard／下载要求，也不代表 helper 已适配公开仓库。当前无需 GitHub
+登录即可下载已发布旧包；新公开 CI 进度和本地 94 项 PASS 以页首及构建状态为准。
 
 用户现已明确批准**方案 2：同一私有仓库 Release＋job 级 contents: write**。
 源码 `844492b754f86d519c904da21cd80c1c814c056b` 相比原生／设备验证通过的

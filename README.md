@@ -2,7 +2,51 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 当前：0.4.1（build 12）— 第三轮因账号计费阻塞未启动；无 IPA，未交付
+## 当前：0.4.1（build 12）公开 CI 正在运行；本地发布器 94 项 PASS，暂无新 IPA
+
+2026-09-28，用户明确选择**公开仓库＋免费标准托管 runner**，并再次确认接受既有历史
+（作者邮箱、机器路径、测试查询）、历史 Actions 日志及已发布 Releases 公开。
+同一仓库 [xwgnick/local-image-iq-ios](https://github.com/xwgnick/local-image-iq-ios)
+已由 GitHub API 和匿名 GET 确认为 **PUBLIC／`private: false`**。
+没有重写历史、删除内容、改动企业 `origin` 或调整计费、预算、卡片及付费限额。
+
+- **仅公开源码，不设置项目级许可证**；不是采用 MIT／Apache-2.0 许可的项目，
+   公开可见不授予一般复用权。第三方模型／地点／Pillow 权利不变，
+   `redistributionApproved: false` 及人工再分发审查仍保留。
+- 当前公开下载是[旧版 0.4.0 / build 11 Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
+   （**398009938**），**无需 GitHub 登录**；它不含 build 12 用户模式更新。
+   两个旧失败 draft 保持不变，不因仓库公开自动发布。
+- CI 只允许精确仓库且 `private == false` 的手动 `workflow_dispatch`，使用标准
+   `macos-15`，不用付费 larger／self-hosted runner，也无 fork／PR 特权触发。
+   保留全部门槛及 job 级 `contents: write` Release 交付，使用 `GITHUB_TOKEN` 而非 PAT。
+- GitHub 对公开仓库标准 hosted runner 用量免费，仍受使用政策、运行限制及可用性约束；
+   **不重置账号已用的私有 Actions 分钟或历史累计用量**。本次公开 job 已实际启动，
+   不再是旧私有运行的计费启动阻塞。
+- 新源码 **`f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5`** 已推送 `personal`。
+   2026-09-28 最新检查点：[公开手动 CI 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)
+   ／[job 108858329166](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391/job/108858329166)
+   **IN_PROGRESS，确实正在运行**；源码检查步骤已通过，当前正在生成公开地点包。
+- 本地使用指定的 **Node 22** 可执行文件运行发布器 mock 测试，父流程实际计数为
+   **94 项全部 PASS**；Node／源码／工程／打包检查也已本地 PASS。这不是预期数，
+   但也不代表新 CI 全部测试／回归通过。App **370**／UI **9** 仍只是本轮待验证规模，
+   最终开关点击修复仍待原生 UI 验证。
+- 预期公开 Release tag 为 **`ci-36400923391-1`**，**目前尚不存在**，不是下载入口；
+   **没有 0.4.1 IPA**，设备构建、发布和新包本地核验仍待全部门槛通过。
+
+工程仍为 **0.4.1 / 12**；公开转换不改引擎、模型、20 worker、HQ224／Fast、翻译或
+索引／缓存身份。已有当前策略索引不因转公开清库或重建。安装继续使用已交付的 build 11，
+等待上述已在运行的完整公开构建；只有全部通过、发布并完成新 IPA 长度／SHA-256 核验后才更新交付状态。
+本次仅编辑指定文档，不运行命令、Git、CI、测试或下载，不修改源码或远端设置。
+
+公开范围、有限扫描及权限说明见 [docs/PUBLIC_REPOSITORY.md](docs/PUBLIC_REPOSITORY.md)；
+状态见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)，安装见
+[docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)。
+
+## 历史检查点（2026-09-28，转公开前）：0.4.1（build 12）— 第三轮计费启动失败；无 IPA
+
+以下版本历史保留当时事实；其中“当前 HEAD／私有／需要登录／先检查计费／不重试”
+均指转公开前对应阶段，不是现在的访问条件或操作要求。当前公开路线及待验证项以页首和
+[docs/PUBLIC_REPOSITORY.md](docs/PUBLIC_REPOSITORY.md) 为准，不抹去旧错误或旧测试结果。
 
 [第三轮 CI 36397742264](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264)
 ／[job 108848065780](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264/job/108848065780)
@@ -557,7 +601,7 @@ Library → Index / resume**，联网关闭、保持前台。这会删除 App �
 
 ## 功能与交付边界
 
-Windows 无 Swift/Xcode；通过用户提供的私有仓库运行 macOS 构建，并生成未签名
+Windows 无 Swift/Xcode；通过用户明确批准公开的同一仓库运行标准 macOS 构建，并生成未签名
 真机 IPA，由用户在 Windows 用 Sideloadly 本地签名。此前版本已由用户安装并在
 iPhone 上打开、索引和搜索；这不代表检索质量、内存／发热或新 UI 已完成真机验收。
 
@@ -588,18 +632,22 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
    经过转换和对齐验证的真实编码器。
 - 当前没有 OCR、Agentic Search、Speedbird 生产模型接入或后台无限索引。
 
-## 在 Windows 开发，使用私有仓库的 macOS 构建
+## 在 Windows 开发，使用公开仓库的标准 macOS 构建
 
-只把 **local_image_iq_ios 这个目录的内容** 作为一个私有仓库根目录。
+只把 **local_image_iq_ios 这个目录的内容** 作为独立仓库根目录。
 不要上传整个 BeatQwen3：其中有私人照片、演示录像、数据库和桌面缓存。
-当前构建仓库为用户提供的私有 `xwgnick/local-image-iq-ios`，已能启动 macOS runner。
+当前构建仓库为已确认公开的 `xwgnick/local-image-iq-ios`；转公开后的新完整构建尚待验证，
+但公开 CI **36400923391／job 108858329166 已实际启动并在运行**，源码检查通过，
+当前正在生成公开地点包；不是仅凭可见性变化推断启动，也不是旧计费阻塞。
 原企业托管用户仓库 `wengxie_microsoft/local-image-iq-ios` 保留不动；它的个人
 命名空间不支持托管 runner。普通个人账号与企业托管用户的限制不同，代码放置
 仍须遵守相应政策。详见 [当前构建状态](docs/BUILD_STATUS.md)。
 
 工作流：[.github/workflows/ios.yml](.github/workflows/ios.yml)，仅手动触发：
 
-还没有仓库时，按 [创建私有仓库步骤](docs/PRIVATE_REPOSITORY_SETUP.md) 操作。
+当前控制与公开范围见 [docs/PUBLIC_REPOSITORY.md](docs/PUBLIC_REPOSITORY.md)。
+[docs/PRIVATE_REPOSITORY_SETUP.md](docs/PRIVATE_REPOSITORY_SETUP.md) 保留为历史私有建仓指南，
+不是当前仓库设置要求；无需新建仓库。
 
 1. 首次 `include_models=false`：Swift 核心测试、XcodeGen 生成工程、模拟器 App
    编译和 XCTest。没有模型的数值对齐测试会明确跳过。优先排除原生编译问题。
@@ -611,12 +659,16 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
    额外编译 `iphoneos` SDK / arm64 Release App，生成**未签名真机 IPA**。由用户
    在 Windows 用已同意的第三方签名工具安装，不向 CI 提供 Apple 密码或证书。
    详见 [Windows 安装到 iPhone](docs/WINDOWS_IPHONE_INSTALL.md)。
-5. 新运行通过[同仓库私有 Release](docs/PRIVATE_RELEASE_DELIVERY.md)交付包与测试证据，
+5. 新运行通过同仓库**公开 Release** 交付包与测试证据，当前约束和历史协议见
+   [docs/PRIVATE_RELEASE_DELIVERY.md](docs/PRIVATE_RELEASE_DELIVERY.md)；
    不再上传 Actions artifacts；上文旧 artifact 链接仅作历史记录。公开模型／地点来源
    仍固定，CI 不接收私人照片、GPS、数据库或视频。
 
-标准 `macos-15` runner 当前为 Apple Silicon；私有仓库消耗账号 Actions 额度，
-**不承诺无限免费**；Release 存储路线不免除构建分钟计量，也未改变计费设置。没有自动 push/PR 触发。
+标准 `macos-15` runner 当前为 Apple Silicon；公开仓库的标准 hosted runner 用量按
+GitHub 规则免费，受平台使用政策／运行限制约束，不承诺无限资源或必定启动。
+不使用付费 larger／self-hosted runner，不提高付费限额；转公开不会重置旧私有分钟或累计用量。
+工作流只接受精确仓库名且 `private == false`；发布器 preflight／prepublish 都拒绝
+私有或错误仓库。没有自动 push／PR 或 fork 特权触发，CI 只用 `GITHUB_TOKEN`，不用 PAT。
 模型转换环境独立，不修改桌面 Python 环境。
 
 ## 工程与模型
@@ -625,9 +677,12 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
    需要 Swift 6 工具链，既有构建基线为 Xcode 16.4／iOS 18.5 SDK；app + 测试 target。
    build 11 系统翻译在 iOS 18+ 真机启用，iOS 17 原文回退；历史 build 11 的原生测试／
    设备编译、私有 Release 发布及本地包校验已通过，尚未验证真机运行。
-   build 12 第二轮 **36396468128** 已结束，仅 2 项 UI 同因失败，App 369 通过／1 跳过／
-   0 失败；设备构建跳过，无 IPA。HEAD **70ad74b0f5e411ca60f741b1300545d1dbaf25c9**
-   仅新增已提交／推送的 UI 点击修复，第三轮已手动触发一次（HTTP 204），ID／结果待确认。
+   2026-09-28 转公开前，build 12 第二轮 **36396468128** 已结束，仅 2 项 UI 同因失败，App 369 通过／1 跳过／
+   0 失败；设备构建跳过，无 IPA。第三轮源码 **70ad74b0f5e411ca60f741b1300545d1dbaf25c9**
+   的 run **36397742264** 因计费 annotation 在启动前失败，未验证 UI 点击修复。
+   当前新源码 **f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5** 已推送 `personal`，
+   公开 run **36400923391／job 108858329166** 已实际运行，源码检查通过、正在生成公开地点包；
+   不能预记全套原生测试／回归或设备构建通过。
 - [project.models.yml](project.models.yml)：转换完成后的模型测试资源增量配置。
 - [App](App)：UI、PhotoKit、Core ML、SQLite、离线行政区查询及无可用包状态处理。
 - [Packages/ImageIQCore](Packages/ImageIQCore)：无第三方依赖的数学、检索、分词。
@@ -661,7 +716,10 @@ Pillow BILINEAR，均值和标准差均为 `[0.5,0.5,0.5]`。Quartz 仅转换原
 
 共享模型卡声明 Apache-2.0；导出流程复制实际存在的模型卡／LICENSE／NOTICE
 证据并保留 `redistributionApproved:false`。许可证副本、转换通过和私人构建均不
-等于公开分发的法律认证，发布前仍需人工许可审查。
+等于公开分发的法律认证；仓库及既有 Release 现已公开，但人工再分发审查仍未完成。
+本项目没有设置项目级许可证；模型卡声明不使整个项目成为 Apache-2.0 项目。
+geoBoundaries 许可元数据与 Pillow MIT-CMU 源码头仍须分别保留、遵守，详见
+[docs/PUBLIC_REPOSITORY.md](docs/PUBLIC_REPOSITORY.md)。
 
 自 0.3.1 起的正常构建路径（含无模型构建）会生成并打包四国公开 WGS84 行政区数据及
 来源清单；不是从个人照片推导边界，也不是在线地图／地址服务。每个 Polygon／
@@ -675,12 +733,20 @@ MultiPolygon 使用 `label`、`level` 等公开属性。固定来源、历史年
 
 ## 当前 0.4.1（build 12）待交付；真机与正式分发仍待验证
 
-首轮 CI **36394279080** 已失败；第二轮 **36396468128／d2174787** 已 **COMPLETED /
+**历史（2026-09-28，转公开前）**：首轮 CI **36394279080** 已失败；第二轮 **36396468128／d2174787** 已 **COMPLETED /
 FAILURE**，仅 2 项 UI 因同一整行误点而失败，App 测试通过（含既有 1 项模拟器跳过），
 设备构建跳过、无 IPA。失败证据 draft 路径成功，显式 tag 修复有效，不是普通成功发布。
-当前 HEAD **70ad74b0f5e411ca60f741b1300545d1dbaf25c9** 仅新增行内 **(0.9, 0.5)**
-UI 点击修复，已提交／推送；App 代码与第二轮通过时相同。第三轮手动触发 **一次、HTTP 204**，
-**运行 ID／实际结果待确认**，预期 App 370／UI 9，不预记通过。
+第三轮源码 **70ad74b0f5e411ca60f741b1300545d1dbaf25c9** 仅新增行内 **(0.9, 0.5)**
+UI 点击修复，已提交／推送；App 代码与第二轮通过时相同。第三轮 **36397742264** 已在
+启动前失败、`steps: []`，该轮未执行点击修复验证。
+
+**当前公开运行（2026-09-28 最新检查点）**：源码
+**f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5** 已推送 `personal`；
+**36400923391／job 108858329166** 已实际启动、**IN_PROGRESS**，源码检查步骤通过，
+正在生成公开地点包，**不是计费启动阻塞**。指定 Node 22 的本地发布器 mock 测试由
+父流程实际计数 **94 项全部 PASS**；Node／源码／工程／打包检查本地 PASS。
+App **370**／UI **9** 仍为本轮待验证规模，不预记全套测试／回归通过。
+预期公开 tag **`ci-36400923391-1` 尚不存在**，不能作为新包下载入口。
 **build 12 IPA 未交付、未完成本地校验，现在不能按 build 12 安装**。
 
 历史 0.4.0（build 11，36387878343）为 **COMPLETED / SUCCESS、PASS-NATIVE／PASS-PACKAGE／DELIVERED**：
