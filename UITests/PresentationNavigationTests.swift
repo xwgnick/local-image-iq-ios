@@ -269,7 +269,11 @@ final class PresentationNavigationTests: XCTestCase {
         scrollTo(debugToggle, in: form)
         XCTAssertEqual(app.switches.matching(identifier: "show-debug-tools").count, 1)
         expectSwitch(debugToggle, enabled: !enabled)
-        debugToggle.tap() // Never tap switches.firstMatch: Chinese search and iCloud are unrelated.
+        // The captured iOS AX hierarchy gives the identified SwiftUI switch the
+        // FULL row frame, while its actual thumb is a separate 51-point switch
+        // at the trailing edge. Tapping the row centre hit only the label and
+        // left value=0; tap inside this exact identified row's thumb instead.
+        debugToggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         // Inserting Advanced/Diagnostics above the bottom switch can move it
         // out of the Form's realized viewport. Reacquire it after layout changes.
         scrollTo(debugToggle, in: form)
