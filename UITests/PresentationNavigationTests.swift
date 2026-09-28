@@ -77,7 +77,7 @@ final class PresentationNavigationTests: XCTestCase {
         // Production uses a menu Picker with Top 3 / Top 12, not a segmented
         // control. Check its stable identifier; do not guess private menu nodes.
         let form = try sheetForm()
-        let advanced = app.buttons["Advanced"]
+        let advanced = app.buttons["debug-advanced"]
         let weight = app.sliders["location-weight"]
         for element in settingsDebugElements { expectAbsent(element) }
         attach("settings-live")
@@ -91,13 +91,14 @@ final class PresentationNavigationTests: XCTestCase {
         setDebugTools(true, in: form)
         scrollTo(advanced, in: form, swipeUp: false)
         XCTAssertFalse(weight.exists, "Advanced must start collapsed after opting in")
-        advanced.tap()
+        tapDisclosure(advanced)
         scrollTo(weight, in: form)
         XCTAssertEqual(weight.value as? String, "60%", "The actual location-weight slider keeps its default")
         scrollTo(advanced, in: form, swipeUp: false)
-        advanced.tap()
+        tapDisclosure(advanced)
         expectAbsent(weight)
-        advanced.tap()
+        scrollTo(advanced, in: form, swipeUp: false)
+        tapDisclosure(advanced)
         scrollTo(weight, in: form)
         scrollTo(app.buttons["Diagnostics"], in: form)
         // Advanced is expanded: hiding tools must remove it, not merely collapse it.
@@ -278,6 +279,14 @@ final class PresentationNavigationTests: XCTestCase {
         // out of the Form's realized viewport. Reacquire it after layout changes.
         scrollTo(debugToggle, in: form)
         expectSwitch(debugToggle, enabled: enabled)
+    }
+
+    private func tapDisclosure(_ element: XCUIElement) {
+        expectHittable(element)
+        // The failed run found/tapped the identified full-width DisclosureGroup
+        // row but never exposed a slider. Activate its trailing disclosure
+        // control, not the centre of the label; keep all expand/collapse checks.
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
     }
 
     private func assertSettingsDebugOff(in form: XCUIElement) {
