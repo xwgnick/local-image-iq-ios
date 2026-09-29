@@ -22,7 +22,7 @@ final class PresentationNavigationTests: XCTestCase {
         launch()
         assertHomeControls()
         let libraryReady = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label CONTAINS %@", "Connect your photos"),
+            predicate: NSPredicate(format: "label CONTAINS %@", "选择照片"),
             object: app.buttons["open-library"])
         XCTAssertEqual(XCTWaiter.wait(for: [libraryReady], timeout: 15), .completed,
                        "Capture the settled unauthorized home, not a transient library refresh")
@@ -32,9 +32,11 @@ final class PresentationNavigationTests: XCTestCase {
         let done = app.buttons["close-library"]
         XCTAssertTrue(done.waitForExistence(timeout: 5))
         XCTAssertTrue(done.isHittable)
-        XCTAssertTrue(app.navigationBars["Library"].exists)
+        XCTAssertEqual(done.label, "完成")
+        XCTAssertTrue(app.navigationBars["我的图库"].exists)
         XCTAssertTrue(app.buttons["authorize-photos"].waitForExistence(timeout: 5),
-                      "The library must remain unauthorized; do not tap Choose photos")
+                  "The library must remain unauthorized; do not tap 选择照片")
+        XCTAssertEqual(app.buttons["authorize-photos"].label, "选择照片")
         XCTAssertFalse(app.alerts.firstMatch.exists)
         attach("library-live")
         done.tap()
@@ -71,21 +73,24 @@ final class PresentationNavigationTests: XCTestCase {
         app.buttons["open-settings"].tap()
         let done = app.buttons["close-settings"]
         XCTAssertTrue(done.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.navigationBars["Settings"].exists)
+        XCTAssertEqual(done.label, "完成")
+        XCTAssertTrue(app.navigationBars["设置"].exists)
         let picker = app.descendants(matching: .any).matching(identifier: "result-limit").firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        // Production uses a menu Picker with Top 3 / Top 12, not a segmented
+        // Production uses a menu Picker with 前3张 / 前12张, not a segmented
         // control. Check its stable identifier; do not guess private menu nodes.
+        expectResultLimit("前3张", picker: picker)
         let form = try sheetForm()
-        let advanced = app.buttons["Advanced"]
+        // debug-advanced identifies the Text label ONLY, not its parent button.
+        let advanced = app.buttons["高级设置"]
         let weight = app.sliders["location-weight"]
         for element in settingsDebugElements { expectAbsent(element) }
         attach("settings-live")
         picker.tap()
-        let topTwelve = app.buttons["Top 12"]
+        let topTwelve = app.buttons["前12张"]
         expectHittable(topTwelve)
         topTwelve.tap()
-        expectResultLimit("Top 12", picker: picker)
+        expectResultLimit("前12张", picker: picker)
 
         assertSettingsDebugOff(in: form)
         setDebugTools(true, in: form)
@@ -100,12 +105,12 @@ final class PresentationNavigationTests: XCTestCase {
         scrollTo(advanced, in: form, swipeUp: false)
         tapDisclosure(advanced)
         expectExpandedWeight(weight)
-        scrollTo(app.buttons["Diagnostics"], in: form)
+        scrollTo(app.buttons["诊断信息"], in: form)
         // Advanced is expanded: hiding tools must remove it, not merely collapse it.
         setDebugTools(false, in: form)
         assertSettingsDebugOff(in: form)
         scrollTo(picker, in: form, swipeUp: false)
-        expectResultLimit("Top 12", picker: picker)
+        expectResultLimit("前12张", picker: picker)
         done.tap()
         expectAbsent(done)
         expectHittable(field)
@@ -120,7 +125,8 @@ final class PresentationNavigationTests: XCTestCase {
         settings.tap()
         let done = app.buttons["close-settings"]
         expectHittable(done)
-        XCTAssertTrue(app.navigationBars["Settings"].exists)
+        XCTAssertEqual(done.label, "完成")
+        XCTAssertTrue(app.navigationBars["设置"].exists)
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "result-limit").firstMatch
             .waitForExistence(timeout: 5))
         XCTAssertFalse(app.sliders["location-weight"].exists)
@@ -151,7 +157,7 @@ final class PresentationNavigationTests: XCTestCase {
         app.buttons["open-library"].tap()
         expectHittable(libraryDone)
         XCTAssertTrue(app.buttons["authorize-photos"].waitForExistence(timeout: 5))
-        let details = app.buttons["Details"]
+        let details = app.buttons["详细信息"]
         scrollTo(details, in: try sheetForm())
         XCTAssertFalse(debugToggle.exists, "Library uses the single Settings toggle, not a second switch")
         XCTAssertFalse(app.alerts.firstMatch.exists)
@@ -209,6 +215,9 @@ final class PresentationNavigationTests: XCTestCase {
     }
 
     private func launch(largeText: Bool = false) {
+        // Intentionally keep the system keyboard/locale English for exact-key
+        // fixtures and Apple's Search return key. The app's approved Chinese
+        // copy is independent; this is not a claim of system-language localization.
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-UIPreferredContentSizeCategoryName",
                                largeText ? "UICTContentSizeCategoryAccessibilityL" : "UICTContentSizeCategoryL"]
@@ -223,7 +232,7 @@ final class PresentationNavigationTests: XCTestCase {
     private var settingsDebugElements: [XCUIElement] {
         [app.descendants(matching: .any).matching(identifier: "debug-advanced").firstMatch,
          app.descendants(matching: .any).matching(identifier: "debug-diagnostics").firstMatch,
-         app.buttons["Advanced"], app.buttons["Diagnostics"], app.sliders["location-weight"]]
+         app.buttons["高级设置"], app.buttons["诊断信息"], app.sliders["location-weight"]]
     }
 
     private func sheetForm() throws -> XCUIElement {
@@ -322,9 +331,9 @@ final class PresentationNavigationTests: XCTestCase {
     }
 
     private func assertUserLibrary(in form: XCUIElement) {
-        XCTAssertTrue(app.navigationBars["Library"].exists)
+        XCTAssertTrue(app.navigationBars["我的图库"].exists)
         let details = app.descendants(matching: .any).matching(identifier: "debug-library-details").firstMatch
-        let hidden = [details, app.buttons["Details"], debugToggle]
+        let hidden = [details, app.buttons["详细信息"], debugToggle]
         scrollTo(app.buttons["authorize-photos"], in: form, swipeUp: false, expectingAbsent: hidden)
         let cloud = app.switches["icloud-download-opt-in"]
         scrollTo(cloud, in: form, expectingAbsent: hidden)

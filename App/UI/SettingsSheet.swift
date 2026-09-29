@@ -22,26 +22,26 @@ struct SettingsSheet: View {
             }
             .scrollContentBackground(.hidden)
             .background(IQStyle.background)
+            .foregroundStyle(IQStyle.text)
             .tint(IQStyle.accent)
-            .navigationTitle("Settings")
+            .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(IQStyle.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("完成") { dismiss() }
                         .accessibilityIdentifier("close-settings")
                 }
             }
-            .confirmationDialog("Clear the local index?", isPresented: $confirmClear, titleVisibility: .visible) {
-                Button("Clear index", role: .destructive) { state.clearIndex() }
+            .confirmationDialog("清除本地索引？", isPresented: $confirmClear, titleVisibility: .visible) {
+                Button("清除索引", role: .destructive) { state.clearIndex() }
                     .disabled(state.isBusy)
-                Button("Cancel", role: .cancel) { }
+                Button("取消", role: .cancel) { }
             } message: {
-                Text("This deletes only the app's local search index, not your original photos. Index again to make your photos searchable.")
+                Text("只删除本机的搜索索引，不删除原照片。重新准备图库后即可搜索。")
             }
         }
-        .preferredColorScheme(.dark)
         .onChange(of: state.debugToolsEnabled) { _, enabled in
             if !enabled {
                 advancedExpanded = false
@@ -90,16 +90,16 @@ struct SettingsSheet: View {
         } header: {
             Text("中文搜索")
         } footer: {
-            Text("中文或中英混合搜索在手机上译成英文，纯英文不变；可在结果上方切回原文。\n\n搜索前检查离线语言包，已知缺包时用原文，不请求下载。下载需联网、存储空间及系统确认，与照片 iCloud 设置无关。若语言包在检查后被移除，仍可能出现系统下载提示。")
+            Text("中文或中英混合搜索在本机译成英文，纯英文不变；结果可切回原文。已知缺包时用原文搜索，不自动请求下载。准备语言包需联网、可用空间和系统确认，与照片 iCloud 开关无关；若检查后语言包被移除，系统仍可能提示下载。")
         }
         .listRowBackground(IQStyle.surface)
     }
 
     private var searchSection: some View {
         Section {
-            Picker("Result count", selection: $state.resultLimit) {
-                Text("Top 3").tag(3)
-                Text("Top 12").tag(12)
+            Picker("结果数量", selection: $state.resultLimit) {
+                Text("前3张").tag(3).accessibilityIdentifier("result-limit-3")
+                Text("前12张").tag(12).accessibilityIdentifier("result-limit-12")
             }
             .pickerStyle(.menu)
             .accessibilityIdentifier("result-limit")
@@ -107,27 +107,27 @@ struct SettingsSheet: View {
             if state.debugToolsEnabled {
                 DisclosureGroup(isExpanded: $advancedExpanded) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Location contribution")
+                        Text("地点权重")
                             .font(.subheadline.weight(.semibold))
                         Text(state.locationWeight, format: .percent.precision(.fractionLength(0)))
                             .font(.title2.weight(.semibold))
                             .monospacedDigit()
                             .foregroundStyle(IQStyle.accent)
                         Slider(value: $state.locationWeight, in: 0...1, step: 0.01) {
-                            Text("Location contribution")
+                            Text("地点权重")
                         }
                         .accessibilityValue(state.locationWeight.formatted(.percent.precision(.fractionLength(0))))
                         .accessibilityIdentifier("location-weight")
-                        Text("0% uses image similarity; 100% uses place-label similarity. This changes ranking, not which places are allowed.")
+                        Text("0% 只比较图像，100% 只比较地点标签。权重影响排序，不限制可搜索的地点。")
                             .font(.footnote)
                             .foregroundStyle(IQStyle.secondary)
-                        Text("Labels use GPS saved with a photo, not your live location. Raw coordinates aren't used for ranking.")
+                        Text("地点标签来自照片自带的定位信息，不使用你的实时位置，也不直接用坐标排序。")
                             .font(.footnote)
                             .foregroundStyle(IQStyle.secondary)
                         Text(placeAvailability)
                             .font(.footnote)
                             .foregroundStyle(IQStyle.secondary)
-                        Text("Saved index: \(state.summary.locatedCount.formatted()) of \(state.summary.indexedCount.formatted()) photos had place labels at the last library check. This is not a GPS count; scan observations are in Library.")
+                        Text("上次检查时，\(state.summary.indexedCount.formatted()) 张已建索引的照片中有 \(state.summary.locatedCount.formatted()) 张保存了地点标签。这不是带定位照片的数量；本轮检查情况见「我的图库」。")
                             .font(.footnote)
                             .foregroundStyle(IQStyle.secondary)
                     }
@@ -135,14 +135,14 @@ struct SettingsSheet: View {
                     .padding(.vertical, 6)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("About scores").font(.subheadline.weight(.semibold))
-                        Text("Scores measure similarity, not probability. Place scores are centered over distinct place labels before blending with image scores. Missing labels add zero place contribution; at 100%, those photos score zero and can rank above negative place matches.")
+                        Text("关于分数").font(.subheadline.weight(.semibold))
+                        Text("分数表示相似度，不是概率。地点分数按不同标签去均值后，再与图像分数加权。无标签时地点贡献为零；权重为 100% 时，这些照片得零分，可能排在地点分数为负的照片前面。")
                             .font(.footnote)
                             .foregroundStyle(IQStyle.secondary)
                         if !state.results.isEmpty {
-                            Text("Current match scores").font(.caption.weight(.semibold))
+                            Text("当前结果分数").font(.caption.weight(.semibold))
                             ForEach(Array(state.results.enumerated()), id: \.element.id) { entry in
-                                LabeledContent("Match \(entry.offset + 1)", value: entry.element.score.formatted(.number.precision(.fractionLength(3))))
+                                LabeledContent("第 \(entry.offset + 1) 张", value: entry.element.score.formatted(.number.precision(.fractionLength(3))))
                                     .font(.footnote)
                                     .monospacedDigit()
                             }
@@ -153,56 +153,56 @@ struct SettingsSheet: View {
                 } label: {
                     // Identify only the disclosure label. An identifier on the
                     // whole group can propagate to its nested controls in SwiftUI.
-                    Text("Advanced").accessibilityIdentifier("debug-advanced")
+                    Text("高级设置").accessibilityIdentifier("debug-advanced")
                 }
             }
         } header: {
-            Text("Search")
+            Text("搜索")
         } footer: {
-            Text("Changes apply to your next search. Changing search settings clears the current matches.")
+            Text("修改后清空当前结果，下次搜索时生效。")
         }
         .listRowBackground(IQStyle.surface)
     }
 
     private var maintenanceSection: some View {
         Section {
-            Button("Refresh library", systemImage: "arrow.clockwise") { state.refresh() }
+            Button("刷新图库", systemImage: "arrow.clockwise") { state.refresh() }
                 .disabled(state.isBusy)
                 .frame(minHeight: 44)
                 .accessibilityIdentifier("refresh-library")
             Button(role: .destructive) { confirmClear = true } label: {
-                Label("Clear index", systemImage: "trash")
+                Label("清除索引", systemImage: "trash")
                     .frame(minHeight: 44)
             }
             .disabled(state.isBusy)
             .accessibilityIdentifier("clear-index")
             if state.activity == .refreshing || state.activity == .clearing {
-                ProgressView(state.activity == .clearing ? "Clearing local index…" : "Refreshing library…")
+                ProgressView(state.activity == .clearing ? "正在清除本地索引…" : "正在刷新图库…")
             }
             if let error = state.errorMessage {
                 Text(state.summary.modelIssue != nil || error.hasPrefix("Models unavailable:") || error.hasPrefix("Model contract mismatch:")
-                     ? "Search isn't available right now. You can still manage Photos access in Library."
-                     : "The last action couldn't finish. Check Photos access in Library, then refresh and try again. Your original photos are unchanged.")
+                     ? "搜索暂不可用。仍可在「我的图库」管理照片权限，或刷新后重试。"
+                     : "上次操作未完成。请在「我的图库」检查照片权限，再刷新重试。原照片未改变。")
                     .font(.footnote)
                     .foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } header: {
-            Text("Library maintenance")
+            Text("图库维护")
         } footer: {
-            Text("Refresh checks Photos access and saved coverage without rebuilding. Clearing removes the local index, never your original photos.")
+            Text("刷新只检查照片权限与搜索覆盖，不重建索引。清除索引不会删除原照片。")
         }
         .listRowBackground(IQStyle.surface)
     }
 
     private var diagnosticsSection: some View {
         Section {
-            DisclosureGroup("Diagnostics", isExpanded: $diagnosticsExpanded) {
-                diagnostic("Status", state.status)
-                diagnostic("Model version", state.summary.modelVersion ?? "Not available")
-                if let issue = state.summary.modelIssue { diagnostic("Model check", issue) }
-                diagnostic("Offline places", state.summary.placesDescription)
-                if let error = state.errorMessage { diagnostic("Last operation issue", error) }
+            DisclosureGroup("诊断信息", isExpanded: $diagnosticsExpanded) {
+                diagnostic("状态", state.status)
+                diagnostic("模型版本", state.summary.modelVersion ?? "不可用")
+                if let issue = state.summary.modelIssue { diagnostic("模型检查", issue) }
+                diagnostic("离线地点", state.summary.placesDescription)
+                if let error = state.errorMessage { diagnostic("上次操作问题", error) }
             }
             .accessibilityIdentifier("debug-diagnostics")
         }
@@ -210,13 +210,13 @@ struct SettingsSheet: View {
     }
 
     private var privacySection: some View {
-        Section("About & privacy") {
-            Text("Your originals stay in your Photos library. Search runs on this device, with no photos or searches uploaded to an app server. The local index stores search data and optional place labels, not original images or GPS coordinates, and is excluded from backups. Only if you enable iCloud access in Library may Photos download missing image data.")
+        Section("关于与隐私") {
+            Text("原照片保留在系统照片图库中。搜索在本机运行，不向应用服务器上传照片或搜索内容。索引只存搜索数据和可选地点标签，不存原图或定位坐标，也不参与备份。仅在「我的图库」开启 iCloud 后，系统照片才可能为准备图库下载缺失的图像数据。")
                 .font(.subheadline)
                 .foregroundStyle(IQStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.vertical, 4)
-            Text("Apple's translation system may collect usage and performance metrics that do not include your original text or its translation.")
+            Text("Apple 翻译系统可能收集使用与性能指标，但不包含原文或译文。")
                 .font(.subheadline)
                 .foregroundStyle(IQStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -227,12 +227,12 @@ struct SettingsSheet: View {
 
     private var debugToolsSection: some View {
         Section {
-            Toggle("Show debug tools", isOn: $state.debugToolsEnabled)
+            Toggle("显示调试工具", isOn: $state.debugToolsEnabled)
                 .accessibilityIdentifier("show-debug-tools")
         } header: {
-            Text("Debug tools")
+            Text("调试工具")
         } footer: {
-            Text("This switch is session-only and will be off on the next launch. Hiding tools keeps your search results and does not reset settings changed with the tools.")
+            Text("仅本次使用有效，下次启动默认关闭。隐藏工具不会清空搜索结果，也不会重置已调整的设置。")
         }
         .listRowBackground(IQStyle.surface)
     }
@@ -251,19 +251,25 @@ struct SettingsSheet: View {
     private var placeAvailability: String {
         let description = state.summary.placesDescription
         if description.hasPrefix("No offline boundary pack bundled") {
-            return "This build has no offline place pack, so place labels are unavailable."
+            return "此版本未附带离线地点包，暂不能生成地点标签。"
         }
         if description.hasPrefix("Offline boundary pack could not be read:") {
-            return "The offline place pack couldn't be read; see Diagnostics."
+            return "无法读取离线地点包，详情见「诊断信息」。"
         }
         if description.hasPrefix("Checking optional offline boundaries") {
-            return "Offline place availability has not been checked yet."
+            return "尚未检查离线地点是否可用。"
         }
         if description.hasPrefix("Offline country coverage:") || description.hasPrefix("Offline coverage:") {
             // Keep the resolver's metadata-derived countries, not its feature diagnostics.
             let coverage = description.components(separatedBy: " Administrative boundaries")[0]
-            return "\(coverage) Boundaries may be incomplete or historical; not global coverage."
+                .replacingOccurrences(of: "Offline country coverage:", with: "离线国家覆盖：")
+                .replacingOccurrences(of: "Offline coverage: this pack only.", with: "离线覆盖：仅此地点包。")
+                .replacingOccurrences(of: "China", with: "中国")
+                .replacingOccurrences(of: "France", with: "法国")
+                .replacingOccurrences(of: "Germany", with: "德国")
+                .replacingOccurrences(of: "Netherlands", with: "荷兰")
+            return "\(coverage) 边界可能不完整或属于历史数据，并非全球覆盖。"
         }
-        return "Place labels depend on the offline pack's coverage and each photo's available location."
+        return "地点标签取决于离线包覆盖范围和照片中可用的定位信息。"
     }
 }

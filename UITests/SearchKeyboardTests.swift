@@ -9,6 +9,9 @@ final class SearchKeyboardTests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        // Intentionally use the English system keyboard and fixtures so Apple's
+        // Search key keeps its known layout. App copy is hardcoded Chinese by
+        // design; this does not claim the app follows the system language.
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
         app.launch()
@@ -79,6 +82,24 @@ final class SearchKeyboardTests: XCTestCase {
         app.buttons["hide-search-keyboard"].tap()
         expectKeyboardHidden()
         XCTAssertEqual(field.value as? String, "query not submitted")
+    }
+
+    func testLibraryFooterDismissesKeyboardAndPreservesQueryOnReturn() {
+        let field = focusQuery("TEST FIXTURE library")
+        let library = app.buttons["open-library"]
+        XCTAssertTrue(library.exists && library.isHittable,
+                      "The compact footer must remain reachable while typing")
+        library.tap()
+        let done = app.buttons["close-library"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        expectKeyboardHidden()
+        done.tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertTrue(field.isHittable)
+        XCTAssertEqual(field.value as? String, "TEST FIXTURE library")
+        expectKeyboardHidden()
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
     }
 
     func testDraggingScrollViewDismissesKeyboard() {

@@ -29,7 +29,7 @@ struct PhotoThumbnailView: View {
         // proposal, not the image's intrinsic size or an independent square.
         GeometryReader { geometry in
             ZStack {
-                Color(red: 22 / 255, green: 23 / 255, blue: 34 / 255)
+                IQStyle.muted
                 if resolvedRequest == request, let image {
                     Image(uiImage: image)
                         .resizable()
@@ -39,14 +39,14 @@ struct PhotoThumbnailView: View {
                 } else if resolvedRequest == request, let issue {
                     VStack(spacing: 6) {
                         Image(systemName: issue.symbol).font(.title3)
-                        Text(issue.caption).font(.caption2).lineLimit(1)
+                        Text(issue.localizedCaption).font(.caption2).lineLimit(1)
                     }
-                    .foregroundStyle(.white.opacity(0.65))
+                    .foregroundStyle(IQStyle.secondary)
                     .padding(8)
                 } else {
                     ProgressView()
-                        .tint(.white.opacity(0.7))
-                        .accessibilityLabel("Loading photo")
+                        .tint(IQStyle.secondary)
+                        .accessibilityLabel("正在加载照片")
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -137,6 +137,39 @@ enum PhotoPreviewIssue {
             return networkAllowed
                 ? "This photo couldn't be loaded. Check your connection and try again."
                 : "A local preview isn't available right now. Try again, or enable iCloud access in Library."
+        }
+    }
+
+    // Localize only at view boundaries. Keep the existing English properties
+    // and error classification unchanged for diagnostic/test compatibility.
+    var localizedCaption: String {
+        switch self {
+        case .cloud: return "位于 iCloud"
+        case .access: return "无访问权限"
+        case .unavailable: return "暂不可用"
+        }
+    }
+
+    var localizedTitle: String {
+        switch self {
+        case .cloud: return "这张照片位于 iCloud"
+        case .access: return "照片访问权限已更改"
+        case .unavailable: return "无法预览照片"
+        }
+    }
+
+    func localizedMessage(networkAllowed: Bool) -> String {
+        switch self {
+        case .cloud:
+            return networkAllowed
+                ? "未能下载这张照片，请检查网络连接后重试。"
+                : "此设备上没有这张照片的预览。请在“我的图库”中开启 iCloud 访问后重试。"
+        case .access:
+            return "这张照片可能已被删除，或已移出允许访问的范围。请检查照片访问权限后重试。"
+        case .unavailable:
+            return networkAllowed
+                ? "未能加载这张照片，请检查网络连接后重试。"
+                : "暂时无法获取本地预览。请重试，或在“我的图库”中开启 iCloud 访问。"
         }
     }
 }

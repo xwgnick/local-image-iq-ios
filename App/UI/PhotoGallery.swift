@@ -4,12 +4,6 @@ import Photos
 import UIKit
 import ImageIQCore
 
-private enum PhotoGalleryStyle {
-    static let background = Color(red: 11 / 255, green: 12 / 255, blue: 20 / 255)
-    static let surface = Color(red: 22 / 255, green: 23 / 255, blue: 34 / 255)
-    static let accent = Color(red: 183 / 255, green: 160 / 255, blue: 1)
-}
-
 /// Intrinsic-height content for the parent's ScrollView; never nests a scroll
 /// view or measures an unbounded scroll axis. The supplied thumbnail is not a button.
 @MainActor
@@ -27,23 +21,12 @@ struct PhotoResultsGrid<Thumbnail: View>: View {
         self.thumbnail = thumbnail
     }
 
+    private var spacing: CGFloat { compact ? 4 : 6 }
+
     var body: some View {
-        VStack(spacing: 12) {
-            if !compact, hits.count <= 3, let first = hits.first {
-                tile(first, rank: 1, aspectRatio: 4.0 / 3.0)
-                if hits.count > 1 {
-                    LazyVGrid(columns: columns(count: 2), spacing: 12) {
-                        ForEach(Array(hits.dropFirst().enumerated()), id: \.element.id) { offset, hit in
-                            tile(hit, rank: offset + 2, aspectRatio: 1)
-                        }
-                    }
-                }
-            } else {
-                LazyVGrid(columns: columns(count: compact ? 3 : 2), spacing: 12) {
-                    ForEach(Array(hits.enumerated()), id: \.element.id) { offset, hit in
-                        tile(hit, rank: offset + 1, aspectRatio: compact ? 1 : 4.0 / 5.0)
-                    }
-                }
+        LazyVGrid(columns: columns(count: compact ? 3 : 2), spacing: spacing) {
+            ForEach(Array(hits.enumerated()), id: \.element.id) { offset, hit in
+                tile(hit, rank: offset + 1, aspectRatio: compact ? 1 : 4.0 / 5.0)
             }
         }
         .frame(maxWidth: 760)
@@ -51,42 +34,30 @@ struct PhotoResultsGrid<Thumbnail: View>: View {
     }
 
     private func columns(count: Int) -> [GridItem] {
-        Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12), count: count)
+        Array(repeating: GridItem(.flexible(minimum: 0), spacing: spacing), count: count)
     }
 
     private func tile(_ hit: SearchHit, rank: Int, aspectRatio: CGFloat) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: compact ? 6 : 8, style: .continuous)
         return Button {
             onSelect(hit.photo.id)
         } label: {
             // An aspect-constrained base gives even GeometryReader thumbnails
             // a finite height. Overlays cannot enlarge the tile's layout bounds.
-            shape.fill(PhotoGalleryStyle.surface)
+            shape.fill(IQStyle.muted)
                 .aspectRatio(aspectRatio, contentMode: .fit)
                 .overlay {
                     thumbnail(hit.photo)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
                 }
-                .overlay(alignment: .topLeading) {
-                    Text("\(rank)")
-                        .font(.caption.weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 9)
-                        .frame(minWidth: 28, minHeight: 28)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .environment(\.colorScheme, .dark)
-                        .padding(10)
-                        .accessibilityHidden(true)
-                }
                 .clipShape(shape)
-                .overlay(shape.strokeBorder(.white.opacity(0.07), lineWidth: 1))
+                .overlay(shape.strokeBorder(IQStyle.line, lineWidth: 1))
                 .contentShape(shape)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Open result \(rank)")
+        .accessibilityLabel("查看第\(rank)张照片")
         .accessibilityIdentifier("result-tile-\(rank)")
     }
 }
@@ -201,10 +172,10 @@ struct PhotoGalleryViewer: View {
 
     var body: some View {
         ZStack {
-            Color.black
+            IQStyle.viewerBackground
             if ids.isEmpty {
-                ContentUnavailableView("No photos to preview", systemImage: "photo.on.rectangle",
-                                       description: Text("Close this preview and try another search."))
+                ContentUnavailableView("暂无可预览的照片", systemImage: "photo.on.rectangle",
+                                       description: Text("请关闭预览后尝试其他搜索。"))
             } else {
                 TabView(selection: $selectedID) {
                     ForEach(ids, id: \.self) { id in
@@ -217,8 +188,9 @@ struct PhotoGalleryViewer: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) { topBar }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
-        .background(Color.black.ignoresSafeArea())
+        .background(IQStyle.viewerBackground.ignoresSafeArea())
         .preferredColorScheme(.dark)
+        .tint(IQStyle.accent)
         .statusBarHidden()
         .task(id: request) { await load(request) }
         .onReceive(state?.$debugToolsEnabled.eraseToAnyPublisher() ?? Just(false).eraseToAnyPublisher()) { enabled in
@@ -249,8 +221,8 @@ struct PhotoGalleryViewer: View {
             if item.photoID == selectedID, library.currentRevision(id: item.photoID) != nil {
                 PhotoShareSheet(image: item.image)
             } else {
-                ContentUnavailableView("Photo access changed", systemImage: "lock",
-                                       description: Text("Close sharing and check Photos access."))
+                ContentUnavailableView("照片访问权限已更改", systemImage: "lock",
+                                       description: Text("请关闭分享并检查照片访问权限。"))
             }
         }
         .sheet(item: $photoCheckSelection, onDismiss: { state?.dismissPhotoCheck() }) { selection in
@@ -270,27 +242,27 @@ struct PhotoGalleryViewer: View {
             Button { clearPhotoCheck(); dismiss() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(IQStyle.text)
                     .frame(width: 44, height: 44)
                     .background(.ultraThinMaterial, in: Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Close photo preview")
+            .accessibilityLabel("关闭照片预览")
             .accessibilityIdentifier("close-photo-preview")
             Spacer()
             let position = ids.firstIndex(of: selectedID).map { $0 + 1 } ?? 0
             Text("\(position) / \(ids.count)")
                 .font(.subheadline.weight(.medium))
                 .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.85))
-                .accessibilityLabel("Photo \(position) of \(ids.count)")
+                .foregroundStyle(IQStyle.text)
+                .accessibilityLabel("第\(position)张照片，共\(ids.count)张")
                 .accessibilityIdentifier("photo-preview-counter")
             Spacer()
             Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(PhotoGalleryStyle.background.opacity(0.8))
+        .background(IQStyle.viewerBackground.opacity(0.8))
     }
 
     private var bottomBar: some View {
@@ -310,7 +282,7 @@ struct PhotoGalleryViewer: View {
                 Button(action: openPreviewComparison) {
                     Label("本地预览对比", systemImage: "photo.on.rectangle.angled")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(PhotoGalleryStyle.accent)
+                        .foregroundStyle(IQStyle.accent)
                         .frame(minHeight: 44)
                 }
                 .buttonStyle(.plain)
@@ -321,14 +293,14 @@ struct PhotoGalleryViewer: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(PhotoGalleryStyle.background.opacity(0.8))
+        .background(IQStyle.viewerBackground.opacity(0.8))
     }
 
     private var shareButton: some View {
         Button(action: shareCurrentPhoto) {
-            Label("Share", systemImage: "square.and.arrow.up")
+            Label("分享", systemImage: "square.and.arrow.up")
                 .font(.body.weight(.semibold))
-                .foregroundStyle(PhotoGalleryStyle.accent)
+                .foregroundStyle(IQStyle.accent)
                 .padding(.horizontal, 28)
                 .frame(minHeight: 48)
                 .background(.ultraThinMaterial, in: Capsule())
@@ -336,7 +308,7 @@ struct PhotoGalleryViewer: View {
         .buttonStyle(.plain)
         .disabled(currentImage == nil)
         .opacity(currentImage == nil ? 0.4 : 1)
-        .accessibilityHint("Shares the displayed photo without location metadata")
+        .accessibilityHint("分享当前显示的照片，不包含位置元数据")
         .accessibilityIdentifier("share-photo-preview")
     }
 
@@ -345,7 +317,7 @@ struct PhotoGalleryViewer: View {
             if let state, state.debugToolsEnabled {
                 PhotoCheckPreviewButton(state: state, hasSelection: hasCheckableSelection, action: openPhotoCheck)
                     .buttonStyle(.plain)
-                    .accessibilityHint("Compare the saved index with a fresh local preview without changing the index")
+                    .accessibilityHint("将已保存的索引与新获取的本地预览进行比较，不修改索引")
                     .accessibilityIdentifier("check-photo-preview")
             }
         }
@@ -393,7 +365,7 @@ struct PhotoGalleryViewer: View {
 
     private func page(id: String) -> some View {
         ZStack {
-            Color.black
+            IQStyle.viewerBackground
             if id == selectedID, let image = currentImage {
                 PhotoFitZoomView(image: image)
                     .id(request)
@@ -401,8 +373,8 @@ struct PhotoGalleryViewer: View {
                 failureView(failedPhoto.issue)
             } else {
                 VStack(spacing: 12) {
-                    ProgressView().tint(PhotoGalleryStyle.accent)
-                    Text("Loading photo…").font(.subheadline).foregroundStyle(.white.opacity(0.65))
+                    ProgressView().tint(IQStyle.accent)
+                    Text("正在加载照片…").font(.subheadline).foregroundStyle(IQStyle.secondary)
                 }
                 .accessibilityElement(children: .combine)
             }
@@ -417,24 +389,24 @@ struct PhotoGalleryViewer: View {
             VStack(spacing: 16) {
                 Image(systemName: issue.symbol)
                     .font(.system(size: 36, weight: .light))
-                    .foregroundStyle(PhotoGalleryStyle.accent)
+                    .foregroundStyle(IQStyle.accent)
                     .accessibilityHidden(true)
-                Text(issue.title).font(.title3.weight(.semibold)).foregroundStyle(.white)
-                Text(issue.message(networkAllowed: networkAllowed))
+                Text(issue.localizedTitle).font(.title3.weight(.semibold)).foregroundStyle(IQStyle.text)
+                Text(issue.localizedMessage(networkAllowed: networkAllowed))
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.65))
+                    .foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button {
                     attempt += 1
                 } label: {
-                    Label("Try again", systemImage: "arrow.clockwise")
+                    Label("重试", systemImage: "arrow.clockwise")
                         .font(.body.weight(.semibold))
                         .padding(.horizontal, 20)
                         .frame(minHeight: 48)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(PhotoGalleryStyle.accent)
-                .foregroundStyle(PhotoGalleryStyle.background)
+                .tint(IQStyle.accent)
+                .foregroundStyle(IQStyle.onAccent)
                 .accessibilityIdentifier("retry-photo-preview")
             }
             .multilineTextAlignment(.center)
@@ -511,9 +483,9 @@ private struct PhotoCheckPreviewButton: View {
 
 private struct PhotoCheckPreviewLabel: View {
     var body: some View {
-        Label("Check this photo", systemImage: "magnifyingglass")
+        Label("检查这张照片", systemImage: "magnifyingglass")
             .font(.body.weight(.semibold))
-            .foregroundStyle(PhotoGalleryStyle.accent)
+            .foregroundStyle(IQStyle.accent)
             .padding(.horizontal, 16)
             .frame(minHeight: 48)
             .background(.ultraThinMaterial, in: Capsule())
@@ -547,9 +519,9 @@ private struct PhotoFitZoomView: View {
                         .onEnded { value in settledScale = bounded(settledScale * value.magnification) }
                 )
                 .onTapGesture(count: 2) { settledScale = 1 }
-                .accessibilityLabel("Selected photo")
-                .accessibilityHint("Pinch to zoom. Double-tap to reset. Swipe horizontally for another photo.")
-                .accessibilityAction(named: Text("Reset zoom")) { settledScale = 1 }
+                .accessibilityLabel("当前照片")
+                .accessibilityHint("双指捏合缩放，轻点两下还原缩放，左右轻扫切换照片。")
+                .accessibilityAction(named: Text("还原缩放")) { settledScale = 1 }
                 .accessibilityIdentifier("photo-preview-image")
         }
         .clipped()

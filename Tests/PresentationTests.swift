@@ -8,17 +8,27 @@ import ImageIQCore
 /// Native, model-free review captures. All hits and drawn scenes live in this test
 /// target; nothing is imported into Photos or read from a photo/image file.
 /// Attachments are for human review in/export from xcresult, not pixel baselines.
+/// Synthetic scenes are not model-quality evidence; no internet/public images
+/// or private photos are used. English fixture queries are not app UI copy.
 @MainActor
 final class PresentationTests: XCTestCase {
     private let phone = CGSize(width: 393, height: 852)
     private let compactPhone = CGSize(width: 375, height: 667)
 
-    func testThreeResultHeroSnapshot() async throws {
+    func testThreeResultGridSnapshots() async throws {
         let hits = PresentationFixtures.hits(count: 3)
         XCTAssertTrue(hits.allSatisfy { $0.photo.imageEmbedding.count == 768 })
         for hit in hits { try EmbeddingValidation.validateUnit(hit.photo.imageEmbedding) }
-        try await snapshot(PresentationGridReview(hits: hits, compact: false),
-                           id: "hero-3", size: phone)
+        for appearance in [UIUserInterfaceStyle.light, .dark] {
+            let layout = PresentationGridLayout()
+            try await snapshot(PresentationGridReview(hits: hits, compact: false, layout: layout),
+                               id: "teal-grid-\(appearance == .dark ? "dark" : "light")",
+                               size: phone, appearance: appearance)
+            // Measure the actual production grid's supplied thumbnail bounds,
+            // not an inferred AX tree or a reconstructed layout. This also
+            // checks the hit order: the first two share row one, third starts row two.
+            try assertUniformGrid(hits, layout: layout, columns: 2, aspectRatio: 4.0 / 5.0, spacing: 6)
+        }
     }
 
     func testTwelveResultGridSnapshots() async throws {
@@ -26,14 +36,17 @@ final class PresentationTests: XCTestCase {
         // A phone-height viewport cannot show all six rows. Capture both ends
         // of the actual scroll view instead of shrinking photos to fit twelve.
         try await snapshot(PresentationGridReview(hits: hits, compact: false),
-                           id: "grid-12-top", size: phone)
+                           id: "grid-12-top", size: phone, appearance: .light)
         try await snapshot(PresentationGridReview(hits: hits, compact: false, anchor: .bottom),
-                           id: "grid-12-bottom", size: phone)
+                           id: "grid-12-bottom", size: phone, appearance: .light)
     }
 
     func testCompactThreeColumnSnapshot() async throws {
-        try await snapshot(PresentationGridReview(hits: PresentationFixtures.hits(count: 12), compact: true),
-                           id: "compact-3-columns", size: compactPhone)
+        let hits = PresentationFixtures.hits(count: 12)
+        let layout = PresentationGridLayout()
+        try await snapshot(PresentationGridReview(hits: hits, compact: true, layout: layout),
+                           id: "compact-3-columns", size: compactPhone, appearance: .light)
+        try assertUniformGrid(hits, layout: layout, columns: 3, aspectRatio: 1, spacing: 4)
     }
 
     func testEmptyHomeSnapshot() async throws {
@@ -45,7 +58,8 @@ final class PresentationTests: XCTestCase {
         XCTAssertTrue(state.modelsReady)
         XCTAssertEqual(state.summary.indexedCount, 0)
         XCTAssertNil(state.completedQuery)
-        try await snapshot(ContentView(state: state), id: "home-empty", size: phone)
+        try await snapshot(ContentView(state: state), id: "teal-home-light", size: phone, appearance: .light)
+        try await snapshot(ContentView(state: state), id: "teal-home-dark", size: phone, appearance: .dark)
     }
 
     func testReadyHomeSnapshot() async throws {
@@ -54,7 +68,29 @@ final class PresentationTests: XCTestCase {
         XCTAssertTrue(state.canIndex)
         XCTAssertFalse(state.canSearch, "An empty query must not enable search")
         XCTAssertNil(state.completedQuery)
-        try await snapshot(ContentView(state: state), id: "home-ready", size: phone)
+        XCTAssertEqual(state.resultLimit, 3)
+        XCTAssertEqual(state.locationWeight, 0.6)
+        try await snapshot(ContentView(state: state), id: "teal-ready-light", size: phone, appearance: .light)
+        try await snapshot(ContentView(state: state), id: "teal-ready-dark", size: phone, appearance: .dark)
+    }
+
+    func testLibraryLightAndDarkSnapshots() async throws {
+        let state = AppState(worker: FakePhotoWorkServicing(summary: PresentationFixtures.emptySummary),
+                             authorizationStatus: { .notDetermined })
+        state.refresh()
+        await state.waitUntilIdle()
+        XCTAssertFalse(state.canRead)
+        XCTAssertFalse(state.canIndex)
+        XCTAssertFalse(state.debugToolsEnabled)
+        XCTAssertFalse(state.allowICloudDownload)
+        XCTAssertEqual(state.summary.indexedCount, 0)
+        XCTAssertNil(state.completedQuery)
+        try await snapshot(LibrarySheet(state: state), id: "teal-library-light", size: phone, appearance: .light)
+        try await snapshot(LibrarySheet(state: state), id: "teal-library-dark", size: phone, appearance: .dark)
+        XCTAssertFalse(state.canRead, "Review must not request Photos permission")
+        XCTAssertFalse(state.allowICloudDownload)
+        XCTAssertNil(state.activity)
+        XCTAssertTrue(state.results.isEmpty)
     }
 
     func testActualResultsUseMissingAssetPlaceholdersSnapshot() async throws {
@@ -83,8 +119,10 @@ final class PresentationTests: XCTestCase {
 
     func testLargeFontSettingsSnapshot() async throws {
         let state = await readyState()
-        try await snapshot(SettingsSheet(state: state), id: "settings-accessibility-large",
-                           size: compactPhone, dynamicTypeSize: .accessibility1)
+        try await snapshot(SettingsSheet(state: state), id: "settings-accessibility-large-light",
+                           size: compactPhone, dynamicTypeSize: .accessibility1, appearance: .light)
+        try await snapshot(SettingsSheet(state: state), id: "settings-accessibility-large-dark",
+                           size: compactPhone, dynamicTypeSize: .accessibility1, appearance: .dark)
     }
 
     func testRefreshPublishesReadySummaryWithoutCompletingAQuery() async {
@@ -254,23 +292,48 @@ final class PresentationTests: XCTestCase {
 
     // MARK: Native rendering
 
+    private func assertUniformGrid(_ hits: [SearchHit], layout: PresentationGridLayout,
+                                   columns: Int, aspectRatio: CGFloat, spacing: CGFloat,
+                                   file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(Set(layout.frames.keys), Set(hits.map(\.id)),
+                       "Every synthetic thumbnail must report its real layout", file: file, line: line)
+        let firstID = try XCTUnwrap(hits.first?.id, file: file, line: line)
+        let first = try XCTUnwrap(layout.frames[firstID], file: file, line: line)
+        XCTAssertGreaterThan(first.width, 0, file: file, line: line)
+        XCTAssertGreaterThan(first.height, 0, file: file, line: line)
+        for (index, hit) in hits.enumerated() {
+            let frame = try XCTUnwrap(layout.frames[hit.id], file: file, line: line)
+            XCTAssertGreaterThan(frame.height, 0, file: file, line: line)
+            XCTAssertEqual(frame.width, first.width, accuracy: 1, file: file, line: line)
+            XCTAssertEqual(frame.height, first.height, accuracy: 1, file: file, line: line)
+            XCTAssertEqual(frame.width / frame.height, aspectRatio, accuracy: 0.01, file: file, line: line)
+            XCTAssertEqual(frame.minX, first.minX + CGFloat(index % columns) * (first.width + spacing),
+                           accuracy: 1, "Explicit design spacing and worker hit order", file: file, line: line)
+            XCTAssertEqual(frame.minY, first.minY + CGFloat(index / columns) * (first.height + spacing),
+                           accuracy: 1, "Explicit design spacing and worker hit order", file: file, line: line)
+        }
+    }
+
     private func snapshot<Content: View>(_ content: Content, id: String, size: CGSize,
-                                         dynamicTypeSize: DynamicTypeSize = .large) async throws {
+                                         dynamicTypeSize: DynamicTypeSize = .large,
+                                         appearance: UIUserInterfaceStyle = .light) async throws {
+        XCTAssertTrue(appearance == .light || appearance == .dark, "Review appearance must be explicit")
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let scene = try XCTUnwrap(scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first,
                                   "Native hosted snapshots require the iOS app test host")
         let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(origin: .zero, size: size)
-        window.overrideUserInterfaceStyle = .dark
-        window.backgroundColor = .black
+        window.overrideUserInterfaceStyle = appearance
+        let background = UIColor(IQStyle.background).resolvedColor(with: UITraitCollection(userInterfaceStyle: appearance))
+        window.backgroundColor = background
         let root = content
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(appearance == .dark ? .dark : .light)
             .environment(\.locale, Locale(identifier: "en_US"))
             .environment(\.layoutDirection, .leftToRight)
             .environment(\.dynamicTypeSize, dynamicTypeSize)
         let host = PresentationHostingController(rootView: root)
-        host.overrideUserInterfaceStyle = .dark
+        host.overrideUserInterfaceStyle = appearance
         let laidOut = expectation(description: "\(id): hosted view laid out at the requested phone size")
         host.onLayout = { [weak host] in
             guard let host, host.view.window != nil, host.view.bounds.size == size else { return }
@@ -304,13 +367,14 @@ final class PresentationTests: XCTestCase {
         }
         await fulfillment(of: [settled], timeout: 5)
         XCTAssertEqual(host.view.bounds.size, size)
+        XCTAssertEqual(host.traitCollection.userInterfaceStyle, appearance)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1 // Exact 393x852 / 375x667 output, independent of simulator scale.
         format.opaque = true
         format.preferredRange = .standard
         var drewHierarchy = false
         let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
-            UIColor.black.setFill()
+            background.setFill()
             context.fill(CGRect(origin: .zero, size: size))
             drewHierarchy = host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
         }
@@ -346,12 +410,14 @@ private struct PresentationGridReview: View {
     let hits: [SearchHit]
     let compact: Bool
     var anchor: UnitPoint = .top
+    let layout: PresentationGridLayout?
     private let images: [String: UIImage]
 
-    init(hits: [SearchHit], compact: Bool, anchor: UnitPoint = .top) {
+    init(hits: [SearchHit], compact: Bool, anchor: UnitPoint = .top, layout: PresentationGridLayout? = nil) {
         self.hits = hits
         self.compact = compact
         self.anchor = anchor
+        self.layout = layout
         images = Dictionary(uniqueKeysWithValues: hits.enumerated().map { offset, hit in
             (hit.id, PresentationFixtures.sceneImage(index: offset))
         })
@@ -361,7 +427,7 @@ private struct PresentationGridReview: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("TEST FIXTURE · DRAWN SCENES").font(.caption.weight(.bold)).foregroundStyle(IQStyle.accent)
-                Text("\(hits.count) matches · \(compact ? "Compact" : "Larger photos")").font(.title3.weight(.semibold))
+                Text("\(hits.count) 张候选照片 · \(compact ? "紧凑网格" : "较大照片")").font(.title3.weight(.semibold))
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
@@ -369,13 +435,39 @@ private struct PresentationGridReview: View {
                 PhotoResultsGrid(hits: hits, compact: compact, onSelect: { _ in }) { photo in
                     // The dictionary is constructed from exactly these hits.
                     PresentationThumbnail(image: images[photo.id]!)
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear.preference(key: PresentationGridFramesKey.self,
+                                                       value: [photo.id: geometry.frame(in: .named("presentation-grid-layout"))])
+                            }
+                        }
+                }
+                .coordinateSpace(name: "presentation-grid-layout")
+                .onPreferenceChange(PresentationGridFramesKey.self) { frames in
+                    // Preserve the last mounted sample when the host is torn
+                    // down. No view-tree search or production state mutation.
+                    if !frames.isEmpty { layout?.frames = frames }
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
             }
             .defaultScrollAnchor(anchor)
         }
+        .foregroundStyle(IQStyle.text)
         .background(IQStyle.background.ignoresSafeArea())
+    }
+}
+
+@MainActor
+private final class PresentationGridLayout {
+    var frames: [String: CGRect] = [:]
+}
+
+private struct PresentationGridFramesKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
     }
 }
 
