@@ -77,7 +77,7 @@ final class PresentationNavigationTests: XCTestCase {
         // Production uses a menu Picker with Top 3 / Top 12, not a segmented
         // control. Check its stable identifier; do not guess private menu nodes.
         let form = try sheetForm()
-        let advanced = app.buttons["debug-advanced"]
+        let advanced = app.buttons["Advanced"]
         let weight = app.sliders["location-weight"]
         for element in settingsDebugElements { expectAbsent(element) }
         attach("settings-live")
@@ -92,14 +92,14 @@ final class PresentationNavigationTests: XCTestCase {
         scrollTo(advanced, in: form, swipeUp: false)
         XCTAssertFalse(weight.exists, "Advanced must start collapsed after opting in")
         tapDisclosure(advanced)
-        scrollTo(weight, in: form)
+        expectExpandedWeight(weight)
         XCTAssertEqual(weight.value as? String, "60%", "The actual location-weight slider keeps its default")
         scrollTo(advanced, in: form, swipeUp: false)
         tapDisclosure(advanced)
         expectAbsent(weight)
         scrollTo(advanced, in: form, swipeUp: false)
         tapDisclosure(advanced)
-        scrollTo(weight, in: form)
+        expectExpandedWeight(weight)
         scrollTo(app.buttons["Diagnostics"], in: form)
         // Advanced is expanded: hiding tools must remove it, not merely collapse it.
         setDebugTools(false, in: form)
@@ -283,10 +283,34 @@ final class PresentationNavigationTests: XCTestCase {
 
     private func tapDisclosure(_ element: XCUIElement) {
         expectHittable(element)
-        // The failed run found/tapped the identified full-width DisclosureGroup
-        // row but never exposed a slider. Activate its trailing disclosure
-        // control, not the centre of the label; keep all expand/collapse checks.
-        element.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        // Use the semantic button, not coordinates derived from a label frame.
+        // The previous recording proved expansion succeeded; lookup was failing.
+        element.tap()
+    }
+
+    private func expectExpandedWeight(_ weight: XCUIElement) {
+        // In this flow the disclosure header is onscreen. The recording shows
+        // the slider appears directly below it. Never blindly swipe away from
+        // it when an identifier/type lookup is the actual failure.
+        let appeared = weight.waitForExistence(timeout: 5)
+        let unique = app.sliders.matching(identifier: "location-weight").count == 1
+        let inherited = app.sliders.matching(identifier: "debug-advanced").count
+        let correctValue = appeared && (weight.value as? String) == "60%"
+        if !appeared || !unique || inherited != 0 || !weight.isHittable || !correctValue {
+            let sliders = app.sliders.allElementsBoundByIndex.map {
+                "identifier=\($0.identifier), label=\($0.label), value=\(String(describing: $0.value)), frame=\($0.frame)"
+            }.joined(separator: "\n")
+            let evidence = XCTAttachment(string: "SLIDERS\n\(sliders)\nTREE\n\(app.debugDescription)")
+            evidence.name = "Advanced-slider-accessibility-before-scroll"
+            evidence.lifetime = .keepAlways
+            add(evidence)
+            attach("advanced-slider-lookup-failure")
+        }
+        XCTAssertTrue(appeared, "Expanded slider must be discoverable before any swipe")
+        XCTAssertTrue(unique, "One location-weight slider must retain its own accessibility identifier")
+        XCTAssertEqual(inherited, 0, "The disclosure identifier must not replace its child slider identifier")
+        XCTAssertTrue(weight.isHittable, "The expanded slider must remain reachable without blind scrolling")
+        XCTAssertTrue(correctValue, "Both expansions must preserve the actual 60% location weight")
     }
 
     private func assertSettingsDebugOff(in form: XCUIElement) {

@@ -105,7 +105,7 @@ struct SettingsSheet: View {
             .accessibilityIdentifier("result-limit")
 
             if state.debugToolsEnabled {
-                DisclosureGroup("Advanced", isExpanded: $advancedExpanded) {
+                DisclosureGroup(isExpanded: $advancedExpanded) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Location contribution")
                             .font(.subheadline.weight(.semibold))
@@ -150,8 +150,11 @@ struct SettingsSheet: View {
                     }
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.vertical, 6)
+                } label: {
+                    // Identify only the disclosure label. An identifier on the
+                    // whole group can propagate to its nested controls in SwiftUI.
+                    Text("Advanced").accessibilityIdentifier("debug-advanced")
                 }
-                .accessibilityIdentifier("debug-advanced")
             }
         } header: {
             Text("Search")
