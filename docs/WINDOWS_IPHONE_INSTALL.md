@@ -5,7 +5,35 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前（2026-09-29）：0.5.0（build 13）— 已交付并本地校验，可签名覆盖安装
+## 当前（2026-09-29）：0.5.1（build 14）— 已交付并本地校验，可签名覆盖安装
+
+- [公开 Release：ci-36553434443-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36553434443-1)
+  （**399036139**），**2026-09-29T10:27:37Z** 发布；**9 项资产已核验，非 draft、prerelease、非 Latest**，无需登录。
+- 本机已备好 [../build/device-download/36553434443/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36553434443/LocalImageIQ-iphoneos-unsigned.ipa)：
+  asset **597928214**，**1,414,832,318 字节**；SHA-256：
+  `a22ba8f60be8d6fb54585e9a253f8f165453a546a45029889a57c4e91c37153f`。
+  **已完整流式下载并核验实际长度／哈希，`ipaVerifiedLocally: true`**；配套报告／清单／校验文件／下载记录齐全。
+  **7-Zip 26.03 `t` 全量解压／CRC 检查通过，Exit 0，Everything is Ok**：10 文件夹、24 文件，
+  解压后 **1,559,429,031 字节**；未提取文件，不代表签名后的包或手机已验证。本机无需再次下载。
+- [CI 36553434443](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36553434443)
+  ／[job 109356825463](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36553434443/job/109356825463)，
+  源码 **`33a00dde0b974c4641106de5096d0b627a3436f4`**，**首轮 SUCCESS**；核心 **79 通过**，
+  App **398＝397 通过／1 既有真机文件保护模拟器跳过／0 失败**，UI **10 全通过**。
+  设备 **BUILD SUCCEEDED：0.5.1 / 14、arm64 Release、未签名、SDK 18.5、Xcode 16.4、最低 iOS 17.0**。
+
+**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引。**
+build 10+ 当前策略有效图像／地点索引与就绪语言包直接沿用，**不必 Index / resume**；签名步骤见下方第 1–5 节。
+“正在检查图库”仍在核对授权照片及缓存变化，不是重新编码；完整授权快照、清理及首次约 15 MB 地点包解析保留。
+本版把完整模型／分词器加载延后到搜索等实际操作，计数只查 SQLite 元数据，不再为数量解码全库向量；
+**并非彻底跳过或零等待**。首次搜索仍完整准备／校验向量；坏向量可能被计数并显示就绪，但搜索仍报错。
+UI／AppState／Photos、模型权重、输入／排名／并发策略不变，无需诊断或指定查询。
+本轮仅实际查看四张用户模式图的联系图，**未看其他图片、无真实 Photos／build 14 真机验证或手机耗时**；
+详见 [STARTUP_REFRESH.md](STARTUP_REFRESH.md) 和 [BUILD_STATUS.md](BUILD_STATUS.md)。
+CI／计费、项目许可证与公开范围不变，未跟踪研究／原型仍仅本地保留、未暂存。
+
+## 历史：0.5.0（build 13）— 已交付并本地校验，可签名覆盖安装
+
+以下保留 build 13 当时包身份与验证范围；“本轮／当前”等仅指该历史版本，现行 build 14 以页首为准。
 
 - [公开 Release：ci-36540269511-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36540269511-1)
   （**398951411**）发布于 **2026-09-29T08:30:53Z**，**prerelease、`draft: false`、非 Latest，9 项资产已核验**，无需 GitHub 登录。
@@ -36,12 +64,12 @@ B 界面为实际自适应灰底／青绿，普通文案与照片错误中文，
 手机验证；详细范围和首轮 B 的 UI 9/10 失败历史见 [BUILD_STATUS.md](BUILD_STATUS.md)、[TEAL_UI.md](TEAL_UI.md)。
 
 **build 13 尚未获真机安装／行为确认。** 用户已确认 build 12 安装成功；之前短暂的
-`PackageExtractionFailed` 原因未知，不能归因于存储空间。未改源码、项目许可证、公开范围或计费；
+`PackageExtractionFailed` 原因未知，不能归因于存储空间。项目许可证、公开范围或计费不变；
 未跟踪的研究／原型因含公共 Unsplash 示意图仍仅本地私存、未暂存，不宣称仓库全部干净。
 
 ## 历史：0.4.1（build 12）— 已交付，IPA 已校验且用户确认安装成功
 
-以下保留 build 12 包身份与安装说明；“本轮／新包／当前”等仅指当时 build 12。当前 build 13 以页首为准。
+以下保留 build 12 包身份与安装说明；“本轮／新包／当前”等仅指当时 build 12。当前交付以页首为准。
 
 2026-09-28，同一仓库已确认 **PUBLIC／`private: false`**。用户已确认既有历史、
 Actions 日志及已发布 Releases 公开；详见 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md)。
@@ -85,7 +113,7 @@ Actions 日志及已发布 Releases 公开；详见 [PUBLIC_REPOSITORY.md](PUBLI
 ## 历史检查点（2026-09-28，转公开前）：0.4.1（build 12）— 第三轮未启动，无新包
 
 以下版本历史保留当时错误、校验值和步骤；“私有／需登录／先查计费／不重试”是旧阶段
-条件，**不适用于当前公开下载**。现行 build 13 已交付入口以页首为准，
+条件，**不适用于当前公开下载**。现行已交付入口以页首为准，
 不要重复历史查询、诊断或迁移步骤。
 
 [第三轮 CI 36397742264](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264)
@@ -251,7 +279,7 @@ TestFlight 或 Apple 签名服务。CI 无 PAT／Apple 凭据；成功才将已�
 
 ### 历史 build 11 当时的安装步骤
 
-当时本工作区的 build 11 新包已经就绪；以下不是当前 build 13 的升级要求。
+当时本工作区的 build 11 新包已经就绪；以下不是当前版本的升级要求。
 
 1. 确认是已验证的 **0.4.0 / build 11** 新 IPA，再用**原 Sideloadly 账号、原有效
   Bundle ID 覆盖安装**，不卸载、不 Clear index。已有 build 10 当前策略有效索引
@@ -671,8 +699,8 @@ Library 区分扫描时有 GPS／找到标签／无 GPS／无可用包／包外�
 设备运行比构建 SDK 更新的 iOS，不代表应用一定不能运行；最终仍需测试实际
 安装、系统授权、内存和推理行为，不声称云端模拟器替代了 iOS 26.6.1 真机验证。
 
-**当前升级目标 0.5.0 / build 13 已完成交付、本地哈希及 CRC 校验，可执行下方签名／安装步骤**。
-使用页首 CI 36540269511 对应的新包和哈希，不用历史 build 12／11 或失败 draft 代替。
+**当前升级目标 0.5.1 / build 14 已完成交付、本地哈希及 CRC 校验，可执行下方签名／安装步骤**。
+使用页首 CI 36553434443 对应的新包和哈希，不用历史 build 13／12／11 或失败 draft 代替。
 先前失败与修复过程见 [BUILD_STATUS.md](BUILD_STATUS.md)，不再是等待安装的阻塞。
 
 ## 1. 安装工具（由你操作）
@@ -700,13 +728,13 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 3. 等 Sideloadly 中的设备列表显示你的 iPhone。没有识别时先排查驱动／线缆，
    不反复提交 Apple 登录。
 
-## 3. 签名安装已交付的 build 13
+## 3. 签名安装已交付的 build 14
 
 1. 使用已完整下载并校验的
-  [../build/device-download/36540269511/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36540269511/LocalImageIQ-iphoneos-unsigned.ipa)，
-  Release／设备报告为 **0.5.0 / build 13**。另一台电脑从
-  [ci-36540269511-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36540269511-1)
-  下载，并按页首 **1,414,830,691 字节／SHA-256** 核验后再拖进 Sideloadly。
+  [../build/device-download/36553434443/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36553434443/LocalImageIQ-iphoneos-unsigned.ipa)，
+  Release／设备报告为 **0.5.1 / build 14**。另一台电脑从
+  [ci-36553434443-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36553434443-1)
+  下载，并按页首 **1,414,832,318 字节／SHA-256** 核验后再拖进 Sideloadly。
   公开 Release 单独提供 IPA，无需 GitHub 登录或解压外层 Actions ZIP；**不解压或修改 IPA 的 Payload**。
 2. 选择已连接的 iPhone，使用原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，
    不卸载、不清索引；Apple Account 必须是本人有权使用的账号。
@@ -715,7 +743,7 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 4. 不启用 dylib 注入、插件或其它改包功能。首次签名可能需要调整开发用 Bundle ID；
    保持之后重签所用账号／标识一致，不随意删除旧 App 以免丢失其本地索引。
 
-历史 **0.4.1 / build 12、0.4.0 / build 11** 的包身份与下载入口保留在本页历史章节，不是本次新包，
+历史 **0.5.0 / build 13、0.4.1 / build 12、0.4.0 / build 11** 的包身份与下载入口保留在本页历史章节，不是本次新包，
 不要求回退或重装旧版。
 
 ## 4. 手机上完成信任
@@ -726,10 +754,10 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
   要求重启和确认。菜单暂时不出现时，先完成一次配对／开发签名安装再检查。
 - 若遇到账户或设备管理政策禁止开发者模式，停止并确认政策，不绕过设备管理。
 
-## 5. 覆盖安装 build 13 后：沿用已有状态，正常使用
+## 5. 覆盖安装 build 14 后：沿用已有状态，正常使用
 
-**build 13 已交付并校验，用户侧签名／安装及真机运行尚未确认**。
-用户已确认 build 12 安装成功，此前短暂错误原因未知，不归因于空间；不是 build 13 安装证明。
+**build 14 已交付并校验，用户侧签名／安装及真机运行尚未确认**。
+用户已确认 build 12 安装成功，此前短暂错误原因未知，不归因于空间；不是 build 14 安装证明。
 已有 build 10+ 当前策略有效索引／就绪语言包时，覆盖安装后直接正常搜索／看图，
 **不卸载、不 Clear index、不重建图像或地点，
 不必 Index / resume**。不要求重新下载语言包、测试“身份证”或其他指定查询、
@@ -740,7 +768,7 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 调试工具仅在需要时从**设置最底部的调试工具开关**打开；**每次启动默认 OFF**，
 仅当前会话有效。关闭会隐藏诊断界面、清理临时报告／问题并取消活动预览，
 **保留先前调整的权重**，不取消索引／搜索／语言包准备，不重置查询／结果／模型／缓存。
-更早模型／输入策略尚未迁移的情况才参考历史迁移；不因本次 B 界面更新重做历史流程。
+更早模型／输入策略尚未迁移的情况才参考历史迁移；不因本次图库检查精简重做历史流程。
 
 ## 隐私与模型许可不因本次更新而放宽
 
