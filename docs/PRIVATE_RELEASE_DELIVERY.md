@@ -1,6 +1,53 @@
 # Release 交付（含私有阶段历史）
 
-## 当前（2026-09-29）：0.4.1（build 12）公开 Release 已发布，本地 IPA 已全量校验
+## 当前（2026-09-29）：0.5.0（build 13）— SUCCESS／DELIVERED
+
+[CI 36540269511](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36540269511)
+／[job 109313762175](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36540269511/job/109313762175)，
+源码 **`158c3bf661efcc688ecbe313a4f5c52a3271d803`**，**COMPLETED / SUCCESS**。
+核心 **79 通过**；App **377＝376 通过／1 项既有真机文件保护模拟器跳过／0 失败**，
+**214.296 秒**（wall **264.142 秒**）；UI **10 全通过／545.341 秒**。
+设备 **BUILD SUCCEEDED：0.5.0 / 13、arm64 Release、未签名、SDK 18.5、Xcode 16.4、最低 iOS 17.0**。
+子套件、20 actor 的 **120／252** 与原 **23／58** 门槛见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+- [公开 Release：ci-36540269511-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36540269511-1)，
+  ID **398951411**，发布于 **2026-09-29T08:30:53Z**；**prerelease、`draft: false`、非 Latest、9 项资产已核验**，无需 GitHub 登录。
+- [../build/device-download/36540269511/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36540269511/LocalImageIQ-iphoneos-unsigned.ipa)：
+  asset **597693809**，**1,414,830,691 字节**，SHA-256：
+  `d5ebe9881bc596f8c45b29cfdf5ed986b07e665e3a46fdf691dd09bb52a3db31`。
+  **父流程实际完整流式下载并核验本地长度／SHA-256，`ipaVerifiedLocally: true`**，不是远端声明代替本地验证。
+  配套 [../build/device-download/36540269511/device-build.json](../build/device-download/36540269511/device-build.json)、
+  [../build/device-download/36540269511/SHA256SUMS.txt](../build/device-download/36540269511/SHA256SUMS.txt)、
+  [../build/device-download/36540269511/delivery.json](../build/device-download/36540269511/delivery.json)、
+  [../build/device-download/36540269511/release-fetch-7f2fdc96-50b8-4abb-9559-23083e023708.json](../build/device-download/36540269511/release-fetch-7f2fdc96-50b8-4abb-9559-23083e023708.json) 齐全。
+- **7-Zip 26.03 `t` 全量解压／CRC PASS，Exit 0，Everything is Ok**：10 文件夹、24 文件，
+  解压后 **1,559,424,855 字节**，压缩包 **1,414,830,691 字节**。**不验证 Sideloadly 重打包后的 IPA 或手机。**
+- [../build/ui-review/36540269511/UIReview.zip](../build/ui-review/36540269511/UIReview.zip)
+  已下载并校验：asset **597693697**，**3,719,566 字节**，SHA-256：
+  `610189d2dabacda04fb910818f948e974d41b1973d9868d82dd4d2957bc70fe8`。
+  父流程实际查看[八图青绿联系图](../build/ui-review/36540269511/teal-native-contact.jpg)（1120×1280）及
+  [四图用户模式联系图](../build/ui-review/36540269511/user-mode-contact.jpg)（1340×758），共 **12 张原图，各 393×852**。
+  场景为首页／就绪首页／合成网格／未授权图库浅深色，以及深色设置底部 OFF、深色未授权图库、空查看器 OFF／ON；
+  **无真实 Photos／真机验证，不声称审核了其他图像**。
+
+首轮 B **36537575789／a2e23979、UI 9/10** 保留为失败历史。第二轮仅补 `ContentView` 整行
+`contentShape(Rectangle())` 与两个 sheet 导航 tint，未改测试、时间或坐标；全通过支持修复，
+不构成旧 AX／根因的直接证明。普通文案／照片错误中文、根界面实际自适应、导航“完成”青绿；
+系统键盘／分享遵循 OS 语言，调试原始值可能英文，不声称完全本地化。
+
+默认 **Top 3／地点权重 0.6**、统一双列 4:5／紧凑三列间距 6／4、结果顺序保留且视觉排名移除；
+20 worker、HQ224／Fast、翻译、索引／缓存不变。原 Sideloadly 账号／有效 Bundle ID **覆盖安装**，
+build 10+ 有效索引与就绪语言包沿用，**不卸载、不 Clear index、不重建、不必 Index / resume**。
+build 12 安装已由用户确认、此前短暂错误原因未知；**build 13 真机安装／行为仍未验证**。
+
+公开手动标准 `macos-15`、现有权限／发布核验协议不变；本次不改源码、项目许可证、公开范围或计费，
+第三方 `redistributionApproved: false`／人工审查仍未完成。未跟踪的研究／原型含公共 Unsplash 图，
+**仅本地私存、未暂存，不宣称仓库全部干净**。现行公开边界见 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md)。
+
+## 历史：0.4.1（build 12）公开 Release 已发布，本地 IPA 已全量校验
+
+以下“当前／本轮／工程仍是／尚未安装”等仅为 build 12 当时记录；用户后来已确认该版安装成功。
+当前 build 13 交付、安装入口及验证边界以页首为准，旧包与失败证据不替代新包。
 
 2026-09-28，用户明确选择公开仓库＋免费标准托管 runner，并再次确认既有历史中的
 作者邮箱／机器路径／测试查询、历史 Actions 日志与已发布 Releases 可以公开。
@@ -75,7 +122,7 @@ GitHub API 与匿名 GET 确认为 **PUBLIC／`private: false`**。
 ## 历史（2026-09-28，转公开前）：0.4.0（build 11）首次私有 Release 尝试成功，IPA 已下载校验
 
 **以下全部保留为私有阶段历史**：当时的授权、登录要求、费用、83 项测试及本机 helper
-说明不是现行公开 guard／下载要求。当前无需 GitHub 登录即可下载页首 build 12 新包；
+说明不是现行公开 guard／下载要求。当前无需 GitHub 登录即可下载页首 build 13 新包；
 本轮公开发布及全量下载已完成。以下“本轮／现在／当前”仅指历史 build 11，不能覆盖页首。
 
 用户现已明确批准**方案 2：同一私有仓库 Release＋job 级 contents: write**。

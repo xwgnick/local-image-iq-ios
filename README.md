@@ -2,7 +2,44 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 当前（2026-09-29）：0.4.1（build 12）首次完成交付，IPA 已完整下载并校验
+## 当前（2026-09-29）：0.5.0（build 13）— SUCCESS，公开交付及本地 IPA 校验完成
+
+- [CI 36540269511](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36540269511)
+   ／[job 109313762175](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36540269511/job/109313762175)，
+   源码 **`158c3bf661efcc688ecbe313a4f5c52a3271d803`**，**COMPLETED / SUCCESS**。
+   核心 **79 通过**；App **377 项：376 通过、1 项既有真机文件保护模拟器跳过、0 失败**，
+   **214.296 秒**（wall **264.142 秒**）；独立 UI **10 全通过／545.341 秒**，含新增键盘→底部图库回归。
+   完整子套件与 20 actor／原数值门槛见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+- 设备 **BUILD SUCCEEDED**：**0.5.0 / 13、arm64 Release、未签名、SDK 18.5、Xcode 16.4、最低 iOS 17.0**。
+   [公开 Release：ci-36540269511-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36540269511-1)
+   （**398951411**）于 **2026-09-29T08:30:53Z** 发布；**prerelease、`draft: false`、非 Latest，9 项资产已核验**，无需 GitHub 登录。
+- [build/device-download/36540269511/LocalImageIQ-iphoneos-unsigned.ipa](build/device-download/36540269511/LocalImageIQ-iphoneos-unsigned.ipa)
+   **已完整流式下载，父流程已核验实际长度／SHA-256，`ipaVerifiedLocally: true`**；报告、校验文件、交付清单及下载记录齐全。
+   IPA asset **597693809**，**1,414,830,691 字节**；SHA-256：
+   `d5ebe9881bc596f8c45b29cfdf5ed986b07e665e3a46fdf691dd09bb52a3db31`。
+   另经 **7-Zip 26.03 全量解压／CRC 测试通过，Exit 0，Everything is Ok**；这不验证 Sideloadly 重打包后的 IPA 或手机。
+- B 原生界面已交付：灰底／青绿、根界面实际跟随系统深浅色、普通文案与照片错误中文、导航“完成”青绿；
+   统一双列 **4:5**／紧凑三列，间距 **6／4**，视觉排名徽标移除但结果顺序保留。
+   系统键盘／分享语言跟随 OS，调试原始值可能为英文，**不声称完全本地化**。
+   默认 **Top 3／地点权重 0.6**、20 worker、HQ224／Fast、翻译、索引／缓存均不变。
+- 已校验 UI ZIP，父流程**实际仅查看本轮两张联系图、合计 12 张原图（各 393×852）**：
+   [八图浅／深色联系图](build/ui-review/36540269511/teal-native-contact.jpg)（1120×1280）和
+   [四图用户模式联系图](build/ui-review/36540269511/user-mode-contact.jpg)（1340×758）。
+   均为合成绘图／空状态／未授权场景，**不读取真实 Photos、不是真机证据，不扩大为其他图像已审核**。
+- **原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**，不卸载、不 Clear index；build 10+
+   当前策略有效索引及就绪语言包沿用，**无需重建图像／地点或 Index / resume**。
+   用户已确认 build 12 安装成功，早先短暂安装错误原因未知；**build 13 尚未获真机安装／行为验证**。
+
+**历史 B 首轮** `36537575789／a2e23979` 的 UI **9/10** 失败保留；第二轮只补
+`ContentView` 整行 `contentShape(Rectangle())` 与两个 sheet 的导航 tint，未改测试、等待时间或点击坐标。
+第二轮全通过支持该修复有效，**不构成旧 AX／根因的追溯直接证明**。详见
+[docs/TEAL_UI.md](docs/TEAL_UI.md) 与 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+本次不改源码、项目许可证、公开范围或计费；**未跟踪的研究／浏览器原型仍仅本地私存、未暂存**，
+含公共 Unsplash 示意图，不据此宣称整个仓库干净或已可公开这些原型。
+
+## 历史：0.4.1（build 12）— IPA 已完整下载并校验，用户已确认安装成功
+
+以下保留 build 12 交付记录；“本轮／新包／当前”等仅指当时 build 12。当前 build 13 状态以页首为准。
 
 [CI 36515068434](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36515068434)
 ／[job 109235419277](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36515068434/job/109235419277)，
@@ -628,7 +665,7 @@ IPA 已下载并校验。这些数值测试与产物属于旧编码器，不能�
    当前有效计数会排除旧行。build 10 CI 首轮通过，IPA 已完整下载并校验；真机速度／内存／发热待测。
 - 0.4.0 仅新增可关闭的系统中文查询翻译与独立语言包准备，不改变上述模型／输入策略／
    图像和地点缓存；有效 build 10 索引无需重建。历史 build 11 的 CI、私有 Release 与
-   本地 IPA 校验均已完成，真机翻译仍待验证；不是当前 build 12 的通过或交付证据，详见
+   本地 IPA 校验均已完成，真机翻译仍待验证；不是当前 build 13 的通过或交付证据，详见
    [docs/QUERY_TRANSLATION.md](docs/QUERY_TRANSLATION.md)。
 - 0.4.1 将调试工具统一放到 Settings 底部的会话开关后，重启默认 OFF；正常翻译／
    搜索／看图保留。build 12 原生测试、设备构建、公开发布及本地 IPA 校验已完成，
@@ -690,9 +727,9 @@ GitHub 规则免费，受平台使用政策／运行限制约束，不承诺无�
 
 - [project.yml](project.yml)：XcodeGen 规范，iOS 17+，Swift 5 语言模式；App 分词依赖
    需要 Swift 6 工具链，既有构建基线为 Xcode 16.4／iOS 18.5 SDK；app + 测试 target。
-   系统翻译在 iOS 18+ 真机启用，iOS 17 原文回退。当前 build 12 的
-   **36515068434／job 109235419277** 已成功：App **369 通过／1 既有跳过／0 失败**、
-   UI **9 全通过**，设备编译、公开 Release 和本地 IPA 校验完成；真机运行仍待验证。
+   系统翻译在 iOS 18+ 真机启用，iOS 17 原文回退。当前 build 13 的
+   **36540269511／job 109313762175** 已成功：App **376 通过／1 既有跳过／0 失败**、
+   UI **10 全通过**，设备编译、公开 Release、本地 IPA 哈希与 CRC 校验完成；build 13 真机运行仍待验证。
    先前 UI 失败、计费启动失败及对应源码保留在 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
 - [project.models.yml](project.models.yml)：转换完成后的模型测试资源增量配置。
 - [App](App)：UI、PhotoKit、Core ML、SQLite、离线行政区查询及无可用包状态处理。
@@ -715,9 +752,10 @@ Unicode 小写（含 Final_Sigma）和全部 17 条文本的 token IDs／masks �
 8 项原生 parity 也已实际通过，含 20 槽工厂 120 次预测／252 项测量及原 23／58 门槛，
 不是借用更早版本通过结果。0.4.0 第二轮 8 项通过（83.298 秒）保留为历史；历史 build 11
 36387878343 的 8 项全部通过（81.423 秒），实际执行
-同样的 120／252 及原 23／58 检查，门槛未改；不是手机性能测量，也不是当前 build 12 的结果。
-当前 build 12 的 **36515068434** 已独立通过 **8 项 GeneratedModelParity（170.094 秒）**，
-保留相同的 20 槽工厂及原生产 API 数值门槛，不借用历史运行代替本轮验证。
+同样的 120／252 及原 23／58 检查，门槛未改；不是手机性能测量，也不是当前 build 13 的结果。
+历史 build 12 的 **36515068434** 独立通过 **8 项 GeneratedModelParity（170.094 秒）**；
+当前 build 13 的 **36540269511** 独立通过 **8 项（144.833 秒）**，保留相同的
+20 actor 工厂 120／252 与原生产 API 23／58 数值门槛，不借用历史运行代替本轮验证。
 `ImageIQCore` 自身仍是 Foundation-only；
 App 的上述依赖是另一个边界。
 
@@ -744,22 +782,23 @@ MultiPolygon 使用 `label`、`level` 等公开属性。固定来源、历史年
 历史 0.4.0（build 11）设备报告及已下载包再次确认同一地点包数量、字节数及哈希，
 完整身份与本地复验记录见 [构建记录](docs/BUILD_STATUS.md)。
 
-## 当前 0.4.1（build 12）已交付；真机与正式分发仍待验证
+## 当前 0.5.0（build 13）已交付；真机与正式分发仍待验证
 
-build 12 的原生／UI 测试、设备构建、9 项公开 Release 资产核验及本地 IPA 全量长度／
-SHA-256 校验已完成，入口见页首。此前失败与 build 11 交付记录仍是历史，
+build 13 的原生／UI 测试、设备构建、9 项公开 Release 资产核验、本地 IPA 全量长度／
+SHA-256 及额外 7-Zip 解压／CRC 校验已完成，入口见页首。此前失败与 build 12／11 交付记录仍是历史，
 不因本轮成功而改写；Release 交付不使用 Actions artifact 存储，也不证明旧配额恢复。
 
-**PENDING-DEVICE**：本轮用户侧签名／覆盖安装、物理 iPhone 上的用户模式、真实系统翻译、
+**PENDING-DEVICE**：build 13 用户侧签名／覆盖安装、物理 iPhone 上的用户模式、真实系统翻译、
 语言包同意／下载、断网质量与延迟，以及 20 槽稳定性、内存／发热、照片离线／GPS 覆盖和
-文件保护仍待验证。模拟器测试及四场景合成联系图不能替代真机证据；这些边界不是额外诊断任务。
+文件保护仍待验证。模拟器测试及本轮两联系图内的 12 张合成／未授权截图不能替代真机证据；
+原始 IPA 的 CRC 通过也不验证 Sideloadly 重打包。build 12 安装已获用户确认，短暂错误原因未知；这些边界不是额外诊断任务。
 
-现在可用已校验的 build 12 IPA，以原 Sideloadly 账号／有效 Bundle ID 覆盖安装。
-已有 build 11／10 当前策略有效索引无需迁移，不卸载、不清库、不重建图像／地点，
+现在可用已校验的 build 13 IPA，以原 Sideloadly 账号／有效 Bundle ID 覆盖安装。
+已有 build 10+ 当前策略有效索引无需迁移，不卸载、不 Clear index、不重建图像／地点，
 不必 Index / resume；语言包已就绪就沿用，正常搜索／看图，不要求指定查询、诊断或截图。
-调试仅在需要时从 **Settings 最底部 → Show debug tools** 打开，每次启动默认 **OFF**；
+调试仅在需要时从**设置最底部的调试工具开关**打开，每次启动默认 **OFF**；
 关闭后仍保留既有权重，临时诊断清理范围见 [docs/USER_MODE.md](docs/USER_MODE.md)。
-不要为本次用户模式更新执行历史迁移、整库诊断或清库测速。
+不要为本次 B 界面更新执行历史迁移、整库诊断或清库测速。
 **PENDING-LICENSE-REVIEW**：模型及地点数据再分发仍需人工审查；正式发布另需
 App 图标、正式 Bundle ID、签名和 TestFlight 配置。
 当前 `com.example.localimageiq` 仅为开发占位标识；未提交到任何商店。

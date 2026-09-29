@@ -1,6 +1,91 @@
 # Cloud build status — 2026-09-29
 
-## Current: 0.4.1 (12) — SUCCESS; public Release published, local IPA verified
+## Current: 0.5.0 (build 13) — COMPLETED / SUCCESS；公开发布、本地 IPA 与 CRC 校验完成
+
+[Run 36540269511](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36540269511)
+／[job 109313762175](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36540269511/job/109313762175)，
+源码 **`158c3bf661efcc688ecbe313a4f5c52a3271d803`**，最终 **COMPLETED / SUCCESS**。
+**PASS-NATIVE／PASS-PACKAGE／DELIVERED**；此前“run ID 未知／待验证／无新包”检查点已被取代。
+
+### 本轮验证账本：36540269511
+
+| 项目 | 本轮结果／边界 |
+| --- | --- |
+| Swift 核心 | 79 通过。 |
+| App XCTest | 377 项：376 通过、1 项既有真机文件保护模拟器跳过、0 失败；214.296 秒，wall 264.142 秒。 |
+| `IQStyleTests` | 6 全通过；0.040 秒。 |
+| `PresentationTests` | 17 全通过；3.178 秒。 |
+| `GeneratedModelParityTests` | 8 全通过；144.833 秒。真实 20 actor 工厂 120 次预测／252 项测量，原 23 次预测／58 项测量及门槛均保留。 |
+| 独立 UI | 10 全通过；545.341 秒。 |
+| `PresentationNavigationTests` | 5 全通过；300.442 秒。 |
+| `SearchKeyboardTests` | 5 全通过；244.899 秒，含新增键盘→底部图库→返回回归。 |
+| 设备构建／包 | BUILD SUCCEEDED；0.5.0 / 13、arm64 Release、未签名、iphoneos18.5 SDK、Xcode 16.4、最低 iOS 17.0。 |
+| 公开发布 | Release 398951411／ci-36540269511-1；2026-09-29T08:30:53Z，prerelease、draft: false、非 Latest；9 项资产已核验。 |
+| 本地 IPA | 完整流式下载，父流程已核验实际长度／SHA-256；`ipaVerifiedLocally: true`。 |
+| 额外归档检查 | 7-Zip 26.03 `t` 全量解压／CRC PASS，Exit 0，`Everything is Ok`；10 文件夹、24 文件，解压后 1,559,424,855 字节，压缩包 1,414,830,691 字节。 |
+
+App 子套件已计入 377 项，UI 子套件已计入 10 项，不重复相加；耗时不是手机性能。
+没有新增跳过、放宽数值／语义断言、测试等待时间或点击坐标。归档检查**不验证 Sideloadly
+重打包／签名后的 IPA，也不验证手机安装或实际运行**。
+
+### 本轮资产身份与本地证据
+
+- [公开 Release：ci-36540269511-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36540269511-1)
+  无需 GitHub 登录。IPA asset **597693809**，**1,414,830,691 字节**，SHA-256：
+  `d5ebe9881bc596f8c45b29cfdf5ed986b07e665e3a46fdf691dd09bb52a3db31`。
+- [../build/device-download/36540269511/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36540269511/LocalImageIQ-iphoneos-unsigned.ipa)
+  已实际全量下载并本地核验，不是只读取远端 digest／清单。配套文件齐全：
+  [../build/device-download/36540269511/device-build.json](../build/device-download/36540269511/device-build.json)、
+  [../build/device-download/36540269511/SHA256SUMS.txt](../build/device-download/36540269511/SHA256SUMS.txt)、
+  [../build/device-download/36540269511/delivery.json](../build/device-download/36540269511/delivery.json)、
+  [../build/device-download/36540269511/release-fetch-7f2fdc96-50b8-4abb-9559-23083e023708.json](../build/device-download/36540269511/release-fetch-7f2fdc96-50b8-4abb-9559-23083e023708.json)。
+- [../build/ui-review/36540269511/UIReview.zip](../build/ui-review/36540269511/UIReview.zip)
+  已下载并校验；asset **597693697**，**3,719,566 字节**，SHA-256：
+  `610189d2dabacda04fb910818f948e974d41b1973d9868d82dd4d2957bc70fe8`。
+
+### 本轮有限视觉审核：实际两张联系图，共 12 张原图
+
+父流程已实际查看以下两张联系图，所含原图均 **393×852**；不是只下载未查看。
+
+| 联系图 | 已查看场景 |
+| --- | --- |
+| [青绿原生八图](../build/ui-review/36540269511/teal-native-contact.jpg)，1120×1280 | 未授权首页、就绪首页、三图网格、未授权图库，各浅／深色两张；网格为合成绘图。 |
+| [用户模式四图](../build/ui-review/36540269511/user-mode-contact.jpg)，1340×758 | 深色设置底部调试 OFF（维护／隐私可见）、深色未授权图库（连接／iCloud 可见、索引禁用、无详情）、空查看器调试 OFF／ON（仅分享／三个入口，均禁用）。 |
+
+导航“完成”现为青绿，普通照片错误文案中文；实际根界面自适应系统外观。
+**本轮不声称查看了其他图片；合成／未授权场景不读取真实 Photos，不是真机或私人图库验证。**
+系统键盘／分享语言跟随 OS，调试原始值可能英文，不声称完全本地化。
+
+### 使用与剩余边界
+
+统一双列 **4:5**／紧凑三列，间距 **6／4**，仅移除视觉排名徽标，结果顺序不变。
+默认 **Top 3／地点权重 0.6**、20 worker、HQ224／Fast、模型、翻译、索引／缓存均不变；
+build 10+ 当前策略有效索引与就绪语言包直接沿用。原 Sideloadly 账号／有效 Bundle ID
+**覆盖安装，不卸载、不 Clear index、不重建图像／地点、不必 Index / resume**。
+
+**PENDING-DEVICE**：build 13 尚未在物理 iPhone 验证安装、界面／外观切换、真实 Photos、
+翻译及性能／文件保护。用户已确认 build 12 安装成功；此前短暂 `PackageExtractionFailed`
+原因未知，不归因于存储空间。**PENDING-LICENSE-REVIEW**：第三方人工再分发审查仍未完成。
+本次仅文档更新，不改源码、项目许可证、公开范围或计费；未跟踪的研究／原型含公共 Unsplash
+示意图，**仍仅本地私存、未暂存，不宣称整个仓库干净**。界面契约见 [TEAL_UI.md](TEAL_UI.md)。
+
+### 历史：B 首轮失败与第二轮最小修复
+
+- 源码 `a2e23979c1de3f211deec07e05aedabb07c3ad60`，
+  [Run 36537575789](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36537575789)
+  ／[job 109305061689](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36537575789/job/109305061689)，
+  **FAILED，仅 UI 失败**：核心 79 通过；App 377 项＝376 通过／1 项既有跳过／0 失败，
+  208.655 秒；UI 10 项＝9 通过／1 失败，495.366 秒。6 项颜色、网格、新键盘／页脚及 Advanced 回归通过。
+- 唯一失败为 `testOneGlobalDebug...` 首次点击 `open-library` 后未出现图库 sheet；
+  失败视频 6 帧仍在首页。首轮设备构建跳过，draft **398929880／ci-36537575789-1**
+  仅失败证据、无 IPA；不改写为成功。
+- 第二轮源码仅补 `ContentView` 整行 `contentShape(Rectangle())` 和两个 sheet 的
+  `NavigationStack` tint；**未改测试、等待时间或点击坐标**。本轮 UI 10/10 支持修复有效，
+  但不把修复成功当成旧命中区域／AX 的直接因果证明；旧 Advanced 空 AX 树也不证明 ID 继承。
+
+## 历史：0.4.1（build 12）— SUCCESS；公开 Release 与本地 IPA 已核验
+
+以下保留 build 12 交付记录；“本轮／新包／当前”等仅指当时 build 12。当前 build 13 状态以页首为准。
 
 **2026-09-29 首次完成 build 12 交付（不是首次构建尝试）**：
 [Run 36515068434](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36515068434)
@@ -64,7 +149,7 @@ App 子套件已计入 370 项，两个 UI 子套件已计入 9 项，不重复�
 **不声称其他图像已审核，也不声称已核实 ZIP 内截图总数**。这次有限视觉审核与 UI 9/9
 原生自动化是两种独立证据，不能互相替代或据此声称真机已验收。
 
-### 当前使用与仍未验证事项
+### 历史 build 12：当时使用与验证边界
 
 现在可用已校验的 build 12 IPA，以**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**。
 已有 build 11／10 当前策略有效索引和就绪语言包沿用；**不卸载、不 Clear index、不重建
@@ -72,7 +157,7 @@ App 子套件已计入 370 项，两个 UI 子套件已计入 9 项，不重复�
 **Settings 最底部 → Show debug tools**，仅会话有效、重启默认 OFF；正常翻译保留。
 20 worker、HQ224／Fast、模型、翻译引擎、索引策略及缓存身份均不变。
 
-**PENDING-DEVICE**：本轮签名／覆盖安装及真实手机用户模式、系统翻译／语言包同意、离线
+**PENDING-DEVICE**：用户已确认 build 12 安装成功；真实手机用户模式、系统翻译／语言包同意、离线
 质量／延迟、20 槽稳定性、内存／发热、Photos／GPS 覆盖和文件保护仍待验证。
 **PENDING-LICENSE-REVIEW**：模型／地点人工再分发审查未完成；公开发布不是法律认证。
 正式分发的图标、正式 Bundle ID、签名及 TestFlight／商店配置仍是独立事项。
@@ -168,8 +253,8 @@ App 子套件已计入 370 项，两个 UI 子套件已计入 9 项，不重复�
   Pillow MIT-CMU 源码头不改变项目整体授权。`redistributionApproved: false` 保留，
   人工再分发审查仍未完成。
 
-当前 **36515068434／job 109235419277** 已 **COMPLETED / SUCCESS**；全部门槛、设备构建、
-公开发布及新 IPA 全量长度／SHA-256 核验完成，build 12 **已交付**。
+当前 build 13 **36540269511／job 109313762175** 已 **COMPLETED / SUCCESS**；全部门槛、设备构建、
+公开发布、本地 IPA 全量长度／SHA-256 及额外解压／CRC 核验完成；详细身份以页首为准。
 旧运行 36403948150 的失败及失败证据 draft 保留，不追溯改写为成功发布。
 安装入口见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
 
