@@ -137,6 +137,9 @@ struct ContentView: View {
             .frame(minHeight: 44)
             .padding(.top, 10)
             .overlay(alignment: .top) { Rectangle().fill(IQStyle.line).frame(height: 1) }
+            // The compact row has no filled card background. Make its Spacer
+            // tappable too, rather than only the visible glyph/text fragments.
+            .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityIdentifier("open-library")
             .accessibilityValue(!state.canRead ? "authorization-required" : "library-accessible")
     }

@@ -42,6 +42,7 @@ struct SettingsSheet: View {
                 Text("只删除本机的搜索索引，不删除原照片。重新准备图库后即可搜索。")
             }
         }
+        .tint(IQStyle.accent)
         .onChange(of: state.debugToolsEnabled) { _, enabled in
             if !enabled {
                 advancedExpanded = false

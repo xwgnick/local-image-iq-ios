@@ -42,6 +42,7 @@ struct LibrarySheet: View {
                 }
             }
         }
+        .tint(IQStyle.accent)
         .onChange(of: state.debugToolsEnabled) { _, enabled in
             if !enabled {
                 detailsExpanded = false
