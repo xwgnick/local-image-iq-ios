@@ -8,9 +8,15 @@ struct LocalImageIQApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(state: state)
+            Group {
+                if state.launchPhase == .ready {
+                    ContentView(state: state)
+                } else {
+                    StartupView(state: state)
+                }
+            }
                 .tint(IQStyle.accent)
-                .task { state.refresh() }
+                .task { state.start() }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .background { state.enterBackground() }
                     else if phase == .active { state.enterForeground() }

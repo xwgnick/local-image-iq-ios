@@ -15,6 +15,7 @@ final class SearchKeyboardTests: XCTestCase {
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
         app.launch()
+        waitForPreparedHome(app)
     }
 
     override func tearDownWithError() throws {

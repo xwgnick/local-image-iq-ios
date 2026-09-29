@@ -1,6 +1,10 @@
 import Foundation
 import ImageIQCore
 
+enum LaunchStage: Sendable, Equatable {
+    case checkingLibrary, preparingSearch
+}
+
 struct IndexProgress: Sendable, Equatable {
     var total = 0
     var completed = 0
@@ -46,6 +50,7 @@ struct SearchResponse: Sendable {
 
 protocol PhotoWorkServicing: Sendable {
     func refresh() async throws -> LibrarySummary
+    func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse
     func checkPhoto(id: String, query: String, locationWeight: Float) async throws -> PhotoDiagnosticReport
@@ -53,6 +58,16 @@ protocol PhotoWorkServicing: Sendable {
 }
 
 extension PhotoWorkServicing {
+    /// Keep existing injected services compatible; only production warms models.
+    func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary {
+        try Task.checkCancellation()
+        await progress(.checkingLibrary)
+        try Task.checkCancellation()
+        let summary = try await refresh()
+        try Task.checkCancellation()
+        return summary
+    }
+
     func checkPhoto(id: String, query: String, locationWeight: Float) async throws -> PhotoDiagnosticReport {
         try Task.checkCancellation()
         throw AppFailure.photo("Photo diagnostics are unsupported by this service.")
@@ -104,20 +119,52 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     }
 
     func refresh() async throws -> LibrarySummary {
-        let snapshot = try await reconcile()
+        try await readiness(prepareModels: false)
+    }
+
+    func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary {
+        try await readiness(prepareModels: true, progress: progress)
+    }
+
+    private func readiness(prepareModels: Bool,
+                           progress: (@Sendable (LaunchStage) async -> Void)? = nil) async throws -> LibrarySummary {
+        try Task.checkCancellation()
+        if let progress {
+            await progress(.checkingLibrary)
+            try Task.checkCancellation()
+        }
+        var snapshot = try await reconcile()
+        try Task.checkCancellation()
         let resolver = boundaries()
         let manifest: ModelManifest
-        // Refresh is metadata readiness, not inference readiness. Do not load
-        // either Core ML model or the tokenizer simply to display the home page.
-        // Search/index still call prepare() and validate all vectors before use.
-        do { manifest = try await encoders.inspectResources() }
+        do {
+            try Task.checkCancellation()
+            if prepareModels {
+                if let progress { await progress(.preparingSearch) }
+                try Task.checkCancellation()
+                // Only the primary image/text models and tokenizer, not indexing
+                // slots, previews, predictions or translation resources.
+                manifest = try await encoders.prepare()
+            } else {
+                // Warm foreground refresh remains metadata-only; no model loads.
+                manifest = try await encoders.inspectResources()
+            }
+        }
         catch is CancellationError { throw CancellationError() }
         catch {
+            try Task.checkCancellation()
             return LibrarySummary(authorizedCount: snapshot.count, modelIssue: error.localizedDescription,
                                   placesDescription: resolver.coverageDescription)
         }
         try Task.checkCancellation()
+        // Loading may suspend for a long time. Re-enumerate authorization and
+        // revisions, pruning edits/deletions/revocations before reporting counts.
+        // A model failure above reports the initial snapshot, never readiness.
+        if prepareModels { snapshot = try await reconcile() }
+        try Task.checkCancellation()
         let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
+        // Display counts only: even a successful warmup does not validate cached
+        // vectors. Search/index still perform their full validation before use.
         let counts = try await storage().counts(modelVersion: cacheVersion, geographyVersion: resolver.version)
         try Task.checkCancellation()
         return LibrarySummary(authorizedCount: snapshot.count, indexedCount: counts.indexed,

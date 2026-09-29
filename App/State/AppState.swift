@@ -5,8 +5,13 @@ import ImageIQCore
 
 @MainActor
 final class AppState: ObservableObject {
-    enum Activity: Equatable { case refreshing, indexing, searching, clearing, checkingPhoto, preparingTranslation }
+    enum Activity: Equatable { case starting, refreshing, indexing, searching, clearing, checkingPhoto, preparingTranslation }
+    enum LaunchPhase: Equatable { case pending, checkingLibrary, preparingSearch, failed, ready }
     struct Selection: Identifiable { let id: String }
+
+    @Published private(set) var launchPhase: LaunchPhase = .pending
+    @Published private(set) var launchIssue: String?
+    private var launchWasRequested = false
 
     /// Session-only presentation preference: each app launch starts in user mode.
     /// Hiding tools must never reset search settings or cancel normal work.
@@ -107,6 +112,48 @@ final class AppState: ObservableObject {
         isForeground && canRead && modelsReady && summary.indexedCount > 0 && !isBusy && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Root-view task is idempotent. Only a cold launch (or explicitly retried
+    /// interrupted launch) uses the gate; ordinary foreground refresh stays light.
+    func start() {
+        guard launchPhase == .pending else { return }
+        launchWasRequested = true
+        guard isForeground else { return }
+        beginLaunch()
+    }
+
+    func retryLaunch() {
+        guard launchWasRequested, launchPhase == .failed, isForeground else { return }
+        beginLaunch()
+    }
+
+    func openHomeAfterLaunchFailure() {
+        guard launchPhase == .failed, !isBusy, isForeground else { return }
+        // Keep the real failure and existing readiness guards. This exposes
+        // permission/settings/recovery, not permission to use unvalidated data.
+        launchPhase = .ready
+    }
+
+    private func beginLaunch() {
+        launchWasRequested = true
+        launchIssue = nil
+        launchPhase = .checkingLibrary
+        authorization = authorizationStatus()
+        library.synchronizeObservation()
+        invalidateDisplayedPhotos()
+        schedule(.starting) { [weak self, worker] token in
+            let summary = try await worker.prepareForLaunch { [weak self] stage in
+                await self?.accept(launchStage: stage, token: token)
+            }
+            return .launched(summary)
+        }
+    }
+
+    private func accept(launchStage: LaunchStage, token: UUID) {
+        guard operationID == token, activity == .starting, isForeground,
+              launchPhase != .ready, launchPhase != .failed else { return }
+        launchPhase = launchStage == .checkingLibrary ? .checkingLibrary : .preparingSearch
+    }
+
     func authorize() {
         // Deliberately independent of model availability and index state.
         Task { @MainActor [weak self] in
@@ -120,6 +167,13 @@ final class AppState: ObservableObject {
         library.synchronizeObservation()
         invalidateDisplayedPhotos()
         guard isForeground else { operationTask?.cancel(); return }
+        if launchWasRequested, launchPhase != .ready {
+            // A Photos change during preparation invalidates that attempt. The
+            // same serialized chain drains it before restarting the launch check.
+            // Failed launches wait for an explicit retry, not an automatic loop.
+            if launchPhase != .failed { beginLaunch() }
+            return
+        }
         schedule(.refreshing) { [worker] _ in .summary(try await worker.refresh(), "Library refreshed. Unchanged completed records can be reused.") }
     }
 
@@ -132,6 +186,7 @@ final class AppState: ObservableObject {
     func enterBackground() {
         isForeground = false
         translationAvailabilityID = UUID()
+        if launchWasRequested, activity == .starting { launchPhase = .pending }
         operationTask?.cancel()
         invalidateDisplayedPhotos()
         thumbnails.clear()
@@ -143,6 +198,10 @@ final class AppState: ObservableObject {
         // without backgrounding. Do not cancel preparation on that transition.
         guard !isForeground else { return }
         isForeground = true
+        if launchWasRequested, launchPhase != .ready {
+            if launchPhase == .pending { beginLaunch() }
+            return
+        }
         refresh()
     }
 
@@ -310,6 +369,7 @@ final class AppState: ObservableObject {
     }
 
     private enum Outcome {
+        case launched(LibrarySummary)
         case summary(LibrarySummary, String)
         case search(SearchResponse, SearchQueryResolution)
         case photoCheck(PhotoDiagnosticReport, UUID)
@@ -334,6 +394,18 @@ final class AppState: ObservableObject {
                 try Task.checkCancellation()
                 guard let self, self.operationID == token else { return }
                 switch outcome {
+                case .launched(let summary):
+                    self.authorization = self.authorizationStatus()
+                    self.summary = summary
+                    if let issue = summary.modelIssue {
+                        self.errorMessage = issue
+                        self.launchIssue = "本机搜索暂未准备好。可以重试，或先进入应用检查设置。"
+                        self.launchPhase = .failed
+                    } else {
+                        self.launchIssue = nil
+                        self.launchPhase = .ready
+                    }
+                    self.status = summary.modelIssue == nil ? "Launch preparation complete." : "Launch preparation needs attention."
                 case .summary(let summary, let message): self.summary = summary; self.status = message
                 case .search(let response, let query):
                     self.summary = response.summary
@@ -357,7 +429,22 @@ final class AppState: ObservableObject {
             } catch {
                 guard let self, self.operationID == token else { return }
                 self.activity = nil
-                if activity == .preparingTranslation {
+                if activity == .starting {
+                    if !self.isForeground {
+                        self.launchPhase = .pending
+                        self.launchIssue = nil
+                    } else {
+                        self.launchPhase = .failed
+                        self.launchIssue = error is CancellationError || Task.isCancelled
+                            ? "准备已暂停。可以重试，或先进入应用。"
+                            : "启动准备未完成。可以重试，或先进入应用检查图库与设置。"
+                        if !(error is CancellationError), !Task.isCancelled {
+                            self.errorMessage = error.localizedDescription
+                            self.actionHint = "Check Photos access and retry from Library."
+                        }
+                    }
+                    self.status = "Launch preparation stopped. Your original photos are unchanged."
+                } else if activity == .preparingTranslation {
                     self.translationPreparationIssue = (error is CancellationError || Task.isCancelled)
                         ? "语言包准备已取消。原文搜索仍然可用。"
                         : "语言包准备未完成。请检查网络和设备空间后重试；原文搜索仍然可用。"
