@@ -1,6 +1,89 @@
 # Cloud build status — 2026-09-29
 
-## Current: 0.5.1 (build 14) — 首轮 SUCCESS；公开交付、本地 IPA 与 CRC 校验完成
+## Current: 0.5.2 (build 15) — 首轮 SUCCESS；冷启动准备页已交付，本地 IPA 与 CRC 校验完成
+
+[Run 36560321362](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36560321362)
+／[job 109379367704](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36560321362/job/109379367704)，
+源码 **`39aa72e7acf2cccb2b32788fb1537dde1f83191e`**，**首轮 COMPLETED / SUCCESS**。
+**PASS-NATIVE／PASS-PACKAGE／DELIVERED**；取代 build 15 的待运行／待下载检查点，不改写旧版历史。
+
+### build 15 验证账本
+
+| 项目 | 结果／边界 |
+| --- | --- |
+| Swift 核心 | 79 通过。 |
+| App XCTest | 427 项：426 通过、1 项既有真机文件保护模拟器跳过、0 失败；227.312 秒，wall 250.282 秒。 |
+| `LaunchStateTests` | 新增 14 全通过；0.095 秒。 |
+| `LaunchWorkerTests` | 新增 8 全通过；0.115 秒。 |
+| 启动展示测试 | 新增 7 全通过；0.481 秒。 |
+| `GeneratedModelParityTests` | 8 全通过；156.402 秒。真实 20 actor 工厂 120 次预测／252 项测量，原 23 次预测／58 项测量及门槛不变。 |
+| 独立 UI | 10 全通过；611.864 秒，实际等待冷启动门控。 |
+| `PresentationNavigationTests` | 5 全通过；349.749 秒。 |
+| `SearchKeyboardTests` | 5 全通过；262.115 秒。 |
+| 设备构建／包 | BUILD SUCCEEDED；0.5.2 / 15、arm64 Release、未签名、iphoneos18.5 SDK、Xcode 16.4、最低 iOS 17.0。 |
+| 公开发布 | Release 399087745／ci-36560321362-1；2026-09-29T11:40:49Z，draft: false、prerelease、非 Latest；9 项资产已核验。 |
+| 本地 IPA | 已完整流式下载并核验实际长度／SHA-256，`ipaVerifiedLocally: true`，不是只读远端声明。 |
+| 归档检查 | 7-Zip 26.03 `t` 全量解压／CRC PASS，Exit 0，Everything is Ok；10 文件夹、24 文件，解压后 1,559,639,751 字节。 |
+
+新增 **14＋8＋7＝29 项全部通过**，App 从 398 增至 427；子套件已计入总数，不重复相加。
+唯一跳过为既有真机文件保护限制。**本轮为模型必需运行，UI 实际等待准备页完成，没有绕过启动
+或遇错自动“先进入应用”以通过门槛**；model-free 配置的显式继续路径不是本轮绕过手段。
+测试耗时不是手机性能；归档检查不验证 Sideloadly 重打包／签名包或手机安装。
+
+### build 15 资产身份与本地证据
+
+- [公开 Release：ci-36560321362-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36560321362-1)，无需登录。
+  IPA asset **598069416**，**1,414,873,867 字节**，SHA-256：
+  `6a87f668f9c9cb78d9c29fb7688c605251e52b8268453113b200c32be530dfb6`。
+- [../build/device-download/36560321362/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36560321362/LocalImageIQ-iphoneos-unsigned.ipa)
+  已实际全量下载／本地核验；配套
+  [../build/device-download/36560321362/device-build.json](../build/device-download/36560321362/device-build.json)、
+  [../build/device-download/36560321362/SHA256SUMS.txt](../build/device-download/36560321362/SHA256SUMS.txt)、
+  [../build/device-download/36560321362/delivery.json](../build/device-download/36560321362/delivery.json)、
+  [../build/device-download/36560321362/release-fetch-575b5b11-b947-4b15-8804-4f579d3c9964.json](../build/device-download/36560321362/release-fetch-575b5b11-b947-4b15-8804-4f579d3c9964.json) 齐全。
+- [../build/ui-review/36560321362/UIReview.zip](../build/ui-review/36560321362/UIReview.zip)
+  已下载并校验；asset **598069245**，**3,932,506 字节**，SHA-256：
+  `f95be6fccdd9b9bf9221ee556a4a859d6612bf63f0c4eadcc271531f7a4e438c`。
+
+### build 15 有限视觉审核：仅四张启动页图
+
+父流程已**实际查看 [1340×758 启动联系图](../build/ui-review/36560321362/startup-contact.jpg)**，
+仅含以下四张原图，**各 393×852**：
+
+| 场景 | 证据范围 |
+| --- | --- |
+| 浅色加载 | 合成 `checkingLibrary`／检查图库阶段。 |
+| 深色加载 | 合成 `preparingSearch`／准备模型阶段。 |
+| 浅色错误 | 合成错误页及恢复入口渲染。 |
+| 深色错误 | 同一类错误页的深色渲染。 |
+
+四图均带**合成测试水印、不读取真实 Photos**；错误图不是本轮实际模型运行时报错的截图。
+错误按钮的证据为**状态契约测试＋合成渲染**，不是所有错误按钮均已在物理 iPhone 点击验证。
+不声称审核了其他图片；真实 UI 10/10 与上述有限渲染审核为不同证据，不互相替代。
+
+### build 15 启动契约、安装与剩余边界
+
+- App 根入口在首页前显示原生 SwiftUI 准备页，不是系统静态 Launch Screen 执行任务。
+  真实阶段为 `checkingLibrary`／`preparingSearch`，只有系统不定进度，**无假百分比、ETA、计时跳转**。
+- 冷启动保留授权快照／修订核对、失效记录清理与地点包准备，再加载主图像模型、文本模型及分词器；
+  **预热后再次核对授权／修订快照**。不加载额外 19 个索引模型、不建立索引、不算照片向量、
+  不读取 Photos 像素、不联网，也不准备翻译语言包。
+- 失败停在错误页，可重试或**带原错误明确继续**。准备未完成时进入后台取消，回前台先等旧任务
+  排空再重新准备，旧回调不能发布到新尝试；已就绪后暖前台只做 build 14 元数据 refresh，不再显示启动页。
+- **build 14 元数据／已知失败语义保留**：继续后资源检查可能重新显示就绪，并不证明先前运行时
+  失败已修复或向量健康；实际搜索仍完整准备和校验。完整向量读取、数值验证、查询翻译／编码仍在
+  真实搜索中执行；**不是全缓存预热、不承诺随后无等待或零延迟**，没有新增常驻全图库内存缓存。
+- 模型／缓存身份、20 worker、HQ224／Fast、排名与翻译策略不变。原 Sideloadly Apple 账号／
+  有效 Bundle ID **覆盖安装，不卸载、不 Clear index、不重建图像／地点、不必 Index / resume**；
+  build 10+ 当前策略有效索引与就绪语言包沿用。详见 [STARTUP_SCREEN.md](STARTUP_SCREEN.md)。
+
+**PENDING-DEVICE**：build 15 安装、真实图库、启动／首搜耗时与前后台体验尚未获真机验证。
+无付费设置、CI 控制、公开范围或项目许可证变更；第三方再分发审查仍待完成。
+未跟踪研究／原型仍仅本地保留、未暂存；本次收尾仅更新指定四份文档，不进行 Git／CI 或源码操作。
+
+## HISTORY／历史：0.5.1 (build 14) — 首轮 SUCCESS；公开交付、本地 IPA 与 CRC 校验完成
+
+以下保留 build 14 及更早版本当时的记录；其中“当前／本轮／待验证”仅指各历史阶段，当前 build 15 以页首为准。
 
 [Run 36553434443](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36553434443)
 ／[job 109356825463](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36553434443/job/109356825463)，
@@ -63,7 +146,7 @@ CI／计费、公开范围与项目许可证不变，第三方再分发审查仍
 
 ## 历史：0.5.0 (build 13) — COMPLETED / SUCCESS；公开发布、本地 IPA 与 CRC 校验完成
 
-以下保留 build 13 当时结果；“本轮／当前”等仅指该历史版本，当前 build 14 以页首为准。
+以下保留 build 13 当时结果；“本轮／当前”等仅指该历史版本，当前交付以页首为准。
 
 [Run 36540269511](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36540269511)
 ／[job 109313762175](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36540269511/job/109313762175)，
@@ -316,7 +399,7 @@ App 子套件已计入 370 项，两个 UI 子套件已计入 9 项，不重复�
   Pillow MIT-CMU 源码头不改变项目整体授权。`redistributionApproved: false` 保留，
   人工再分发审查仍未完成。
 
-当前 build 14 **36553434443／job 109356825463** 已 **COMPLETED / SUCCESS**；全部门槛、设备构建、
+当前 build 15 **36560321362／job 109379367704** 已 **首轮 COMPLETED / SUCCESS**；全部门槛、设备构建、
 公开发布、本地 IPA 全量长度／SHA-256 及额外解压／CRC 核验完成；详细身份以页首为准。
 旧运行 36403948150 的失败及失败证据 draft 保留，不追溯改写为成功发布。
 安装入口见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
