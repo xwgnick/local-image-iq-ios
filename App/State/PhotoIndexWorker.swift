@@ -107,13 +107,22 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         let snapshot = try await reconcile()
         let resolver = boundaries()
         let manifest: ModelManifest
-        do { manifest = try await encoders.prepare() }
+        // Refresh is metadata readiness, not inference readiness. Do not load
+        // either Core ML model or the tokenizer simply to display the home page.
+        // Search/index still call prepare() and validate all vectors before use.
+        do { manifest = try await encoders.inspectResources() }
         catch is CancellationError { throw CancellationError() }
         catch {
             return LibrarySummary(authorizedCount: snapshot.count, modelIssue: error.localizedDescription,
                                   placesDescription: resolver.coverageDescription)
         }
-        return try await summary(snapshot: snapshot, manifest: manifest, resolver: resolver)
+        try Task.checkCancellation()
+        let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
+        let counts = try await storage().counts(modelVersion: cacheVersion, geographyVersion: resolver.version)
+        try Task.checkCancellation()
+        return LibrarySummary(authorizedCount: snapshot.count, indexedCount: counts.indexed,
+                              locatedCount: counts.located, modelVersion: cacheVersion,
+                              placesDescription: resolver.coverageDescription)
     }
 
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary {

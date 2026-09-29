@@ -85,6 +85,29 @@ actor SQLitePhotoStore {
         }
     }
 
+    /// Display-only metadata counts, not vector validation. No embeddings are read.
+    /// Cancellation is checked around SQLite work; it cannot interrupt the aggregate's sqlite3_step.
+    func counts(modelVersion: String, geographyVersion: String) throws -> (indexed: Int, located: Int) {
+        try Task.checkCancellation()
+        let db = try database()
+        try Task.checkCancellation()
+        let result = try db.statement("""
+            SELECT COUNT(*), COALESCE(SUM(CASE WHEN p.place_text IS NOT NULL
+                AND p.geography_version = ? AND l.text IS NOT NULL THEN 1 ELSE 0 END), 0)
+            FROM photos p LEFT JOIN places l ON p.place_text = l.text AND p.model_version = l.model_version
+            WHERE p.model_version = ?
+            """) { statement -> (indexed: Int, located: Int) in
+            try db.bind(geographyVersion, at: 1, to: statement)
+            try db.bind(modelVersion, at: 2, to: statement)
+            try Task.checkCancellation()
+            guard try db.next(statement) else { throw AppFailure.storage("Missing cache counts.") }
+            try Task.checkCancellation()
+            return (Int(sqlite3_column_int64(statement, 0)), Int(sqlite3_column_int64(statement, 1)))
+        }
+        try Task.checkCancellation()
+        return result
+    }
+
     func place(text: String, modelVersion: String) throws -> [Float]? {
         let db = try database()
         return try db.statement("SELECT embedding FROM places WHERE text = ? AND model_version = ?") { statement in
@@ -155,9 +178,13 @@ actor SQLitePhotoStore {
                     try db.execute(statement)
                 }
             }
+            try Task.checkCancellation()
+            // Form the orphan key set once. A compound NOT IN can fall back to
+            // scanning its RHS on misses; EXCEPT also preserves BINARY key pairs.
             try db.exec("""
-                DELETE FROM places WHERE NOT EXISTS
-                (SELECT 1 FROM photos p WHERE p.place_text = places.text AND p.model_version = places.model_version)
+                DELETE FROM places WHERE (text, model_version) IN
+                (SELECT text, model_version FROM places
+                 EXCEPT SELECT place_text, model_version FROM photos WHERE place_text IS NOT NULL)
                 """)
             try Task.checkCancellation()
         }

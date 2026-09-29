@@ -129,6 +129,167 @@ final class SQLitePhotoStoreTests: XCTestCase {
         }
     }
 
+    func testCountsFilterModelAndGeographyAndCountSharedPlacesPerPhoto() async throws {
+        let (store, _) = try makeStore()
+        let empty = try await store.counts(modelVersion: "test-model", geographyVersion: "test-places")
+        XCTAssertEqual(empty.indexed, 0)
+        XCTAssertEqual(empty.located, 0)
+
+        let place = PlaceEmbedding(text: "Photo taken in Shared '照片' Place.", vector: TestFixtures.vector(axis: 2))
+        for id in ["a", "b"] { try await store.save(TestFixtures.photo(id: id, location: place)) }
+        let stale = TestFixtures.photo(id: "stale-geography", location: place)
+        try await store.save(CachedPhoto(photo: stale.photo, geographyVersion: "old-places"))
+        try await store.save(TestFixtures.photo(id: "no-place"))
+        try await store.save(TestFixtures.photo(id: "other-model", model: "other-model", location: place))
+
+        let current = try await store.counts(modelVersion: "test-model", geographyVersion: "test-places")
+        XCTAssertEqual(current.indexed, 4)
+        XCTAssertEqual(current.located, 2, "Shared places count once per photo, not once per label.")
+        let oldGeography = try await store.counts(modelVersion: "test-model", geographyVersion: "old-places")
+        XCTAssertEqual(oldGeography.indexed, 4)
+        XCTAssertEqual(oldGeography.located, 1)
+        let missingGeography = try await store.counts(modelVersion: "test-model", geographyVersion: "missing-places")
+        XCTAssertEqual(missingGeography.indexed, 4)
+        XCTAssertEqual(missingGeography.located, 0)
+        let otherModel = try await store.counts(modelVersion: "other-model", geographyVersion: "test-places")
+        XCTAssertEqual(otherModel.indexed, 1)
+        XCTAssertEqual(otherModel.located, 1)
+        let missingModel = try await store.counts(modelVersion: "missing-model", geographyVersion: "test-places")
+        XCTAssertEqual(missingModel.indexed, 0)
+        XCTAssertEqual(missingModel.located, 0)
+    }
+
+    func testCountsDoNotLocateDanglingOrWrongModelPlaceReferences() async throws {
+        let (store, directory) = try makeStore()
+        let shared = PlaceEmbedding(text: "Photo taken in Shared Place.", vector: TestFixtures.vector(axis: 1))
+        let missing = PlaceEmbedding(text: "Photo taken in Missing Place.", vector: TestFixtures.vector(axis: 2))
+        try await store.save(TestFixtures.photo(id: "wrong-model-reference", location: shared))
+        try await store.save(TestFixtures.photo(id: "missing-reference", location: missing))
+        try await store.save(TestFixtures.photo(id: "other-model", model: "other-model", location: shared))
+        await store.close()
+        do {
+            var handle: OpaquePointer?
+            let status = sqlite3_open_v2(directory.appendingPathComponent("index.sqlite3").path,
+                                         &handle, SQLITE_OPEN_READWRITE, nil)
+            defer { if let handle { sqlite3_close(handle) } }
+            XCTAssertEqual(status, SQLITE_OK)
+            let database = try XCTUnwrap(handle)
+            XCTAssertEqual(sqlite3_exec(database, "DELETE FROM places WHERE model_version = 'test-model'", nil, nil, nil), SQLITE_OK)
+        }
+
+        let counts = try await store.counts(modelVersion: "test-model", geographyVersion: "test-places")
+        XCTAssertEqual(counts.indexed, 2)
+        XCTAssertEqual(counts.located, 0, "A same-text place under another model does not repair a broken reference.")
+        let otherModel = try await store.counts(modelVersion: "other-model", geographyVersion: "test-places")
+        XCTAssertEqual(otherModel.indexed, 1)
+        XCTAssertEqual(otherModel.located, 1)
+    }
+
+    func testCountsAreMetadataOnlyWhileRecordsStillRejectInvalidEmbeddings() async throws {
+        let invalid = [Float](repeating: 0, count: 768)
+        for invalidImage in [true, false] {
+            let (store, directory) = try makeStore()
+            let place = PlaceEmbedding(text: "Photo taken in Invalid Vector Place.",
+                                       vector: invalidImage ? TestFixtures.vector() : invalid)
+            let photo = IndexedPhoto(id: "invalid", modificationTime: 123, modelVersion: "test-model",
+                                     imageEmbedding: invalidImage ? invalid : TestFixtures.vector(), location: place)
+            // Valid JSON with an invalid unit vector bypasses save's validation deliberately.
+            try TestFixtures.seedRawCache([CachedPhoto(photo: photo, geographyVersion: "test-places")], directory: directory)
+            let counts = try await store.counts(modelVersion: "test-model", geographyVersion: "test-places")
+            XCTAssertEqual(counts.indexed, 1)
+            XCTAssertEqual(counts.located, 1, "Metadata presence must not be mistaken for a validated place vector.")
+            do {
+                _ = try await store.records(modelVersion: "test-model")
+                XCTFail("Gallery reads must still reject invalid image and place vectors.")
+            } catch AppFailure.modelContract { }
+            catch { XCTFail("Unexpected gallery error: \(error)") }
+            let unchanged = try await store.counts(modelVersion: "test-model", geographyVersion: "test-places")
+            XCTAssertEqual(unchanged.indexed, 1)
+            XCTAssertEqual(unchanged.located, 1)
+        }
+    }
+
+    func testCancelledCountsLeavePhotosAndOrphanPlacesUnchanged() async throws {
+        let (store, _) = try makeStore()
+        let oldPlace = PlaceEmbedding(text: "Photo taken in Old Place.", vector: TestFixtures.vector(axis: 1))
+        let newPlace = PlaceEmbedding(text: "Photo taken in New Place.", vector: TestFixtures.vector(axis: 2))
+        try await store.save(TestFixtures.photo(location: oldPlace))
+        try await store.save(TestFixtures.photo(location: newPlace))
+        let before = try await store.counts(modelVersion: "test-model", geographyVersion: "test-places")
+        XCTAssertEqual(before.indexed, 1)
+        XCTAssertEqual(before.located, 1)
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await store.counts(modelVersion: "test-model", geographyVersion: "test-places")
+        }
+        do { _ = try await cancelled.value; XCTFail("Cancelled counts must throw.") }
+        catch { XCTAssertTrue(error is CancellationError) }
+
+        let after = try await store.counts(modelVersion: "test-model", geographyVersion: "test-places")
+        XCTAssertEqual(after.indexed, before.indexed)
+        XCTAssertEqual(after.located, before.located)
+        let records = try await store.records(modelVersion: "test-model")
+        XCTAssertEqual(records.map(\.photo.id), ["synthetic-asset"])
+        XCTAssertEqual(records.first?.photo.modificationTime, 123)
+        XCTAssertEqual(records.first?.photo.imageEmbedding, TestFixtures.vector())
+        XCTAssertEqual(records.first?.photo.location?.text, newPlace.text)
+        XCTAssertEqual(records.first?.photo.location?.vector, newPlace.vector)
+        XCTAssertEqual(records.first?.geographyVersion, "test-places")
+        let orphan = try await store.place(text: oldPlace.text, modelVersion: "test-model")
+        XCTAssertEqual(orphan, oldPlace.vector, "Neither successful nor cancelled counts may perform orphan cleanup.")
+    }
+
+    func testReconciliationRemovesOverwriteOrphansWithoutObsoletePhotos() async throws {
+        let oldPlace = PlaceEmbedding(text: "Photo taken in Old Place.", vector: TestFixtures.vector(axis: 1))
+        let newPlace = PlaceEmbedding(text: "Photo taken in New Place.", vector: TestFixtures.vector(axis: 2))
+        for (model, place) in [("test-model", newPlace), ("other-model", oldPlace), ("other-model", newPlace)] {
+            let (store, _) = try makeStore()
+            try await store.save(TestFixtures.photo(id: "kept", location: oldPlace))
+            try await store.save(TestFixtures.photo(id: "kept", model: model, location: place))
+            let orphanBefore = try await store.place(text: oldPlace.text, modelVersion: "test-model")
+            XCTAssertEqual(orphanBefore, oldPlace.vector, "Overwriting a retained photo can leave a place orphan.")
+
+            try await store.reconcile(completeEnumeration: [PhotoRevision(id: "kept", modificationTime: 123)])
+            let records = try await store.records(modelVersion: model)
+            XCTAssertEqual(records.map(\.photo.id), ["kept"])
+            XCTAssertEqual(records.first?.photo.modificationTime, 123)
+            XCTAssertEqual(records.first?.photo.location?.text, place.text)
+            let orphanAfter = try await store.place(text: oldPlace.text, modelVersion: "test-model")
+            let referenced = try await store.place(text: place.text, modelVersion: model)
+            XCTAssertNil(orphanAfter, "Cleanup must run even when no photo is obsolete.")
+            XCTAssertEqual(referenced, place.vector)
+        }
+    }
+
+    func testReconciliationMatchesExactModelTextPairsIncludingBinaryUnicode() async throws {
+        let (store, _) = try makeStore()
+        let text = "Caf\u{00E9}-照片's Place"
+        let rows: [(id: String, model: String, text: String?, keep: Bool)] = [
+            ("kept-place", "test-model", text, true),
+            ("removed-same-text", "other-model", text, false),
+            ("kept-other-model", "other-model", "Different Place", true),
+            ("removed-decomposed", "test-model", "Cafe\u{0301}-照片's Place", false),
+            ("removed-case-variant", "test-model", "CAF\u{00C9}-照片's Place", false),
+            ("kept-without-place", "test-model", nil, true)
+        ]
+        for row in rows {
+            let place = row.text.map { PlaceEmbedding(text: $0, vector: TestFixtures.vector(axis: 2)) }
+            try await store.save(TestFixtures.photo(id: row.id, model: row.model, location: place))
+        }
+        let retained = rows.filter { $0.keep }.map { PhotoRevision(id: $0.id, modificationTime: 123) }
+        try await store.reconcile(completeEnumeration: retained)
+
+        for row in rows {
+            let cached = try await store.record(id: row.id)
+            XCTAssertEqual(cached != nil, row.keep, row.id)
+            if let text = row.text {
+                let vector = try await store.place(text: text, modelVersion: row.model)
+                if row.keep { XCTAssertEqual(vector, TestFixtures.vector(axis: 2), row.id) }
+                else { XCTAssertNil(vector, "Only the exact binary (text, model) pair may retain \(row.id).") }
+            }
+        }
+    }
+
     func testCompleteAuthorizationReconciliationPrunesMissingAndModifiedAssets() async throws {
         let (store, _) = try makeStore()
         for id in ["kept", "revoked", "edited"] { try await store.save(TestFixtures.photo(id: id)) }

@@ -8,6 +8,7 @@ protocol PhotoImageEncoding: Sendable {
 }
 
 protocol PhotoEncoding: PhotoImageEncoding {
+    func inspectResources() async throws -> ModelManifest
     func prepare() async throws -> ModelManifest
     func image(data: Data, orientation: CGImagePropertyOrientation) async throws -> [Float]
     func text(_ text: String) async throws -> [Float]
@@ -15,6 +16,9 @@ protocol PhotoEncoding: PhotoImageEncoding {
 }
 
 extension PhotoEncoding {
+    /// Compatibility for injected mocks; production inspects metadata without loading models.
+    func inspectResources() async throws -> ModelManifest { try await prepare() }
+
     /// Compatibility for injected mocks; production encoders must supply independent actors.
     func makeIndexingImageEncoders() async throws -> [any PhotoImageEncoding] {
         try Task.checkCancellation()
@@ -28,6 +32,13 @@ actor CoreMLEncoders: PhotoEncoding {
     private var loaded: Loaded?
     private var loadingTask: Task<Void, Error>?
 
+    private struct ModelResources {
+        let manifest: ModelManifest
+        let imageURL: URL
+        let textURL: URL
+        let tokenizerDirectory: URL
+    }
+
     private struct Loaded {
         let manifest: ModelManifest
         let imageURL: URL
@@ -37,6 +48,9 @@ actor CoreMLEncoders: PhotoEncoding {
     }
 
     init(bundle: Bundle = .main) { self.bundle = bundle }
+
+    /// Reads only the manifest and checks resource URLs, never runtime model/tokenizer payloads.
+    func inspectResources() async throws -> ModelManifest { try modelResources().manifest }
 
     func prepare() async throws -> ModelManifest { try await load().manifest }
 
@@ -135,9 +149,8 @@ actor CoreMLEncoders: PhotoEncoding {
         return loaded
     }
 
-    private func loadBundledModels() async throws {
-        // Only the initializer clears its task. Waiters must not clear a newer retry.
-        defer { loadingTask = nil }
+    private func modelResources() throws -> ModelResources {
+        try Task.checkCancellation()
         guard let manifestURL = BundleResources.url("model-manifest", extension: "json", bundle: bundle),
               let imageURL = BundleResources.url("ImageEncoder", extension: "mlmodelc", bundle: bundle),
               let textURL = BundleResources.url("TextEncoder", extension: "mlmodelc", bundle: bundle),
@@ -152,15 +165,33 @@ actor CoreMLEncoders: PhotoEncoding {
         do {
             let manifest = try JSONDecoder().decode(ModelManifest.self, from: Data(contentsOf: manifestURL))
             try manifest.validate()
-            let tokenizer = try await SigLIPTokenizer.load(directory: tokenizerDirectory)
-            let image = CoreMLImageEncoder(modelURL: imageURL, manifest: manifest)
+            try Task.checkCancellation()
+            return ModelResources(manifest: manifest, imageURL: imageURL, textURL: textURL,
+                                  tokenizerDirectory: tokenizerDirectory)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as AppFailure {
+            throw error
+        } catch {
+            throw AppFailure.modelContract(error.localizedDescription)
+        }
+    }
+
+    private func loadBundledModels() async throws {
+        // Only the initializer clears its task. Waiters must not clear a newer retry.
+        defer { loadingTask = nil }
+        do {
+            let resources = try modelResources()
+            let manifest = resources.manifest
+            let tokenizer = try await SigLIPTokenizer.load(directory: resources.tokenizerDirectory)
+            let image = CoreMLImageEncoder(modelURL: resources.imageURL, manifest: manifest)
             try await image.prepare()
             let configuration = MLModelConfiguration()
             configuration.computeUnits = .all
-            let text = try MLModel(contentsOf: textURL, configuration: configuration)
+            let text = try MLModel(contentsOf: resources.textURL, configuration: configuration)
             try Self.validate(model: text, inputs: ["input_ids": ([1, 64], .int32)])
             try Task.checkCancellation()
-            loaded = Loaded(manifest: manifest, imageURL: imageURL, image: image,
+            loaded = Loaded(manifest: manifest, imageURL: resources.imageURL, image: image,
                             text: text, tokenizer: tokenizer)
         } catch is CancellationError {
             throw CancellationError()
