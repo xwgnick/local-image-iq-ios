@@ -1,6 +1,86 @@
-# Cloud build status — 2026-09-28
+# Cloud build status — 2026-09-29
 
-## Current: 0.4.1 (12), CI 36403948150 native build/tests IN PROGRESS; no confirmed new IPA
+## Current: 0.4.1 (12) — SUCCESS; public Release published, local IPA verified
+
+**2026-09-29 首次完成 build 12 交付（不是首次构建尝试）**：
+[Run 36515068434](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36515068434)
+／[job 109235419277](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36515068434/job/109235419277)，
+源码 **`fac5e2d39d37730ccf45e2f8e0231124247d4cf8`**，已 **COMPLETED / SUCCESS**。
+原生、设备编译／包验证、公开发布、本地 IPA 全量长度／SHA-256 核验均已完成：
+**PASS-NATIVE／PASS-PACKAGE／DELIVERED**。此前的进行中检查点已由此最终结果取代。
+
+### 本轮验证账本：36515068434
+
+| 项目 | 本轮已核验结果／边界 |
+| --- | --- |
+| Swift 核心 | 79 通过。 |
+| App XCTest | 370 项：369 通过、1 项既有真机文件保护测试在模拟器跳过、0 失败；测试 258.961 秒，wall 288.923 秒。 |
+| `GeneratedModelParityTests` | 8 通过；170.094 秒。20 槽工厂 120 次预测／252 项测量与原 23／58 门槛保留，未放宽。 |
+| `DebugToolsPresentationTests` | 7 通过；25.179 秒。原生布局／渲染检查，不冒充进程内 AX 语义证明。 |
+| `DebugToolsStateTests` | 14 通过；1.055 秒。 |
+| 独立 UI | 9 项全部通过；522.447 秒。 |
+| `PresentationNavigationTests` | 5 通过；354.440 秒，包含此前失败的 `testClearQueryKeepsKeyboardAndSettingsAdvancedStartsCollapsed`。 |
+| `SearchKeyboardTests` | 4 通过；168.007 秒。 |
+| Advanced 回归 | 两次展开均在任何滚动前验证唯一 `location-weight`、无 `debug-advanced` ID 的 Slider、可点击且为 60%；收起、关闭调试、查询与 Top 12 保持不变的断言均通过。 |
+| 设备构建／包 | BUILD SUCCEEDED；0.4.1 / 12、arm64 Release、iphoneos18.5 SDK、Xcode 16.4、最低 iOS 17.0、未签名；不是物理 iPhone 执行。 |
+| 公开发布 | Release 398799791／ci-36515068434-1，2026-09-29T03:27:14Z；prerelease、draft: false、非 Latest，9 项资产已核验。 |
+| 本地 IPA | 已完整流式下载，并由父流程直接核验实际长度／SHA-256；`ipaVerifiedLocally: true`，不是远端元数据代替本地验证。 |
+
+App 子套件已计入 370 项，两个 UI 子套件已计入 9 项，不重复相加；这些耗时不是手机性能。
+既有本地 Node 22 发布器 **94 项及源码检查 PASS** 是独立记录，不代替上述本轮原生结果。
+没有削弱调试功能、语义断言或数值门槛，没有新增跳过测试或生产限制。
+
+### 本轮公开资产与本地交付证据
+
+- [公开 Release：ci-36515068434-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36515068434-1)
+  **无需 GitHub 登录**，已核验 **9 项资产**。历史 build 11 Release 398009938 不是本轮新包，
+  先前失败 drafts 也不是安装入口。
+- [../build/device-download/36515068434/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36515068434/LocalImageIQ-iphoneos-unsigned.ipa)：
+  IPA asset **597136564**，精确 **1,414,818,257 字节**，SHA-256：
+  `840085413cee964c7de03fa4453f89db9691ec74f8165064e3d07e432ccec03c`。
+  **全量下载和本地实际字节／哈希核验已完成**，不是待下载或只完成远端验证。
+- 同目录已取得 [../build/device-download/36515068434/device-build.json](../build/device-download/36515068434/device-build.json)、
+  [../build/device-download/36515068434/SHA256SUMS.txt](../build/device-download/36515068434/SHA256SUMS.txt)、
+  [../build/device-download/36515068434/delivery.json](../build/device-download/36515068434/delivery.json) 及
+  [../build/device-download/36515068434/release-fetch-9caa6072-3f04-4462-87e7-637fe1965817.json](../build/device-download/36515068434/release-fetch-9caa6072-3f04-4462-87e7-637fe1965817.json)，
+  下载记录为 **`ipaVerifiedLocally: true`**。
+- [../build/ui-review/36515068434/UIReview.zip](../build/ui-review/36515068434/UIReview.zip)
+  已下载并校验；asset **597136471**，精确 **3,339,409 字节**，SHA-256：
+  `9fb0be72629cb43efba8716a22411ca24fdb7bfb291d89e98a9e6e19eb9e43f3`。
+
+### 本轮有限视觉审核：仅四张用户模式图
+
+父流程已实际查看[本轮用户模式联系图](../build/ui-review/36515068434/user-mode-contact.jpg)
+（**1340×758**），包含以下精确四场景，原图**各 393×852**：
+
+| 场景 | 实际可见范围 |
+| --- | --- |
+| Settings 底部 | Show debug tools 为 OFF；Maintenance 与隐私说明仍可见。 |
+| Library 未授权 | 连接 Photos 入口及 iCloud 控件可见；索引按钮禁用，无 Details。 |
+| 空查看器、调试 OFF | 仅分享入口可见，且禁用。 |
+| 空查看器、调试 ON | 分享、Photo Check、本地预览对比均可见，且禁用。 |
+
+均为**合成空状态／未授权、不读取 Photos**的场景，不是私人图库或物理手机证据。
+**不声称其他图像已审核，也不声称已核实 ZIP 内截图总数**。这次有限视觉审核与 UI 9/9
+原生自动化是两种独立证据，不能互相替代或据此声称真机已验收。
+
+### 当前使用与仍未验证事项
+
+现在可用已校验的 build 12 IPA，以**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**。
+已有 build 11／10 当前策略有效索引和就绪语言包沿用；**不卸载、不 Clear index、不重建
+图像／地点，也不必 Index / resume**，无需指定查询、诊断或截图。调试入口在
+**Settings 最底部 → Show debug tools**，仅会话有效、重启默认 OFF；正常翻译保留。
+20 worker、HQ224／Fast、模型、翻译引擎、索引策略及缓存身份均不变。
+
+**PENDING-DEVICE**：本轮签名／覆盖安装及真实手机用户模式、系统翻译／语言包同意、离线
+质量／延迟、20 槽稳定性、内存／发热、Photos／GPS 覆盖和文件保护仍待验证。
+**PENDING-LICENSE-REVIEW**：模型／地点人工再分发审查未完成；公开发布不是法律认证。
+正式分发的图标、正式 Bundle ID、签名及 TestFlight／商店配置仍是独立事项。
+
+## 历史：转公开与交付前的公开运行（2026-09-28～29）
+
+下表与调查记录保留此前实际失败，不将旧结果改写为本轮成功。曾经的进行中／无新包
+检查点已失效，**当前交付状态以页首为准**。
 
 用户明确批准**公开仓库＋免费标准 runner**，并再次确认历史作者邮箱／机器路径／测试
 查询、Actions 日志及已发布 Releases 可公开。同一
@@ -8,47 +88,68 @@
 已由 GitHub API 与匿名 GET 确认为 **PUBLIC／`private: false`**；不是仅修改文档的计划。
 完整控制、费用与许可边界见 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md)。
 
-| 项目 | 当前证据／待办 |
+| 项目 | 历史证据／当时边界 |
 | --- | --- |
 | 公开范围 | 同一独立 iOS 仓库及既有历史、历史 Actions 日志、已发布 Releases；未重写历史、删除内容或改变企业 origin。 |
 | 有限历史检查 | 277 个文本 blob，共 4,653,437 字节，最大 101,959 字节；检查范围内无 NUL 二进制、图像／数据库／模型 blob，未命中 .env、私钥、令牌、带凭据 URL 相关模式。有限模式扫描不是无秘密保证；已知邮箱、路径、查询已获准公开。本机 .git helper 未发布。 |
-| 可下载的旧包 | Release 398009938／ci-36387878343-1 为已交付 0.4.0 / build 11，现公开可访问、无需 GitHub 登录；不是 build 12。原身份、大小和哈希不变。 |
+| 当时可下载的旧包 | Release 398009938／ci-36387878343-1 为已交付 0.4.0 / build 11，转公开后无需 GitHub 登录；不是 build 12。原身份、大小和哈希不变。 |
 | 旧失败证据 | Draft 398051690／398066345 保持原状；仓库公开不自动发布草稿，不作为安装入口。 |
 | 工程与不变项 | 仍为 0.4.1 / 12；引擎、模型、20 worker、HQ224／Fast、翻译、索引／缓存身份不因公开转换改变。 |
 | 首轮公开运行源码（历史） | f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5；下述首轮结果不转记为新运行通过。 |
 | 首轮公开手动运行 | [Run 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)／[job 108858329166](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391/job/108858329166)：COMPLETED / FAILURE，仅 1 项原生 UI 测试失败。公开路线计费启动阻塞已解除，原生 App／UI 确实执行。 |
 | 首轮公开 App XCTest（历史） | 370 项：369 通过、1 项真机文件保护在模拟器跳过、0 失败；217.028 秒。 |
 | 首轮公开调试子套件（历史） | `DebugToolsStateTests` 14 项、`DebugToolsPresentationTests` 7 项全部 PASS，已计入 App 总数；不补写未提供的子套件耗时。 |
-| 首轮公开独立 UI（历史） | 9 项：8 通过、1 失败；514.171 秒。其他 8 项包括全局开关／重启测试均 PASS，开关本体点击修复已验证；唯一失败在第一次 Advanced 点击后滑块不可达，详见下方 trace。 |
-| 新的仅测试源码 | cfd2943cbec28bf02c1fe2597921cb12ffdec317 已推送 personal；App 代码与上述首轮公开源码相同，仅 UI 测试三次 Advanced 展开／收起改点显式 ID 的尾部箭头，第二次展开前重取 header，全部断言保留。 |
-| 当前手动运行 | [Run 36403948150](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36403948150)／[job 108868075667](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36403948150/job/108868075667)：原生构建／测试 IN PROGRESS，结果待验证。第三次实际 UI 测试修复迭代；若再失败，停止并讨论，不无限修补／重跑。 |
-| 当前预期发布 | tag ci-36403948150-1 尚未发布，不是下载入口；工作流仅在全部门槛通过后自动发布。尚无已确认的 0.4.1 IPA 或新包下载。 |
-| 本地发布器测试 | 指定 Node 22 的既有实测 94 项全部 PASS；此次仅测试补丁未改发布器，结果记录不变，不冒充重新执行。 |
-| 其他本地检查 | Node／源码／工程／打包检查 PASS；本地结果不代替原生测试或设备构建。 |
-| 失败证据 Release | 发布步骤 SUCCESS；Release 398104580／tag ci-36400923391-1 已存在，DRAFT、6 项证据资产、无 IPA。预期 tag、清单、正文 run／target 与实际元数据一致，`draft: true`；不是普通成功发布。 |
-| 设备与交付 | 首轮公开原生编译通过且 App／UI 实际执行，但不等于 iPhoneOS 编译通过；设备构建因 UI 门槛失败 SKIPPED。无 0.4.1 IPA；旧 0.4.0 仍是可下载交付物。 |
+| 首轮公开独立 UI（历史） | 9 项：8 通过、1 失败；514.171 秒。其他 8 项包括全局开关／重启均 PASS，开关本体点击修复已验证；唯一失败是第一次 Advanced 点击后的滑块查找，不证明未展开。 |
+| 第二次公开运行（历史） | cfd2943cbec28bf02c1fe2597921cb12ffdec317；[Run 36403948150](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36403948150)／[job 108868075667](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36403948150/job/108868075667)：COMPLETED / FAILURE，仅 1 项 UI 滑块查找失败。 |
+| 36403948150 核心／App（历史） | 核心 79 通过；App 370 项：369 通过、1 项真机文件保护模拟器跳过、0 失败；226.129 秒。 |
+| 36403948150 App 子套件（历史） | `GeneratedModelParityTests` 8 通过／156.965 秒；`DebugToolsPresentationTests` 7 通过／18.836 秒；`DebugToolsStateTests` 14 通过／0.598 秒。均已计入 App 总数。 |
+| 36403948150 独立 UI（历史） | 9 项：8 通过、1 失败；509.597 秒。仍为 `testClearQueryKeepsKeyboardAndSettingsAdvancedStartsCollapsed` 的 `location-weight` 查找失败。 |
+| 第二次公开失败证据 | Release 398126220／tag ci-36403948150-1，DRAFT、6 项证据资产、无 IPA；不是成功发布或安装入口。 |
+| 后续修复／当时检查点 | fac5e2d39d37730ccf45e2f8e0231124247d4cf8 的 Advanced 标签 ID 作用域修正＋语义点击曾在 36515068434 中等待验证；该进行中检查点已由页首 SUCCESS／实际 App 370 与 UI 9/9／已交付结果取代。 |
+| 首轮公开失败证据（历史） | 发布步骤 SUCCESS；Release 398104580／tag ci-36400923391-1，DRAFT、6 项证据资产、无 IPA。预期 tag、清单、正文 run／target 与实际元数据一致。 |
+| 当时设备与交付 | 36403948150 的设备构建因 UI 门槛失败 SKIPPED，当时无 0.4.1 IPA；旧 0.4.0 是当时可下载的交付物，不是现在唯一安装包。 |
 
-### 首轮公开运行的实际失败 trace 与第三次测试修复
+### 历史假设与更正：查找失败不等于 Advanced 没展开
 
-唯一失败：`testClearQueryKeepsKeyboardAndSettingsAdvancedStartsCollapsed`，trace 报告
-[滑块可达性断言](../UITests/PresentationNavigationTests.swift#L95)失败。
+首轮公开 trace：**09:20:21** 开关本体归一化 **(0.9, 0.5)** 点击后值为 **1**；
+**09:20:25 第一次**点击 `debug-advanced` 整行中心后，滑块 ID 查询失败，随后
+**8 次上滑**仍失败。此前“第二次展开失败”的说法已更正为第一次点击后的查找失败。
 
-- **09:20:21**：开关本体 `tap` 使用归一化 **(0.9, 0.5)**，随后值为 **1**。
-- **09:20:25**：**第一次** `debug-advanced` 点击命中整行中心；滑块始终未暴露，
-  随后 **8 次向下滚动**仍不可达。**更正此前口头说明：不是第二次展开失败**。
-- 新源码 `cfd2943cbec28bf02c1fe2597921cb12ffdec317` 仅改测试：全部 **3 次展开／收起**
-  均用显式 ID `debug-advanced` 和尾部箭头归一化 **(0.95, 0.5)** 点击，
-  **第二次展开前重新获取 header**。全部断言保留，未新增跳过、未降低任何门槛；
-  App／发布器没有随此补丁改变。修复效果须由已触发的新运行验证，失败则停止讨论。
+历史提交 `cfd2943cbec28bf02c1fe2597921cb12ffdec317` 仅改测试：三次展开／收起均
+点击尾部 **(0.95, 0.5)**，第二次展开前重取 header、保留全部断言；但旧运行 36403948150
+仍失败。三次猜测失败后已停止，**用户于 2026-09-29 重新批准根因调查**，不是无限盲改。
 
 首轮公开失败证据的 UI ZIP asset **595016915**，精确 **27,650,839 字节**，SHA-256：
 `37a68bcc6b15da775230ce198525131a4d7e07aedf6115637d2e3f94b88c908b`。
 已下载并校验至 [../build/ui-review/36400923391/UIReview.zip](../build/ui-review/36400923391/UIReview.zip)。
-**仅查看清单与测试 trace，没有查看本轮图片，没有新的视觉审核结论**；下方第二轮私有
-运行的四张已审图仅是旧参考，不能当作本次公开运行或新补丁的视觉验证。
-测试耗时不是手机性能；App 子套件不重复相加。
+当时仅凭 trace 推断“未展开／箭头没点中”没有视觉依据；**以下最近失败视频已推翻该假设**。
 
-### 当前构建与发布控制
+### 历史直接视频证据、AX 边界与现已通过验证的最小修复
+
+- 从旧运行 36403948150 的 UI ZIP **仅提取精确失败测试的视频**；父流程先看
+  [视频总览联系图](../build/ui-review/36403948150/advanced-video-contact.jpg)，再看
+  [110–113 秒六帧联系图](../build/ui-review/36403948150/advanced-tap-contact.jpg)。
+  **111.5 秒 Advanced 确实已展开，60% 滑块可见**。此时测试的
+  `app.sliders["location-weight"].exists` 却为 **false**，立即盲目上滑将滑块移出视口。
+  这是该失败测试的直接视觉证据，不是真机、私人照片或新修复通过证明。
+- 三个小 AX bplist 仅解出 `UIApplication`、`children=[]`，**没有足够滑块 ID 信息**；
+  不能用空 children 证明无滑块，也不能证明 ID 被覆盖。
+- 机制假设：`debug-advanced` 原先设在包裹 Slider 的**整个 `DisclosureGroup`** 上，
+  可能发生 SwiftUI 无障碍 ID 继承。新提交只将标识移到 **`Text("Advanced")` 标签**；
+  不改可见 UI 内容、排序或权重逻辑。父级 ID 传播是有力的机制假设，**旧空 AX 树没有
+  直接证明继承**；修复通过不能追溯地把空树当作根因实测证据。
+- 测试用语义 **`button.tap()`** 代替 Advanced 坐标猜测；**两次展开均在任何滚动前**
+  等待滑块存在，并要求 `location-weight` 恰好一个、无 `debug-advanced` ID 的 Slider、
+  可点击且值为 **60%**。失败附真实 `app.debugDescription`、全部滑块
+  ID／label／value／frame 及截图；强化断言，不新增跳过、不放宽门槛、不加任意生产限制。
+- 两文件提交 **`fac5e2d39d37730ccf45e2f8e0231124247d4cf8`** 已推送 `personal`，
+  对应 **36515068434／job 109235419277** 最终 **COMPLETED / SUCCESS**。
+  **标签作用域修正＋语义点击已通过本轮原生 UI 9/9 验证**；两次展开的强化断言、
+  收起、关闭调试、查询和 Top 12 保持不变的检查均通过。完整本轮计数与耗时见页首。
+
+测试耗时不是手机性能；App 子套件不重复相加。本页只链接小联系图，不链接大视频或私人照片。
+
+## 当前构建与发布控制
 
 - 只允许 `workflow_dispatch`，精确仓库名且 `private == false`，使用标准 `macos-15`；
   无付费 larger runner、self-hosted runner、自动 push／PR 或 fork 特权触发。
@@ -67,10 +168,9 @@
   Pillow MIT-CMU 源码头不改变项目整体授权。`redistributionApproved: false` 保留，
   人工再分发审查仍未完成。
 
-新运行 36403948150 的原生构建／测试正在进行，实际结果待验证；**若测试再失败，停止并讨论，不追加无限
-修复／重跑**。只有全部门槛、设备构建、公开发布及新 IPA 全量长度／SHA-256 核验通过，
-才报告 build 12 交付；已保存的失败证据 draft 不满足交付条件。
-本次仅依据提供事实编辑指定六份文档，不执行命令、Git、CI 查询／触发、Python、测试、下载或可见性操作。
+当前 **36515068434／job 109235419277** 已 **COMPLETED / SUCCESS**；全部门槛、设备构建、
+公开发布及新 IPA 全量长度／SHA-256 核验完成，build 12 **已交付**。
+旧运行 36403948150 的失败及失败证据 draft 保留，不追溯改写为成功发布。
 安装入口见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
 
 ## Historical checkpoint (2026-09-28, before public transition): 0.4.1 (12) — billing startup failure; NO IPA
@@ -139,7 +239,7 @@
 
 父流程已下载并校验既有首轮失败 UI ZIP：asset **594867187**，**28,595,052 字节**，
 SHA-256：`6e38218ebb4d0d59eddcb4668c319f8337a5b027aacce99b7beabbf826e10082`。
-**仅读取两份 debugDescription 文本，没有查看图片**；本次文档编辑不重复下载或读取该包。
+**当时仅读取两份 debugDescription 文本，没有查看图片**。
 
 - AX 中 `show-debug-tools` 对应**整行**：x **20**、y **730.3**、宽 **362**、高 **44**。
 - 右侧实际开关本体是另一个元素：x **313**、y **737**、宽 **51**、高 **31**。
@@ -151,8 +251,7 @@ SHA-256：`6e38218ebb4d0d59eddcb4668c319f8337a5b027aacce99b7beabbf826e10082`。
 当前 HEAD 已提交／推送**一处 UI 测试点击修复**：在已识别整行内点击归一化坐标
 **(0.9, 0.5)**，该位置命中右侧开关本体。原有滚动／重新获取元素／等待值的处理仍保留，
 无需撤回；但它本身不能修复点中标签的问题。**第二轮不含新点击修复，仍有相同的两项
-UI 失败；第三轮已因账号计费阻塞在启动前失败，新修复尚未执行验证**。这里只记录已有改动，
-本次不修改测试或 App。
+UI 失败；第三轮已因账号计费阻塞在启动前失败，当时新修复尚未执行验证**。
 
 ### 首轮 Release 异常：资产已核验，但严格身份检查失败
 
@@ -163,7 +262,7 @@ draft 状态的 PATCH **未显式传入 tag**，触发 GitHub 对未发布 Relea
 
 原发布器日志状态为 **`unknown`**，原因是严格身份检查失败；不能因此把已回读的
 draft 状态说成未知，也不能把六项证据上传说成成功发布。该问题**不是 Actions 配额**。
-修复源码已推送不代表这个既有 draft 已修复或发布；本次不对远端 Release 作任何操作。
+修复源码已推送不代表这个既有 draft 已修复或发布；该旧 draft 保留原状。
 
 第二轮**失败证据 draft 路径已 SUCCEEDED**，显式 tag 修复已在线上这条路径验证，
 首轮发布器 bug 已解决；不代表首轮既有 draft 被追溯修复，也不是普通成功 Release 发布。
@@ -184,7 +283,7 @@ draft 状态说成未知，也不能把六项证据上传说成成功发布。�
   `target_commitish`（运行源码 SHA），保留严格 tag／SHA 身份检查，不接受错 tag
   作为成功。模拟上述真实 GitHub 行为的回归已加入，本地 **88 项 Node 测试 PASS**
   （此前 **83**）；第二轮另已验证线上失败证据 draft 路径成功，不以 mock 替代线上证据，
-  不将该路径成功说成普通成功 Release 发布。本次文档编辑未重跑测试。
+  不将该路径成功说成普通成功 Release 发布。
 
 | 第二轮项目 | 实际结果／边界 |
 | --- | --- |
@@ -225,7 +324,7 @@ UI ZIP asset **594909127**，精确 **32,920,094 字节**，SHA-256：
 当前 HEAD 只改 UI 测试，App 源码与第二轮相同，因此上述有限视觉结论适用于当前 App
 的相同场景，**不是第三轮的新产物或新运行验证**，也不代替待验证的 9 项 UI 测试。
 
-### 第三轮结论与当前操作边界：启动前失败，不重试
+### 历史第三轮结论与当时操作边界：启动前失败，不重试
 
 当前 HEAD **70ad74b0f5e411ca60f741b1300545d1dbaf25c9** 的第三轮
 **36397742264／108848065780** 已 **COMPLETED / FAILURE**。先前 dispatch 的 HTTP 204
@@ -238,9 +337,6 @@ UI ZIP asset **594909127**，精确 **32,920,094 字节**，SHA-256：
 上传、新 IPA 下载及长度／SHA-256 核验；这些是后续交付条件，**不是已启动任务或交付承诺**。
 核验完成后按 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md) 覆盖更新；正常行为、
 20 worker、翻译、模型及索引策略不变，已有当前策略索引不清库、不重建、不必 Index / resume。
-
-本次仅依据提供的事实编辑指定四份文档，不执行 Git、命令、CI 查询／触发、测试或下载，
-不读取／上传私人照片，不修改其他文档；下方 build 11 及更早记录保持原样。
 
 ## Historical: 0.4.0 (11) — SUCCESS; private Release published, local IPA verified
 
@@ -266,15 +362,14 @@ Release 与本地 IPA 校验均不能作为 build 12 的结果，当前状态以
 - **发布器验证**：本地 **83 项 Node mock 测试全部通过，CI 对应步骤也 PASS**；本轮真实
   上传／发布和下载已另行核验，不用 mock 代替线上证据。使用官方 SHA-256
   已核验的 Node **22.23.3**；系统 Node **18.0** 的初次测试因缺少 `t.after` 失败，
-  属运行时不兼容，不是发布器代码失败。工作流使用 Node 22，本次文档编辑不重跑测试。
+  属运行时不兼容，不是发布器代码失败。工作流使用 Node 22。
 - **新交付契约**：精确私有仓库 guard，全局 `contents: read`，构建 job
   `contents: write`／`actions: read`，仅用运行自带 token，无 PAT／Apple 凭据。
   原生门槛全保留；唯一 DRAFT → 白名单流式上传／远端字节和哈希验证 → prerelease，
   不设为 Latest，不覆盖／删除既有 Release、tag 或资产。上游失败仅 DRAFT 证据、无
   App 包；部分上传不是交付。详见 [PRIVATE_RELEASE_DELIVERY.md](PRIVATE_RELEASE_DELIVERY.md)。
 - 新交付不占 Actions artifact 存储配额；计费设置不动，macOS 分钟仍按原规则计量，
-  不承诺免费。**只是交付路线改变，不声称 Actions 配额恢复**。本次只编辑指定五份
-  文档，不执行 Git、命令、CI 查询／触发或下载。
+  不承诺免费。**只是交付路线改变，不声称 Actions 配额恢复**。
 
 ### 本轮实际测试与交付（36387878343）
 
@@ -469,7 +564,7 @@ Release 及上述 job 写权限，首次 Release 尝试已成功交付。**不�
 删除授权**；其余旧产物、其他仓库及本地备份不动。旧 Actions artifacts 是历史证据，
 不是未来交付路线；本次并未因文档更新再触发 CI 或执行下载。
 
-### 现在可做：使用已校验的 build 11 IPA 签名安装
+### 历史 build 11 当时的操作：使用已校验 IPA 签名安装
 
 **新包已完整下载并复验，可用于本机签名**。用上方本地 IPA 或私有 Release 同一包，原 Sideloadly
 账号／有效 Bundle ID 覆盖安装；已有 build 10 当前策略索引不卸载、不清库、不重建。
@@ -490,9 +585,8 @@ Settings → 中文搜索增强 → 简体中文 → 英文 → 下载离线语�
 已 **SUCCESS，首轮通过，无需修复重跑**；日志确认 `TEST SUCCEEDED` 和设备
 `BUILD SUCCEEDED`。源码检查、Swift 核心、公开地点包生成／校验、模型导出、
 原生／UI 测试及设备打包均通过；build 10 IPA 已实际完整下载并校验。
-本次仅记录提供的已核验证据，不重新运行命令、测试、CI 查询或下载。
 
-### 当前源码实现与未改变的边界
+### 历史 build 10 源码实现与未改变的边界
 
 - 索引先以短边目标 224 请求 `.highQualityFormat`，网络关闭；只有无可用本地
   资源才退回同目标 `.fastFormat`，仍网络关闭。均为 `.aspectFit`、`.current`、
@@ -524,7 +618,7 @@ Settings → 中文搜索增强 → 简体中文 → 英文 → 下载离线语�
   四槽 **5 倍提速**或整库必定完成的证据／承诺。没有新增任意图库上限或超时。
 - 三路预览诊断及正常图片显示不变，不宣称 UI 图像现在更清晰。
 
-### 当前验证账本：build 10 实际执行结果
+### 历史验证账本：build 10 实际执行结果
 
 以下 App 子套件已计入 270 项总数，不重复相加；耗时不是手机性能测量。
 
@@ -554,7 +648,7 @@ Settings → 中文搜索增强 → 简体中文 → 英文 → 下载离线语�
 非致命日志备注：CI 出现测试临时库的 SQLite “vnode unlinked while in use” 警告，
 路径位于测试临时目录；相关测试仍 PASS。静态审查提示夹具可能持有两个独立
 `SQLitePhotoStore` 连接：`context.store` 已关闭，但 worker store 仍有独立生命周期。
-这只是可能解释，未确认全部警告原因，也不是生产 drain 失败证据；本次不扩展修复范围。
+这只是可能解释，未确认全部警告原因，也不是生产 drain 失败证据。
 刻意输入 3 字节无效数据的 ImageIO 错误属于已通过的负例测试，不作为失败处理。
 
 | 模型导出指标 | build 10 报告值（非原生／真机极值） |
@@ -707,9 +801,7 @@ Source: `b40d2faaf11b2f499779881b4863325fa7dae659`.
 **SUCCESS on the first attempt**. App version **0.3.2 / build 8** is verified.
 Core, export, places, model/App resource checks, native/UI tests and device
 packaging passed; the local IPA download and actual length/hash verification are
-complete. Physical-phone performance remains unmeasured. This edit records the
-supplied verified results only; it runs no commands, tests, downloads, CI
-queries/retries or phone actions.
+complete. Physical-phone performance remains unmeasured.
 
 ### Implemented scope — the user's explicit four-worker request
 
@@ -756,7 +848,7 @@ included in the App total, not additional tests to add again.
 
 | Gate | Verified build 8 result / remaining boundary |
 | --- | --- |
-| Windows local Node checks | Reported PASS; not rerun by this edit and not native proof. |
+| Windows local Node checks | Reported PASS; not native proof. |
 | CI conclusion / job | SUCCESS first attempt: run 35848409845 / job 107140049230, linked above. |
 | Source/static, places, model and App checks | All passed, including model export, geography generation/validation and bundled-resource checks; no historical test count is substituted for a new count. |
 | Pure Swift core | 79 passed. |
@@ -771,7 +863,7 @@ included in the App total, not additional tests to add again.
 | Simulator/device resources, arm64 Release and IPA validation | Passed; device report verifies 0.3.2 / build 8 and unchanged model/pack identity. Unsigned device package, not physical-device execution. |
 | Artifact / bytes / SHA-256 | Artifact 10745235946; verified identity and exact byte/hash values below. |
 | Complete local IPA download | COMPLETE: bounded-memory stream, actual local bytes/hash verified; checksum and device-build JSON exist, no partial download remains. |
-| User-side signing/install; physical-phone speed, memory/heat, file protection and GPS coverage | PENDING-DEVICE — no phone run or additional diagnostics requested by this edit. |
+| User-side signing/install; physical-phone speed, memory/heat, file protection and GPS coverage | PENDING-DEVICE — no phone result; no additional diagnostic task required. |
 | Model/geography redistribution | PENDING-LICENSE-REVIEW — unchanged separate release requirement. |
 
 ### Verified build 8 device package and completed download
@@ -840,8 +932,7 @@ Source: `18ad52d37690ecfbf92b63a21285a6c3e8e753d4`.
 / [job 107115240763](https://github.com/xwgnick/local-image-iq-ios/actions/runs/35840838147/job/107115240763).
 **SUCCESS on the first attempt; no fix or retry was needed.** Logs contain
 `TEST SUCCEEDED` and `BUILD SUCCEEDED`. The evidence below belongs to this run,
-not build 6. This documentation-only edit records supplied verified results;
-it does not run commands, tests, downloads or CI queries.
+not build 6.
 
 | Gate | Verified build 7 result / remaining boundary |
 | --- | --- |
@@ -928,7 +1019,7 @@ These synthetic numerical checks do not measure real-photo retrieval quality.
   required app resources in the normal CI path, including model-free builds.
   The generated [manifest](../Resources/Places/places-manifest.json) and actual
   device-package checks agree on the pack identity recorded above. Simulator,
-  device App and IPA resource gates passed; this edit does not rerun those checks.
+  device App and IPA resource gates passed.
 - Represented years are China ADM1 2019 / ADM2 2017, France 2022, Germany 2021,
   Netherlands 2022. Historical administrative approximations are not current
   addresses, POIs or global coverage. Labels use photo metadata, not current-device
@@ -1001,7 +1092,7 @@ SigLIP image encoder with the retired CLIP text encoder or old index vectors.
 
 | Gate | Historical build 6 evidence / then-remaining boundary |
 | --- | --- |
-| Python static checks | 30 passed, reported for this change; not rerun by this documentation edit. Static checks are not model export or native parity. |
+| Python static checks | 30 passed, reported for this change. Static checks are not model export or native parity. |
 | Pure Swift core | 79 passed, zero failures in this run. |
 | FP32 Python/Core ML export | Passed: 17 texts + 6 synthetic images = 23 cases, 92 stage comparisons and a 17×6 paired cosine matrix; measured values below. |
 | Native generated parity | All 7 GeneratedModelParityTests passed in 72.985 seconds: exact Gemma IDs/masks including Final_Sigma, same-tensor runtime, native preprocessing and requested CPU / `.all` checks. No parity skip. |

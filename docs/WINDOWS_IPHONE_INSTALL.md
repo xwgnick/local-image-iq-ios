@@ -5,63 +5,51 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：build 12 CI 36403948150 原生构建／测试进行中；可下载的仍仅旧版 0.4.0
+## 当前（2026-09-29）：0.4.1（build 12）已交付，已校验 IPA 可用于签名安装
 
 2026-09-28，同一仓库已确认 **PUBLIC／`private: false`**。用户已确认既有历史、
 Actions 日志及已发布 Releases 公开；详见 [PUBLIC_REPOSITORY.md](PUBLIC_REPOSITORY.md)。
 
 - **另一台电脑无需 GitHub 登录**：打开
-  [旧版 0.4.0 / build 11 Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
-  （ID **398009938**），下载未签名 IPA。这是既有旧包，**不是 build 12**。
-- 旧包 asset **594739443**，精确 **1,414,801,288 字节**；SHA-256：
-  `6043afbe68a84edd16d1314ecf4369f308bff8d7cf676392aee5eee6a950ca71`。
-  本工作区已校验的副本是
-  [../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa)。
-  另一台电脑下载后仍须核验同一长度／哈希，再用 Sideloadly 本机签名；公开不等于免签安装。
-- 已装 0.4.0 可继续使用，**不要求重装或回退**。工程仍是 **0.4.1 / 12**，没有新设备包；
-  两个旧失败 draft 未发布，新失败证据 draft 也不能用作安装入口。
-- **首轮公开历史结果，不是新运行通过记录**：源码 **`f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5`** 的
-  [CI 36400923391](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391)
-  ／[job 108858329166](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36400923391/job/108858329166)
-  已 **COMPLETED / FAILURE，仅 1 项原生 UI 失败**；公开路线计费启动阻塞已解除，
-  App／UI 确实运行。App **370 项：369 通过、1 项真机文件保护模拟器跳过、0 失败
-  （217.028 秒）**，状态 **14**／展示 **7** 项全通过；UI **9 项：8 通过、1 失败
-  （514.171 秒）**，包括全局开关／重启在内的其他 8 项通过，开关本体点击修复已验证。
-- 唯一失败为 `testClearQueryKeepsKeyboardAndSettingsAdvancedStartsCollapsed` 的
-  [滑块可达性断言](../UITests/PresentationNavigationTests.swift#L95)：**第一次 Advanced
-  整行中心点击后**滑块未暴露，8 次向下滚动仍失败，**不是第二次展开失败**。
-  实际 trace 的时间／点击坐标见 [BUILD_STATUS.md](BUILD_STATUS.md)。
-- 新的**仅测试改动**源码 **`cfd2943cbec28bf02c1fe2597921cb12ffdec317`** 已推送 `personal`：
-  三次展开／收起均以显式 ID `debug-advanced` 点击尾部箭头 **(0.95, 0.5)**，
-  第二次展开前重新获取 header；全部断言保留，不新增跳过、不降低门槛。
-  当前 [CI 36403948150](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36403948150)
-  ／[job 108868075667](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36403948150/job/108868075667)
-  的**原生构建／测试 IN PROGRESS，结果待验证**。App 代码与首轮公开源码相同；
-  旧 App 370 项／UI 8 通过、1 失败不转记为本轮通过。这是第三次实际 UI 测试修复迭代；
-  若再失败，停止并讨论，不无限修补／重跑。
-- 首轮公开原生编译通过并执行了 App／UI，**不等于 iPhoneOS 编译通过**。
-  设备构建因 UI 门槛失败 **SKIPPED，无 build 12 IPA**。失败证据发布步骤 **SUCCESS**，
-  Release **398104580**／tag **`ci-36400923391-1`** 已存在但为 **DRAFT**，身份元数据
-  与预期一致；**6 项资产仅为证据，不含 IPA，不是安装入口**。
-  本轮 UI ZIP 已下载校验，仅查看清单／trace，**未看图片、无新视觉结论**；
-  第二轮私有运行四图仍仅是旧参考，证据身份及哈希见 [BUILD_STATUS.md](BUILD_STATUS.md)。
-- 本地 **Node 22 发布器 94 项 PASS** 记录不变；仅测试补丁未改发布器，本次不重跑。
-  标准 `macos-15` 公开 hosted runner 用量免费，仍受平台政策／限制约束；未改计费或
-  付费限额，**不重置旧私有分钟或历史累计用量**。本次只改指定六份文档，不执行
-  命令、Git、CI、Python、测试或下载。
-- 当前预期 tag **`ci-36403948150-1` 尚未发布**，不是安装入口；工作流只在全部门槛通过后
-  自动发布。尚无已确认的 0.4.1 IPA 或新包下载；完成公开发布及新 IPA 长度／SHA-256 核验后，
-  才按 **0.4.1 / 12** 更新。仍用原 Sideloadly 账号／有效 Bundle ID 覆盖安装；
-  已有 build 11／10 当前策略索引、就绪语言包沿用，不卸载、不清库、不要求重建或诊断。
+  [0.4.1 / build 12 Release：ci-36515068434-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36515068434-1)
+  （ID **398799791**）。发布于 **2026-09-29T03:27:14Z**，**prerelease、`draft: false`、
+  非 Latest，9 项资产已核验**；这是 build 12 首次完成交付，不是首次构建尝试。
+- **本工作区的新包已就绪**：
+  [../build/device-download/36515068434/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36515068434/LocalImageIQ-iphoneos-unsigned.ipa)。
+  asset **597136564**，精确 **1,414,818,257 字节**；SHA-256：
+  `840085413cee964c7de03fa4453f89db9691ec74f8165064e3d07e432ccec03c`。
+  **已完整流式下载并由父流程核验实际长度／SHA-256，`ipaVerifiedLocally: true`**；
+  同目录设备报告、校验文件、交付清单及下载记录齐全，不需要在本工作区再次下载。
+  另一台电脑下载后须核验同一长度／哈希；工作区链接不会自动传送文件。
+- [CI 36515068434](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36515068434)
+  ／[job 109235419277](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36515068434/job/109235419277)，
+  源码 **`fac5e2d39d37730ccf45e2f8e0231124247d4cf8`**，已 **COMPLETED / SUCCESS**。
+  核心 **79 通过**，App **370 项：369 通过、1 项既有真机文件保护模拟器跳过、0 失败**
+  （**258.961 秒**，wall **288.923 秒**）；UI **9 全通过／522.447 秒**。
+  Advanced 标签 ID 作用域修正＋语义点击已通过原生验证，完整套件耗时与失败历史见
+  [BUILD_STATUS.md](BUILD_STATUS.md)，不把旧 AX 空树当成 ID 继承的直接证据。
+- 设备 **BUILD SUCCEEDED**：**0.4.1 / 12、arm64 Release、iphoneos18.5 SDK、Xcode 16.4、
+  最低 iOS 17.0、未签名**。仍需 Sideloadly 本机签名，公开下载不等于免签安装，
+  也不等于已在物理 iPhone 安装／测试。
+- **现在可覆盖安装 build 12**：使用原 Sideloadly Apple 账号／原有效 Bundle ID；已有
+  build 11／10 当前策略有效索引及就绪语言包沿用，**不卸载、不 Clear index、不重建
+  图像／地点，也不必 Index / resume**。正常搜索／看图，不要求指定查询或诊断。
+- 本轮已校验 UI ZIP，只实际审核[四场景联系图](../build/ui-review/36515068434/user-mode-contact.jpg)
+  （1340×758，原图各 393×852）：Settings 底部 OFF／Maintenance／隐私可见；Library
+  Photos 连接／iCloud 可见、索引禁用、无 Details；空查看器 OFF 只有禁用分享，ON 时
+  分享／照片检查／本地预览对比均可见且禁用。合成空状态／未授权、不读取 Photos，
+  不是真机证据，不声称其他图像已审核。
 
 公开转换不改模型、20 worker、HQ224／Fast、翻译或索引策略；项目不设置项目级许可证，
 第三方再分发审查仍未完成。公开下载这一事实不等于一般复用授权或法律许可批准。
-最新验证账本见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+标准 `macos-15` 公开 runner 免费但受平台规则约束，不重置旧用量；计费、权限及可见性不再调整。
+当前签名步骤见下方第 1–5 节；build 11 旧包及先前失败仅作历史。完整验证账本见
+[BUILD_STATUS.md](BUILD_STATUS.md)。
 
 ## 历史检查点（2026-09-28，转公开前）：0.4.1（build 12）— 第三轮未启动，无新包
 
 以下版本历史保留当时错误、校验值和步骤；“私有／需登录／先查计费／不重试”是旧阶段
-条件，**不适用于现在公开的 build 11 下载**。现行入口与 build 12 待办以上方为准，
+条件，**不适用于当前公开下载**。现行 build 12 已交付入口以上方为准，
 不要重复历史查询、诊断或迁移步骤。
 
 [第三轮 CI 36397742264](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36397742264)
@@ -127,7 +115,7 @@ Maintenance／隐私说明可见；Library 连接入口、iCloud 控件可见，
 **build 12 未交付／未完成本地校验**。
 下方 build 11 的下载链接／字节数／哈希只属于旧包，不能作为 build 12 安装证明。
 
-### 现在保留旧版；后续满足条件才覆盖安装
+### 历史检查点的操作：当时保留旧版，等待后续交付
 
 1. **现在不安装新版，继续用现有 0.4.0**。账号所有者先检查上述 Billing & plans；
   当前不自动改计费、不追加 CI。只有阻塞解决、后续新运行通过测试和设备构建后，才进入
@@ -161,9 +149,8 @@ Clear 确认，以及搜索的英文提示／“使用原文”都可正常使�
 模拟真实 GitHub 行为的本地发布器测试为 **88 项 PASS（此前 83 项）**，第二轮另已验证
 失败证据 draft 路径成功，不据此宣称普通成功发布。第三轮未执行 App **370（349＋14＋7）**／
 UI **9**；第二轮四张用户模式合成图已按上述范围审核，不代替点击语义或真机验证。
-详见 [USER_MODE.md](USER_MODE.md)、[BUILD_STATUS.md](BUILD_STATUS.md)。本次仅依据
-提供事实更新指定四份文档，不执行命令、Git、CI、测试或下载，不读取／上传私人照片；
-build 11 及更早记录保留。
+详见 [USER_MODE.md](USER_MODE.md)、[BUILD_STATUS.md](BUILD_STATUS.md)。以上为转公开前
+历史检查点，不是当前安装要求；build 11 及更早记录保留如下。
 
 ## 历史：0.4.0（build 11）— 私有 Release 已发布，本地 IPA 已校验，可签名安装
 
@@ -179,8 +166,7 @@ CI 对应步骤也 PASS**。
 ／[job 108817040032](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36387878343/job/108817040032)，
 已 **COMPLETED / SUCCESS**，实际 `TEST SUCCEEDED` 和设备 `BUILD SUCCEEDED`。
 这是**两次 Actions artifact 配额失败后的首次私有 Release 尝试成功**，不是整体首轮成功。
-**新 IPA 已完整下载并校验**，不是旧 build 10 包。本次只记录已核验证据，不查询 CI、
-执行命令或下载。
+**新 IPA 已完整下载并校验**，不是旧 build 10 包。
 
 ### 已备好的 build 11 安装包：本机与另一台电脑
 
@@ -227,9 +213,9 @@ TestFlight 或 Apple 签名服务。CI 无 PAT／Apple 凭据；成功才将已�
 首次 Release 尝试已成功交付；未扩大旧产物清理，也未改变仓库可见性或计费，
 **不声称 Actions 配额已恢复**。
 
-### 现在只做这些步骤
+### 历史 build 11 当时的安装步骤
 
-本工作区的新包已经就绪，无需等待 CI 或重新下载；另一台电脑先按上方入口获取并校验。
+当时本工作区的 build 11 新包已经就绪；以下不是当前 build 12 的升级要求。
 
 1. 确认是已验证的 **0.4.0 / build 11** 新 IPA，再用**原 Sideloadly 账号、原有效
   Bundle ID 覆盖安装**，不卸载、不 Clear index。已有 build 10 当前策略有效索引
@@ -311,7 +297,7 @@ TestFlight 或 Apple 签名服务。CI 无 PAT／Apple 凭据；成功才将已�
 - 设备报告确认 **0.3.4 / build 10、iphoneos18.5、arm64 Release、未签名、Xcode 16.4、
   最低 iOS 17.0**，同一 768 维 SigLIP 2 模型及 2,943 要素地点包；不是已在手机运行。
 
-### 现在只做这些步骤
+### 历史 build 10 当时的安装步骤
 
 1. **使用上方已下载并校验的 build 10 IPA。**不追加诊断或截图任务，也不用清空现有索引。
 2. 用**原 Sideloadly 账号、原有效 Bundle ID 覆盖安装**，不卸载、不 Clear index。
@@ -392,7 +378,7 @@ UI **7 项全部通过**。这些不代表已在手机安装或验证真实 Phot
 - 设备报告确认 **0.3.3 / build 9、iphoneos18.5、arm64 Release、未签名、Xcode 16.4、
   最低 iOS 17.0**，同一 768 维 SigLIP 2 模型及地点包；仍须 Sideloadly 本机签名。
 
-### 现在只做这几步
+### 历史 build 9 当时的诊断步骤
 
 1. 用原 Sideloadly 账号、原有效 Bundle ID 覆盖安装并完成必要的系统信任。
   不卸载、不清索引、不重建，也不用点 Index / resume。
@@ -430,7 +416,6 @@ UI **7 项全部通过**。这些不代表已在手机安装或验证真实 Phot
 已 **SUCCESS，首轮通过**；App 版本已核验为 **0.3.2 / build 8**。
 核心、模型导出、地点包、模型／App 资源检查、原生与 UI 测试及设备打包均通过；
 新 IPA 已实际完整下载并校验本地字节数／SHA-256，不是下方旧 build 7 的包。
-本次只记录已核验结果，不运行命令、测试、CI 查询／重试或下载，不签名或操作手机。
 
 ### 本版改变了什么
 
@@ -491,8 +476,7 @@ UI **7 项全部通过**。这些不代表已在手机安装或验证真实 Phot
    续跑。**升级不要求清空索引，也不要求整库图像重编码或下载原图。**
 3. 用户明确希望从零测速时，可在**安装后主动选择 Settings → Clear index，再打开
   Library → Index / resume**，联网关闭、保持 App 前台。这会丢失已有索引／缓存，
-  需要重新索引，**不会删除系统相册的照片**。这是可选测速，不是覆盖安装前提；
-  本次文档编辑不会替用户清空或运行手机。
+  需要重新索引，**不会删除系统相册的照片**。这是当时的可选测速，不是覆盖安装前提。
 
 冷建测速比较 **0.3.1 与 0.3.2（同一地点包）**，两边都从空索引开始；保持同一手机、
 同一批授权照片及数量、联网关闭、相近温度／发热和供电条件。不要拿旧版从零建库与
@@ -511,7 +495,7 @@ UI **7 项全部通过**。这些不代表已在手机安装或验证真实 Phot
 模拟器跳过、0 失败**。全部 **7 个模型 parity 通过（67.736 秒）**，全部 **7 个 UI
 测试通过（202.143 秒）**。公开地点生成校验、模拟器／设备 App 资源检查、iPhoneOS
 arm64 Release 编译及 IPA 验证均已通过。完整测试明细和本次模型报告见
-[构建记录](BUILD_STATUS.md)。本次仅记录已核验结果，不运行命令、测试、下载或查询 CI。
+[构建记录](BUILD_STATUS.md)。
 
 ### 历史 build 7 安装包（不是 build 8 或当前 build 9）
 
@@ -651,22 +635,9 @@ Library 区分扫描时有 GPS／找到标签／无 GPS／无可用包／包外�
 设备运行比构建 SDK 更新的 iOS，不代表应用一定不能运行；最终仍需测试实际
 安装、系统授权、内存和推理行为，不声称云端模拟器替代了 iOS 26.6.1 真机验证。
 
-**当前升级目标是 0.4.1 / build 12，须等实际交付并校验新包后再执行下方签名／安装步骤**。
-**历史（2026-09-28，转公开前）**：首轮 CI **36394279080** 已失败；第二轮 **36396468128／d2174787** 已结束，仅 2 项
-UI 因同一整行误点而失败，App 369 通过／1 跳过／0 失败；设备构建跳过，无 IPA。
-第二轮失败证据 draft 路径成功，不是普通成功发布。第三轮源码
-**70ad74b0f5e411ca60f741b1300545d1dbaf25c9** 仅新增已提交／推送的 UI 点击修复，
-App 代码未变；第三轮 **36397742264** 因计费 annotation 在启动前失败、`steps: []`。
-
-**当前公开运行（2026-09-28 最新检查点）**：源码
-**f553cd7285d62171ce1d9ccf0c1f84c8b43e2fb5** 已推送 `personal`；
-**36400923391／job 108858329166** 已实际启动、**IN_PROGRESS**，源码检查步骤通过，
-正在生成公开地点包，**不是计费启动阻塞**。指定 Node 22 的本地发布器 mock 测试由
-父流程实际计数 **94 项全部 PASS**；Node／源码／工程／打包检查本地 PASS。
-App **370**／UI **9** 仍为本轮待验证规模，不预记全套测试／回归通过。
-预期公开 tag **`ci-36400923391-1` 尚不存在**，不能作为安装入口。
-build 12 IPA 未交付／未完成本地校验。历史 build 11 是现有公开旧包，不是本次新包，
-入口见页首及第 3 节。
+**当前升级目标 0.4.1 / build 12 已完成交付及本地校验，可执行下方签名／安装步骤**。
+使用页首 CI 36515068434 对应的新包和哈希，不用历史 build 11 或失败 draft 代替。
+先前失败与修复过程见 [BUILD_STATUS.md](BUILD_STATUS.md)，不再是等待安装的阻塞。
 
 ## 1. 安装工具（由你操作）
 
@@ -674,9 +645,13 @@ build 12 IPA 未交付／未完成本地校验。历史 build 11 是现有公开
 不要从镜像站、网盘或所谓“免签平台”获取。安装器的 UAC／管理员确认由你处理。
 若这是受管理的工作电脑，先确认允许安装第三方签名工具和 Apple 设备驱动。
 
-工具若提示缺少 Apple Mobile Device / iTunes / iCloud 组件，按其当前官方
-安装提示补齐。**不要未经确认卸载你已有的 iTunes、Apple Devices 或 iCloud**；
-不同分发版本的驱动兼容性按工具实际提示排查。
+首次设置另一台 Windows 电脑时，保留官网 Windows 下载入口的 **Before you install**
+步骤：按 Sideloadly 官方要求安装 **网页版（非 Microsoft Store 版）iTunes 和 iCloud**，
+不要只取 Sideloadly 安装器而跳过前置组件。按官方提示补齐 Apple Mobile Device 驱动，
+必要时重启电脑，再打开 iTunes、连接已解锁手机并完成信任。资源管理器能看到手机
+不等于 Apple 驱动／配对已就绪；不必开启 iCloud Photos 或同步私人照片。
+**不要未经确认卸载已有的 iTunes、Apple Devices 或 iCloud**；版本冲突按工具实际
+提示排查，已可用的电脑不因本次 App 升级重新安装这些组件。
 
 Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 凭据只发送
 给 Apple；这只是开发者声明，不是本项目对工具的安全审计。首次使用需要接受
@@ -689,11 +664,13 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 3. 等 Sideloadly 中的设备列表显示你的 iPhone。没有识别时先排查驱动／线缆，
    不反复提交 Apple 登录。
 
-## 3. 签名安装（build 12 实际交付并校验后）
+## 3. 签名安装已交付的 build 12
 
-1. **当前 build 12 新包尚未交付，此步先等待**。交付后确认 Release／设备报告为
-  **0.4.1 / build 12**，完整下载并核验对应 IPA，再拖进 Sideloadly；另一台电脑也须
-  下载并校验同一新包。目前不提供或猜测 build 12 下载链接，不用 build 11 冒充新包。
+1. 使用已完整下载并校验的
+  [../build/device-download/36515068434/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36515068434/LocalImageIQ-iphoneos-unsigned.ipa)，
+  Release／设备报告为 **0.4.1 / build 12**。另一台电脑从
+  [ci-36515068434-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36515068434-1)
+  下载，并按页首 **1,414,818,257 字节／SHA-256** 核验后再拖进 Sideloadly。
   公开 Release 单独提供 IPA，无需 GitHub 登录或解压外层 Actions ZIP；**不解压或修改 IPA 的 Payload**。
 2. 选择已连接的 iPhone，使用原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，
    不卸载、不清索引；Apple Account 必须是本人有权使用的账号。
@@ -702,10 +679,8 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 4. 不启用 dylib 注入、插件或其它改包功能。首次签名可能需要调整开发用 Bundle ID；
    保持之后重签所用账号／标识一致，不随意删除旧 App 以免丢失其本地索引。
 
-**旧版可选回退，不是本次新包**：历史 **0.4.0 / build 11** 的已校验本机 IPA 为
-[../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/36387878343/LocalImageIQ-iphoneos-unsigned.ipa)；
-另一台电脑可从[现已公开的旧版 Release：ci-36387878343-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36387878343-1)
-无需 GitHub 登录下载，并按上方 build 11 记录核验。此包不含 build 12 用户模式更新，不要求回退或重装。
+历史 **0.4.0 / build 11** 的包身份与下载入口保留在本页历史章节，不是本次新包，
+不要求回退或重装旧版。
 
 ## 4. 手机上完成信任
 
@@ -715,9 +690,9 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
   要求重启和确认。菜单暂时不出现时，先完成一次配对／开发签名安装再检查。
 - 若遇到账户或设备管理政策禁止开发者模式，停止并确认政策，不绕过设备管理。
 
-## 5. build 12 交付并覆盖安装后：沿用已有状态，正常使用
+## 5. 覆盖安装 build 12 后：沿用已有状态，正常使用
 
-本节仅适用于 **build 12 实际交付、校验并安装之后**，不是已交付或已安装声明。
+**build 12 已交付并校验，用户侧签名／安装及真机运行尚未确认**。
 已装 build 11 且当前策略索引／语言包已就绪时，覆盖安装后直接正常搜索／看图；
 已有 build 11／10 当前策略有效索引无需迁移，**不卸载、不清库、不重建图像或地点，
 不必 Index / resume**。不要求重新下载语言包、测试“身份证”或其他指定查询、
@@ -736,7 +711,8 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 网络默认关闭，只有用户主动开启后才可按需访问 iCloud；不会要求下载整库原图。
 系统语言包准备是独立的用户同意流程，不改变上述开关；原文／译文在设备上处理，
 不上传到 App 服务器，无 App 云端兜底。系统可能收集不含原文／译文的使用及性能指标；
-“本地翻译”不等于系统绝无任何网络活动，语言包竞态提示边界见页首。
+“本地翻译”不等于系统绝无任何网络活动；检查与翻译之间语言包被移除时仍可能出现系统
+下载提示，完整边界见 [QUERY_TRANSLATION.md](QUERY_TRANSLATION.md)。
 Apple 凭据仍只由用户在本机签名工具／Apple 流程处理，不交给聊天或 CI。
 
 共享 SigLIP 2 模型卡声明 Apache-2.0，导出流程复制实际存在的模型卡／LICENSE／NOTICE
