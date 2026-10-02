@@ -274,6 +274,15 @@ final class PresentationNavigationTests: XCTestCase {
             .matching(NSPredicate(format: "label BEGINSWITH %@", "读取已存索引统计，")).firstMatch
         scrollTo(counts, in: page)
         XCTAssertTrue(counts.exists, "The real preparation must expose its production counts stage")
+        for title in ["加载分词器", "加载图像模型", "加载文本模型"] {
+            let component = app.descendants(matching: .any)
+                .matching(identifier: "launch-timing-component-\(title)").firstMatch
+            scrollTo(component, in: page)
+            XCTAssertTrue(component.label.contains("完成"))
+            XCTAssertTrue(component.label.contains("启动后 +"))
+            XCTAssertNotNil(component.label.range(of: #"[0-9]+\.[0-9]{3} 秒"#, options: .regularExpression))
+        }
+        attach("launch-timing-parallel-live")
         let back = app.navigationBars["启动耗时"].buttons.element(boundBy: 0)
         expectHittable(back)
         back.tap()

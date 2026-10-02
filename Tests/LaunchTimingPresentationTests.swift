@@ -94,24 +94,73 @@ final class LaunchTimingPresentationTests: XCTestCase {
         XCTAssertEqual(content.earlierReports.first?.rows.map(\.id), rows.map(\.id))
         XCTAssertEqual(content.earlierReports.first?.rows.map { $0.stage.rawValue }, stages.map(\.rawValue))
         XCTAssertEqual(content.earlierReports.first?.rows.map(\.seconds), rows.map(\.seconds))
-        XCTAssertEqual(LaunchTimingStage.allCases.count, 13)
+        XCTAssertEqual(LaunchTimingStage.allCases.count, 15)
     }
 
     func testTotalUsesRecordedWallTimeAndSlowestUsesRecordedStage() throws {
         // A deliberately partial fixture proves the page must not manufacture
         // its total by summing only the supplied rows or dropping unknown time.
         let rows = [LaunchTimingRow(id: 0, stage: .resources, seconds: 0.041),
-                    LaunchTimingRow(id: 1, stage: .imageModel, seconds: 12.345),
-                    LaunchTimingRow(id: 2, stage: .counts, seconds: 0.062)]
-        let content = LaunchTimingContent(reports: [report(seconds: 21.935, rows: rows)],
+                    LaunchTimingRow(id: 1, stage: .parallelModels, seconds: 12.700),
+                    LaunchTimingRow(id: 2, stage: .modelAssembly, seconds: 0.009),
+                    LaunchTimingRow(id: 3, stage: .counts, seconds: 0.062)]
+        let components = parallelComponents
+        let content = LaunchTimingContent(reports: [report(seconds: 21.935, rows: rows, components: components)],
                                           version: nil, build: nil)
         let latest = try XCTUnwrap(content.latest)
         XCTAssertEqual(LaunchTimingReport.duration(latest.totalSeconds), "21.935 秒")
         XCTAssertNotEqual(latest.totalSeconds, rows.reduce(0) { $0 + $1.seconds })
+        XCTAssertNotEqual(latest.totalSeconds, components.reduce(0) { $0 + $1.seconds })
+        XCTAssertNotEqual(latest.totalSeconds, rows.reduce(0) { $0 + $1.seconds }
+                          + components.reduce(0) { $0 + $1.seconds })
         let slowest = try XCTUnwrap(latest.slowest)
-        XCTAssertEqual(slowest.stage.rawValue, "加载图像模型")
-        XCTAssertEqual(LaunchTimingReport.duration(slowest.seconds), "12.345 秒")
-        XCTAssertNil(report(rows: []).slowest, "No invented slowest stage when there are no rows")
+        XCTAssertEqual(slowest.stage.rawValue, "并行准备模型（总等待）")
+        XCTAssertEqual(LaunchTimingReport.duration(slowest.seconds), "12.700 秒")
+        XCTAssertNil(report(rows: [], components: components).slowest,
+                     "Even with components, no invented slowest wall stage when there are no rows")
+    }
+
+    func testLatestAndEarlierReportsPreserveComponentsAndStatuses() throws {
+        let olderComponents = [
+            LaunchTimingComponent(id: UUID(), stage: .tokenizer, startOffsetSeconds: 0,
+                                  seconds: 2, outcome: .completed),
+            LaunchTimingComponent(id: UUID(), stage: .imageModel, startOffsetSeconds: 1,
+                                  seconds: 2, outcome: .failed),
+            LaunchTimingComponent(id: UUID(), stage: .textModel, startOffsetSeconds: 2,
+                                  seconds: 2, outcome: .interrupted)
+        ]
+        let latestComponents = parallelComponents
+        let older = report(outcome: .failed, seconds: 4, components: olderComponents)
+        let latest = report(kind: .retry, seconds: 13, components: latestComponents)
+        let source = [older, latest]
+        let content = LaunchTimingContent(reports: source, version: nil, build: nil)
+        let shownLatest = try XCTUnwrap(content.latest)
+        let shownOlder = try XCTUnwrap(content.earlierReports.first)
+        XCTAssertEqual(shownLatest.components.map(\.id), latestComponents.map(\.id))
+        XCTAssertEqual(shownLatest.components.map(\.startOffsetSeconds), [0.077, 0.112, 0.237])
+        XCTAssertEqual(shownLatest.components.map(\.seconds), [1.230, 12.345, 8.210])
+        XCTAssertEqual(shownLatest.components.map(\.outcome), [.completed, .completed, .completed])
+        XCTAssertEqual(shownOlder.components.map(\.id), olderComponents.map(\.id))
+        XCTAssertEqual(shownOlder.components.map(\.stage), [.tokenizer, .imageModel, .textModel])
+        XCTAssertEqual(shownOlder.components.map(\.startOffsetSeconds), [0, 1, 2])
+        XCTAssertEqual(shownOlder.components.map(\.outcome), [.completed, .failed, .interrupted])
+        XCTAssertEqual(source.map { $0.components.map(\.id) },
+                       [olderComponents.map(\.id), latestComponents.map(\.id)])
+    }
+
+    func testComponentLabelsOffsetsAndOverlapNoteAreExplicit() {
+        XCTAssertEqual(LaunchTimingComponentList.title, "并行任务（时间重叠，不相加）")
+        for outcome in [LaunchTimingComponentOutcome.completed, .failed, .interrupted] {
+            let component = LaunchTimingComponent(id: UUID(), stage: .tokenizer,
+                                                  startOffsetSeconds: 1.25, seconds: 2, outcome: outcome)
+            XCTAssertEqual(LaunchTimingComponentList.detail(for: component),
+                           "\(outcome.rawValue) · 启动后 +1.250 秒开始")
+        }
+        for explanation in ["排队", "启动时间差", "取消", "全部任务退出", "长于最慢子任务",
+                            "准备中断会立即冻结记录", "不含其后共享任务", "不是 CPU 用时",
+                            "时间重叠，不相加", "不计入总耗时加总"] {
+            XCTAssertTrue(LaunchTimingContent.parallelNote.contains(explanation), explanation)
+        }
     }
 
     func testLightPhoneSnapshot() async throws {
@@ -122,12 +171,16 @@ final class LaunchTimingPresentationTests: XCTestCase {
         try await snapshot(appearance: .dark, name: "UIReview-startup-timing-dark")
     }
 
-    func testLargestDynamicTypeScrollsAllThirteenStagesOnSmallPhoneWithoutHorizontalOverflow() async throws {
+    func testLargestDynamicTypeScrollsAllFifteenStagesOnSmallPhoneWithoutHorizontalOverflow() async throws {
         let rows = LaunchTimingStage.allCases.enumerated().map {
             LaunchTimingRow(id: $0.offset, stage: $0.element, seconds: 123456.789 + Double($0.offset))
         }
+        let components = parallelComponents.map {
+            LaunchTimingComponent(id: $0.id, stage: $0.stage, startOffsetSeconds: 123456.789,
+                                  seconds: 123456.789, outcome: $0.outcome)
+        }
         let content = LaunchTimingContent(
-            reports: [report(seconds: rows.reduce(0) { $0 + $1.seconds }, rows: rows)],
+            reports: [report(seconds: rows.reduce(0) { $0 + $1.seconds }, rows: rows, components: components)],
             version: "test", build: "fixture")
         try await withHost(content, size: CGSize(width: 320, height: 568), appearance: .dark,
                            dynamicTypeSize: .accessibility5) { view in
@@ -144,23 +197,79 @@ final class LaunchTimingPresentationTests: XCTestCase {
         }
     }
 
+    func testParallelComponentsAddScrollableContentWithoutHorizontalOverflow() async throws {
+        let rows = [LaunchTimingRow(id: 0, stage: .parallelModels, seconds: 10)]
+        let components = [
+            LaunchTimingComponent(id: UUID(), stage: .tokenizer, startOffsetSeconds: 1,
+                                  seconds: 8, outcome: .completed),
+            LaunchTimingComponent(id: UUID(), stage: .imageModel, startOffsetSeconds: 2,
+                                  seconds: 6, outcome: .failed),
+            LaunchTimingComponent(id: UUID(), stage: .textModel, startOffsetSeconds: 3,
+                                  seconds: 4, outcome: .interrupted)
+        ]
+        let variants: [[LaunchTimingComponent]] = [[], components]
+        var heights: [CGFloat] = []
+        for variant in variants {
+            let content = LaunchTimingContent(
+                reports: [report(outcome: .failed, seconds: 10, rows: rows, components: variant)],
+                version: "test", build: "fixture")
+            // Real native layout, but no additional screenshot attachments.
+            try await withHost(content, size: CGSize(width: 320, height: 568), appearance: .light,
+                               dynamicTypeSize: .accessibility5) { view in
+                let scroll = try XCTUnwrap(self.descendants(view).compactMap { $0 as? UIScrollView }
+                    .first(where: { $0.contentSize.height > $0.bounds.height && $0.bounds.width > 0 }))
+                heights.append(scroll.contentSize.height)
+                XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
+                let bottom = scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom
+                scroll.setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
+                await self.settle(view)
+                XCTAssertEqual(scroll.contentOffset.y, bottom, accuracy: 1)
+                XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
+            }
+        }
+        XCTAssertEqual(heights.count, 2)
+        XCTAssertGreaterThan(heights[1], heights[0], "The separate component section must actually be laid out.")
+    }
+
     private func report(kind: LaunchTimingKind = .cold, outcome: LaunchTimingOutcome = .ready,
-                        seconds: Double = 1, rows: [LaunchTimingRow] = []) -> LaunchTimingReport {
-        LaunchTimingReport(id: UUID(), kind: kind, outcome: outcome, totalSeconds: seconds, rows: rows)
+                        seconds: Double = 1, rows: [LaunchTimingRow] = [],
+                        components: [LaunchTimingComponent] = []) -> LaunchTimingReport {
+        LaunchTimingReport(id: UUID(), kind: kind, outcome: outcome,
+                           totalSeconds: seconds, rows: rows, components: components)
+    }
+
+    private var parallelComponents: [LaunchTimingComponent] {
+        [LaunchTimingComponent(id: UUID(), stage: .tokenizer, startOffsetSeconds: 0.077,
+                               seconds: 1.230, outcome: .completed),
+         LaunchTimingComponent(id: UUID(), stage: .imageModel, startOffsetSeconds: 0.112,
+                               seconds: 12.345, outcome: .completed),
+         LaunchTimingComponent(id: UUID(), stage: .textModel, startOffsetSeconds: 0.237,
+                               seconds: 8.210, outcome: .completed)]
     }
 
     private var fixture: LaunchTimingContent {
         let stages: [(LaunchTimingStage, Double)] = [
             (.entry, 0.012), (.queue, 0.004), (.worker, 0.002), (.places, 0.017),
-            (.models, 0.001), (.resources, 0.041), (.tokenizer, 1.230),
-            (.imageModel, 12.345), (.textModel, 8.210), (.counts, 0.062), (.publish, 0.011)
+            (.models, 0.001), (.resources, 0.041), (.parallelModels, 12.700),
+            (.modelAssembly, 0.009), (.counts, 0.062), (.publish, 0.011)
         ]
         let rows = stages.enumerated().map {
             LaunchTimingRow(id: $0.offset, stage: $0.element.0, seconds: $0.element.1)
         }
-        let failed = report(outcome: .failed, seconds: 0.240,
-                            rows: [LaunchTimingRow(id: 0, stage: .resources, seconds: 0.240)])
-        let ready = report(kind: .retry, seconds: rows.reduce(0) { $0 + $1.seconds }, rows: rows)
+        let failed = report(outcome: .failed, seconds: 0.240, rows: [
+            LaunchTimingRow(id: 0, stage: .entry, seconds: 0.010),
+            LaunchTimingRow(id: 1, stage: .resources, seconds: 0.080),
+            LaunchTimingRow(id: 2, stage: .parallelModels, seconds: 0.150)
+        ], components: [
+            LaunchTimingComponent(id: UUID(), stage: .tokenizer, startOffsetSeconds: 0.090,
+                                  seconds: 0.020, outcome: .completed),
+            LaunchTimingComponent(id: UUID(), stage: .imageModel, startOffsetSeconds: 0.100,
+                                  seconds: 0.140, outcome: .failed),
+            LaunchTimingComponent(id: UUID(), stage: .textModel, startOffsetSeconds: 0.110,
+                                  seconds: 0.130, outcome: .interrupted)
+        ])
+        let ready = report(kind: .retry, seconds: rows.reduce(0) { $0 + $1.seconds },
+                           rows: rows, components: parallelComponents)
         return LaunchTimingContent(reports: [failed, ready], version: "0.0-test", build: "fixture")
     }
 

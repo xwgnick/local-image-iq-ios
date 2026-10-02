@@ -47,6 +47,7 @@ struct LaunchTimingContent: View {
 
     static let historyNote = "仅保留本次进程记录；前台轻量刷新不覆盖记录。重试可能复用模型。"
     static let coldNote = "“本进程首次启动”不代表系统或模型缓存为空。"
+    static let parallelNote = "并行总等待包含排队、各任务启动时间差，以及结束或取消时等待全部任务退出，因此可能长于最慢子任务。但准备中断会立即冻结记录，不含其后共享任务继续加载或退出的时间。子任务记录的是经过时间，不是 CPU 用时；时间重叠，不相加，也不计入总耗时加总。"
 
     static func totalLabel(for report: LaunchTimingReport) -> String {
         report.outcome == .ready ? "到首页就绪" : "到本次准备结束"
@@ -72,6 +73,11 @@ struct LaunchTimingContent: View {
                 if let latest {
                     summary(latest)
                     stageList(latest)
+                    if !latest.components.isEmpty {
+                        LaunchTimingComponentList(components: latest.components)
+                            .padding(12)
+                            .background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+                    }
                 } else {
                     Text("本次进程暂无准备记录")
                         .font(.headline)
@@ -81,6 +87,7 @@ struct LaunchTimingContent: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("各段为实际经过时间，包含调度和等待，不是 CPU 用时。起点在启动准备入口，不含此前的 App 初始化。")
+                    Text(Self.parallelNote)
                     Text(Self.historyNote)
                     Text(Self.coldNote)
                 }
@@ -101,6 +108,7 @@ struct LaunchTimingContent: View {
                                         .font(.caption)
                                         .foregroundStyle(IQStyle.secondary)
                                     rows(report)
+                                    LaunchTimingComponentList(components: report.components)
                                 }
                                 .padding(.vertical, 6)
                             }
@@ -197,6 +205,43 @@ struct LaunchTimingContent: View {
             return "未知"
         }
         return value
+    }
+}
+
+/// Shared by the latest card and each older attempt; no invented missing rows.
+/// Kept separate from wall rows so overlapping branches cannot imply a sum.
+struct LaunchTimingComponentList: View {
+    let components: [LaunchTimingComponent]
+
+    static let title = "并行任务（时间重叠，不相加）"
+
+    static func detail(for component: LaunchTimingComponent) -> String {
+        "\(component.outcome.rawValue) · 启动后 +\(LaunchTimingReport.duration(component.startOffsetSeconds))开始"
+    }
+
+    var body: some View {
+        if !components.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(Self.title)
+                    .font(.subheadline.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(components) { component in
+                        VStack(alignment: .leading, spacing: 2) {
+                            LaunchTimingMetricRow(title: component.stage.rawValue,
+                                                  value: LaunchTimingReport.duration(component.seconds))
+                            Text(Self.detail(for: component))
+                                .font(.caption2)
+                                .foregroundStyle(IQStyle.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("launch-timing-component-\(component.stage.rawValue)")
+                    }
+                }
+            }
+        }
     }
 }
 

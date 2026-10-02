@@ -127,19 +127,50 @@ final class GeneratedModelParityTests: XCTestCase {
             try require(fixtures.images.cases.count == 6 && fixtures.text.cases.count == 17,
                         "App API parity requires exactly six image patterns and all seventeen text cases.")
             let encoders: any PhotoEncoding = CoreMLEncoders(bundle: fixtures.bundle)
-            let timing = LaunchTimingRecorder(kind: .cold)
-            let manifest = try await encoders.prepare(timing: timing)
+            // Exercise actual coordinator coalescing without another model pair.
+            // Scheduling can let a late caller see cached rather than shared;
+            // exactly one caller may initialize, regardless of completion order.
+            let preparations = try await withThrowingTaskGroup(of: (ModelManifest, LaunchTimingReport).self) { group in
+                for _ in 0..<3 {
+                    group.addTask {
+                        let timing = LaunchTimingRecorder(kind: .cold)
+                        let manifest = try await encoders.prepare(timing: timing)
+                        return (manifest, try XCTUnwrap(timing.finish(.ready)))
+                    }
+                }
+                var results: [(ModelManifest, LaunchTimingReport)] = []
+                for try await result in group { results.append(result) }
+                return results
+            }
+            XCTAssertEqual(preparations.count, 3)
+            XCTAssertTrue(preparations.allSatisfy { $0.0.modelVersion == fixtures.manifest.modelVersion })
+            let initializers = preparations.filter { !$0.1.components.isEmpty }
+            XCTAssertEqual(initializers.count, 1, "Concurrent callers must share exactly one model initialization.")
+            let (manifest, preparation) = try XCTUnwrap(initializers.first)
+            for (_, report) in preparations where report.components.isEmpty {
+                XCTAssertTrue(report.rows.map(\.stage) == [.entry, .sharedModels]
+                              || report.rows.map(\.stage) == [.entry, .cachedModels])
+            }
             try require(manifest.modelVersion == fixtures.manifest.modelVersion,
                         "The app actor must load the fixture owner's model pair.")
-            let preparation = try XCTUnwrap(timing.finish(.ready))
-            XCTAssertEqual(preparation.rows.map(\.stage), [.entry, .resources, .tokenizer, .imageModel, .textModel],
-                           "The production protocol witness must record actual model substeps.")
+            XCTAssertEqual(preparation.rows.map(\.stage), [.entry, .resources, .parallelModels, .modelAssembly],
+                           "The production protocol witness must record the parallel readiness barrier.")
             XCTAssertTrue(preparation.rows.allSatisfy { $0.seconds.isFinite && $0.seconds >= 0 })
+            XCTAssertEqual(preparation.components.map(\.stage), [.tokenizer, .imageModel, .textModel])
+            XCTAssertEqual(preparation.components.map(\.outcome), [.completed, .completed, .completed])
+            XCTAssertTrue(preparation.components.allSatisfy {
+                $0.startOffsetSeconds >= 0 && $0.seconds.isFinite && $0.seconds >= 0
+                    && $0.startOffsetSeconds + $0.seconds <= preparation.totalSeconds + 0.000001
+            })
+            XCTAssertEqual(preparation.rows.reduce(0) { $0 + $1.seconds }, preparation.totalSeconds,
+                           accuracy: 0.000001, "Overlapping child durations must never inflate the total.")
             let reused = LaunchTimingRecorder(kind: .retry)
             let reusedManifest = try await encoders.prepare(timing: reused)
             XCTAssertEqual(reusedManifest.modelVersion, manifest.modelVersion)
-            XCTAssertEqual(try XCTUnwrap(reused.finish(.ready)).rows.map(\.stage), [.entry, .cachedModels],
+            let reusedReport = try XCTUnwrap(reused.finish(.ready))
+            XCTAssertEqual(reusedReport.rows.map(\.stage), [.entry, .cachedModels],
                            "Already-loaded models must not be reported as newly loaded.")
+            XCTAssertTrue(reusedReport.components.isEmpty)
 
             for fixture in fixtures.images.cases {
                 let preview = try modelSizedPreview(fixture, resources: fixtures, report: &report)

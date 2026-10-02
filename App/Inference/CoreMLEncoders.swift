@@ -35,7 +35,7 @@ actor CoreMLEncoders: PhotoEncoding {
     private var loaded: Loaded?
     private var loadingTask: Task<Void, Error>?
 
-    private struct ModelResources {
+    private struct ModelResources: Sendable {
         let manifest: ModelManifest
         let imageURL: URL
         let textURL: URL
@@ -46,7 +46,7 @@ actor CoreMLEncoders: PhotoEncoding {
         let manifest: ModelManifest
         let imageURL: URL
         let image: CoreMLImageEncoder
-        let text: MLModel
+        let text: CoreMLTextEncoder
         let tokenizer: SigLIPTokenizer
     }
 
@@ -99,11 +99,9 @@ actor CoreMLEncoders: PhotoEncoding {
             throw AppFailure.modelContract("Tokenizer must produce 64 IDs and mask values.")
         }
         try Task.checkCancellation()
-        let ids = try Self.int32Tensor(tokens.inputIDs)
-        let input = try MLDictionaryFeatureProvider(dictionary: ["input_ids": ids])
-        let output = try predict(model: models.text, input: input)
+        let projection = try await models.text.text(ids: tokens.inputIDs, output: models.manifest.output)
         try Task.checkCancellation()
-        return try Self.projection(output, name: models.manifest.output)
+        return projection
     }
 
     static func int32Tensor(_ values: [Int32]) throws -> MLMultiArray {
@@ -111,11 +109,6 @@ actor CoreMLEncoders: PhotoEncoding {
         let tensor = try MLMultiArray(shape: [1, 64], dataType: .int32)
         for (index, value) in values.enumerated() { tensor[index] = NSNumber(value: value) }
         return tensor
-    }
-
-    /// Keep overload resolution in a synchronous context, even when callers are async.
-    private func predict(model: MLModel, input: MLFeatureProvider) throws -> MLFeatureProvider {
-        try model.prediction(from: input)
     }
 
     fileprivate nonisolated static func projection(_ output: MLFeatureProvider, name: String) throws -> [Float] {
@@ -192,19 +185,24 @@ actor CoreMLEncoders: PhotoEncoding {
             timing?.mark(.resources)
             let resources = try modelResources()
             let manifest = resources.manifest
-            timing?.mark(.tokenizer)
-            let tokenizer = try await SigLIPTokenizer.load(directory: resources.tokenizerDirectory)
-            timing?.mark(.imageModel)
-            let image = CoreMLImageEncoder(modelURL: resources.imageURL, manifest: manifest)
-            try await image.prepare()
-            timing?.mark(.textModel)
-            let configuration = MLModelConfiguration()
-            configuration.computeUnits = .all
-            let text = try MLModel(contentsOf: resources.textURL, configuration: configuration)
-            try Self.validate(model: text, inputs: ["input_ids": ([1, 64], .int32)])
+            let parts = try await ParallelModelPreparation.load(
+                timing: timing,
+                tokenizer: { try await SigLIPTokenizer.load(directory: resources.tokenizerDirectory) },
+                image: {
+                    let image = CoreMLImageEncoder(modelURL: resources.imageURL, manifest: manifest)
+                    try await image.prepare()
+                    return image
+                },
+                text: {
+                    let text = CoreMLTextEncoder(modelURL: resources.textURL)
+                    try await text.prepare()
+                    return text
+                })
             try Task.checkCancellation()
-            loaded = Loaded(manifest: manifest, imageURL: resources.imageURL, image: image,
-                            text: text, tokenizer: tokenizer)
+            // Publish the complete set only after all children and validation
+            // succeed. A failed group cannot leave a partially ready coordinator.
+            loaded = Loaded(manifest: manifest, imageURL: resources.imageURL, image: parts.image,
+                            text: parts.text, tokenizer: parts.tokenizer)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as AppFailure {
@@ -235,6 +233,38 @@ actor CoreMLEncoders: PhotoEncoding {
               constraint.shape.map(\.intValue) == shape, constraint.dataType == type else {
             throw AppFailure.modelContract("Wrong shape or type for \(name).")
         }
+    }
+}
+
+/// Owns the text model on its own executor so synchronous Core ML setup can
+/// overlap with the image actor and tokenizer. MLModel is never shared unchecked.
+private actor CoreMLTextEncoder {
+    private let modelURL: URL
+    private var model: MLModel?
+
+    init(modelURL: URL) { self.modelURL = modelURL }
+
+    func prepare() throws {
+        try Task.checkCancellation()
+        if model != nil { return }
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .all
+        let text = try MLModel(contentsOf: modelURL, configuration: configuration)
+        try CoreMLEncoders.validate(model: text, inputs: ["input_ids": ([1, 64], .int32)])
+        try Task.checkCancellation()
+        model = text
+    }
+
+    /// Keep features, prediction and projection on the same actor; only values
+    /// cross its boundary. Synchronous context also fixes overload resolution.
+    func text(ids: [Int32], output: String) throws -> [Float] {
+        try Task.checkCancellation()
+        guard let model else { throw AppFailure.modelContract("Text model initialization did not complete.") }
+        let tensor = try CoreMLEncoders.int32Tensor(ids)
+        let input = try MLDictionaryFeatureProvider(dictionary: ["input_ids": tensor])
+        let result = try model.prediction(from: input)
+        try Task.checkCancellation()
+        return try CoreMLEncoders.projection(result, name: output)
     }
 }
 
