@@ -1,6 +1,12 @@
-# Cloud build status — 2026-09-29
+# Cloud build status — 2026-10-02
 
-## Current: 0.5.2 (build 15) — 首轮 SUCCESS；冷启动准备页已交付，本地 IPA 与 CRC 校验完成
+## Current preparation: 0.5.3 (build 16) — B02 初版图标与纯图标启动页
+
+用户要求沿用既有构建方式：精确个人公开仓库 xwgnick/local-image-iq-ios，手动 ios.yml，标准 macos-15，include_models / all_compute_units / build_device_ipa 全部开启。保留全部原生／模型／设备验证门槛，不绕过测试，不使用企业 origin。
+
+本地 12 项品牌静态检查＋30 项既有静态测试及源码契约检查通过；版本已准备为 0.5.3 / 16。尚未取得本轮远端 run ID 或原生结果，不能声称构建成功或已有可安装新包。改动见 [APP_ICON_AND_LAUNCH.md](APP_ICON_AND_LAUNCH.md)。
+
+## Previous delivery: 0.5.2 (build 15) — 首轮 SUCCESS；旧冷启动准备页已交付，本地 IPA 与 CRC 校验完成
 
 [Run 36560321362](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36560321362)
 ／[job 109379367704](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36560321362/job/109379367704)，

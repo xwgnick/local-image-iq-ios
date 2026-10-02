@@ -8,12 +8,13 @@ extension XCTestCase {
         // TEST ONLY: real model cold loading gets its own 90-second wait, not a
         // production deadline or an increase to keyboard/navigation timeouts.
         // Observe either outcome on the running app; a fast launch need not
-        // expose the transient spinner to the test before reaching home.
+        // expose the transient static icon to the test before reaching home.
         let homeOrStartupError = XCTNSPredicateExpectation(
             predicate: NSPredicate { object, _ in
                 guard let application = object as? XCUIApplication else { return false }
                 return application.buttons["open-settings"].exists
-                    || application.buttons["startup-open-home"].exists
+                    || application.descendants(matching: .any)
+                        .matching(identifier: "startup-recovery-icon").firstMatch.exists
             }, object: app)
         guard XCTWaiter.wait(for: [homeOrStartupError], timeout: 90) == .completed else {
             recordLaunchFailure(in: app, message: "Cold startup reached neither home nor a startup error within 90 seconds",
@@ -21,8 +22,9 @@ extension XCTestCase {
             return
         }
 
-        let openHomeAfterError = app.buttons["startup-open-home"]
-        if openHomeAfterError.exists {
+        let recoveryIcon = app.descendants(matching: .any)
+            .matching(identifier: "startup-recovery-icon").firstMatch
+        if recoveryIcon.exists {
             let requireModels = ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"]
             guard requireModels == "0" else {
                 let message = requireModels == "1"
@@ -33,9 +35,10 @@ extension XCTestCase {
             }
 
             // Only an explicitly model-free test run may use this real recovery
-            // action. Keep evidence of the error; never tap startup-retry.
+            // action. Keep evidence of the error; never tap/retry the icon.
             attachLaunchDiagnostics(in: app, message: "Explicit model-free run (IMAGEIQ_REQUIRE_MODELS=0): opening home after startup error")
-            openHomeAfterError.tap()
+            XCTAssertTrue(recoveryIcon.isHittable)
+            recoveryIcon.press(forDuration: 1.2)
         }
 
         // Retain the existing 10-second home-control wait, including after the

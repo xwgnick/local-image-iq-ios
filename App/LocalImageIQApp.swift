@@ -15,6 +15,7 @@ struct LocalImageIQApp: App {
                     StartupView(state: state)
                 }
             }
+                .statusBarHidden(state.launchPhase != .ready)
                 .tint(IQStyle.accent)
                 .task { state.start() }
                 .onChange(of: scenePhase) { _, phase in

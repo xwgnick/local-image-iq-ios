@@ -21,11 +21,9 @@ final class PresentationNavigationTests: XCTestCase {
     func testHomeAndUnauthorizedLibraryNavigation() {
         launch()
         // Verify the real launch's settled outcome, not whether a possibly
-        // brief startup spinner happened to be sampled by accessibility.
-        XCTAssertFalse(app.staticTexts["startup-screen"].exists)
-        XCTAssertFalse(app.staticTexts["startup-phase"].exists)
-        XCTAssertFalse(app.buttons["startup-retry"].exists)
-        XCTAssertFalse(app.buttons["startup-open-home"].exists)
+        // brief startup icon happened to be sampled by accessibility.
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "startup-icon").firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "startup-recovery-icon").firstMatch.exists)
         XCTAssertFalse(app.alerts.firstMatch.exists)
         assertHomeControls()
         let libraryReady = XCTNSPredicateExpectation(
@@ -178,10 +176,8 @@ final class PresentationNavigationTests: XCTestCase {
         // Terminate while ON: turning it off first would not test session-only reset.
         app.terminate()
         launch()
-        XCTAssertFalse(app.staticTexts["startup-screen"].exists)
-        XCTAssertFalse(app.staticTexts["startup-phase"].exists)
-        XCTAssertFalse(app.buttons["startup-retry"].exists)
-        XCTAssertFalse(app.buttons["startup-open-home"].exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "startup-icon").firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "startup-recovery-icon").firstMatch.exists)
         XCTAssertFalse(app.alerts.firstMatch.exists)
         app.buttons["open-settings"].tap()
         expectHittable(settingsDone)

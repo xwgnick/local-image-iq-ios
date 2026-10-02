@@ -32,56 +32,82 @@ final class StartupPresentationTests: XCTestCase {
                            appearance: .dark, id: "error-dark")
     }
 
-    func testPhasePresentationValuesDoNotImplyWorkBeforeStartOrAfterCompletion() {
-        let cases: [(AppState.LaunchPhase, String, Bool, Bool)] = [
-            (.pending, "等待启动准备", false, false),
-            (.checkingLibrary, "检查照片访问与索引", true, false),
-            (.preparingSearch, "准备本机搜索模型", true, false),
-            (.failed, "启动暂未完成", false, true),
-            (.ready, "准备就绪", false, false)
-        ]
-        for (phase, text, loading, recovery) in cases {
+    func testRecoveryActionsAreOnlyEnabledAfterFailure() {
+        for phase in [AppState.LaunchPhase.pending, .checkingLibrary, .preparingSearch, .failed, .ready] {
+            var retries = 0
+            var openedHome = 0
             let content = StartupContent(phase: phase, issue: nil,
-                                         onRetry: {}, onOpenHome: {})
-            XCTAssertEqual(content.phaseText, text)
-            XCTAssertEqual(content.isLoading, loading)
-            XCTAssertEqual(content.showsRecoveryActions, recovery)
-            XCTAssertFalse(content.detailText.isEmpty)
+                                         onRetry: { retries += 1 }, onOpenHome: { openedHome += 1 })
+            XCTAssertEqual(content.canRecover, phase == .failed)
+            content.retryIfFailed()
+            XCTAssertEqual(retries, phase == .failed ? 1 : 0)
+            XCTAssertEqual(openedHome, 0, "Retry must not navigate")
+            content.openHomeIfFailed()
+            XCTAssertEqual(openedHome, phase == .failed ? 1 : 0)
+            XCTAssertEqual(retries, phase == .failed ? 1 : 0, "Continue must not retry")
         }
-        // These are the production presentation values, not evidence that a
-        // particular accessibility element is present, enabled or tappable.
     }
 
-    func testFailureUsesGenericFallbackAndRedactsLocalDetails() {
+    func testVoiceOverFailureUsesGenericFallbackAndRedactsLocalDetails() {
         let fallback = StartupContent(phase: .failed, issue: nil, onRetry: {}, onOpenHome: {})
         let blank = StartupContent(phase: .failed, issue: " \n ", onRetry: {}, onOpenHome: {})
-        XCTAssertEqual(blank.detailText, fallback.detailText)
+        XCTAssertEqual(blank.accessibilityStatus, fallback.accessibilityStatus)
         let redacted = StartupContent(phase: .failed, issue: "检查失败：file:///synthetic/private/model",
                                       onRetry: {}, onOpenHome: {})
-        XCTAssertFalse(redacted.detailText.contains("/synthetic/private/model"))
+        XCTAssertFalse(redacted.accessibilityStatus.contains("/synthetic/private/model"))
         let loading = StartupContent(phase: .checkingLibrary, issue: "过期的失败消息",
                                      onRetry: {}, onOpenHome: {})
-        XCTAssertFalse(loading.detailText.contains("过期的失败消息"))
+        XCTAssertFalse(loading.accessibilityStatus.contains("过期的失败消息"))
     }
 
-    func testLargestDynamicTypeOnSmallPhoneCanScrollWithoutHorizontalOverflow() async throws {
+    func testSelectedLogoAndLaunchBackgroundExistInAppBundle() throws {
+        let logo = try XCTUnwrap(UIImage(named: StartupAppearance.imageName))
+        XCTAssertEqual(logo.size, CGSize(width: 192, height: 192))
+        let pixels = try XCTUnwrap(logo.cgImage)
+        XCTAssertGreaterThan(pixels.width, 0)
+        XCTAssertEqual(pixels.width, pixels.height)
+        XCTAssertNotNil(UIColor(named: StartupAppearance.backgroundName))
+        XCTAssertNotNil(Bundle.main.url(forResource: "LaunchScreen", withExtension: "storyboardc"),
+                        "XcodeGen must bundle the static launch storyboard")
+    }
+
+    func testEveryPhaseDrawsTheSameIconOnlyPixels() throws {
+        // Compare native SwiftUI rendering across phases, not against a mock image.
+        // No time-varying pixels, status labels or failure adornments are allowed.
+        for scheme in [ColorScheme.light, .dark] {
+            for size in [phone, CGSize(width: 320, height: 568), CGSize(width: 852, height: 393)] {
+                var baseline: Data?
+                for phase in [AppState.LaunchPhase.pending, .checkingLibrary, .preparingSearch, .failed, .ready] {
+                    let content = StartupContent(phase: phase, issue: "测试失败信息",
+                                                 onRetry: { XCTFail("Rendering must not retry") },
+                                                 onOpenHome: { XCTFail("Rendering must not navigate") })
+                        .environment(\.colorScheme, scheme)
+                        .environment(\.dynamicTypeSize, .accessibility5)
+                        .frame(width: size.width, height: size.height)
+                    let renderer = ImageRenderer(content: content)
+                    renderer.scale = 1
+                    let image = try XCTUnwrap(renderer.uiImage)
+                    XCTAssertEqual(image.size, size)
+                    let data = try XCTUnwrap(image.pngData())
+                    if let baseline {
+                        XCTAssertEqual(data, baseline, "Only accessibility/interaction may change with phase")
+                    } else {
+                        baseline = data
+                    }
+                }
+            }
+        }
+    }
+
+    func testLargestDynamicTypeOnSmallPhoneHasNoScrollOrSpinner() async throws {
         let content = StartupContent(phase: .failed, issue: nil,
                                      onRetry: { XCTFail("Rendering must not retry") },
                                      onOpenHome: { XCTFail("Rendering must not open home") })
         try await withHost(content, size: CGSize(width: 320, height: 568), appearance: .dark,
                            dynamicTypeSize: .accessibility5) { view in
-            let scroll = try XCTUnwrap(self.descendants(view).compactMap { $0 as? UIScrollView }.first)
-            XCTAssertGreaterThan(scroll.bounds.height, 0)
-            XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height,
-                                 "Large text must grow the actual scroll content, not be shrunk to fit")
-            XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1)
-            let bottom = max(-scroll.adjustedContentInset.top,
-                             scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
-            scroll.setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
-            scroll.layoutIfNeeded()
-            XCTAssertEqual(scroll.contentOffset.y, bottom, accuracy: 1)
-            // This establishes scroll geometry only, not footer/button semantics.
-            // No extra screenshot: the review set remains exactly four frames.
+            XCTAssertFalse(self.descendants(view).contains { $0 is UIScrollView })
+            XCTAssertFalse(self.descendants(view).contains { $0 is UIActivityIndicatorView })
+            XCTAssertLessThan(StartupAppearance.iconSize, min(view.bounds.width, view.bounds.height))
         }
     }
 
@@ -97,7 +123,7 @@ final class StartupPresentationTests: XCTestCase {
             format.preferredRange = .standard
             var drewHierarchy = false
             let image = UIGraphicsImageRenderer(size: self.phone, format: format).image { context in
-                UIColor(IQStyle.background)
+                UIColor(Color(StartupAppearance.backgroundName))
                     .resolvedColor(with: UITraitCollection(userInterfaceStyle: appearance)).setFill()
                 context.fill(view.bounds)
                 drewHierarchy = view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
@@ -163,8 +189,8 @@ final class StartupPresentationTests: XCTestCase {
         host.view.layoutIfNeeded()
         await fulfillment(of: [laidOut], timeout: 5)
 
-        // Drain native layout updates, without sleeps, launch timers or making
-        // a system spinner's time-varying pixels into a stability assertion.
+        // Drain native layout updates without sleeps, launch timers or
+        // production delays for a static logo.
         let settled = expectation(description: "Startup native layout updates completed")
         DispatchQueue.main.async {
             host.view.setNeedsLayout()

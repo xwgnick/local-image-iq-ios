@@ -1,0 +1,50 @@
+{
+  "selection": "AlbumVsPhotoSearch_2026-10-01/B02; selected 2026-10-02",
+  "source": "Resources/Branding/B02-selected.png",
+  "source_sha256": "5c5dd3cfb41febfccdffbd4feacaf5e9033d8d9c49a26d3551a74f3f70b4500f",
+  "process": "Aspect-fit selected tile; no redraw, recolour, stretch or outside shadow",
+  "app_icon_background_rgb": [
+    43,
+    44,
+    46
+  ],
+  "launch_size_points": 192,
+  "outputs": [
+    {
+      "path": "App/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+      "mode": "RGB",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sha256": "f2841644d97f8b1c03fec4c3e6fe41ffd1ecae09e33014b8ce7a09f8190eae19"
+    },
+    {
+      "path": "App/Assets.xcassets/LaunchLogo.imageset/LaunchLogo.png",
+      "mode": "RGBA",
+      "dimensions": [
+        192,
+        192
+      ],
+      "sha256": "7c1cc843072053729f4687ed7a5aeed8811a3c4a9ed1ef62b34cc48e7b4b6a5b"
+    },
+    {
+      "path": "App/Assets.xcassets/LaunchLogo.imageset/LaunchLogo@2x.png",
+      "mode": "RGBA",
+      "dimensions": [
+        384,
+        384
+      ],
+      "sha256": "1ea1e000ad4df29234442cb9c0eed4ba664a3fa1a056d78ea0a20018f4f29f60"
+    },
+    {
+      "path": "App/Assets.xcassets/LaunchLogo.imageset/LaunchLogo@3x.png",
+      "mode": "RGBA",
+      "dimensions": [
+        576,
+        576
+      ],
+      "sha256": "6361cef3ba9f1054a59a39b552d6387711ab2d7c075b4c993ac339e8d59e9a24"
+    }
+  ]
+}

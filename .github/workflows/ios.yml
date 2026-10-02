@@ -63,6 +63,7 @@ jobs:
           node scripts/package_device.mjs --self-test
           node --test scripts/test_publish_release.mjs
           python scripts/test_static.py
+          python scripts/test_branding.py
           plutil -lint App/Info.plist
           swift test --package-path Packages/ImageIQCore
       - name: Generate and validate required public offline Places pack

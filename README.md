@@ -2,7 +2,13 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 当前（2026-09-29）：0.5.2（build 15）— 首轮 SUCCESS，冷启动准备页已交付
+## 最新代码（2026-10-02）：0.5.3 / build 16，B02 图标＋纯图标启动页，待原生构建
+
+已接入用户选定的 B02。系统 Launch Screen 与 App 内实际准备页均只显示同一张静态图标，无名称、阶段文字、进度条或转圈；不改变模型准备门控、不加人为等待。失败恢复使用图标轻点／长按与辅助功能动作，正常准备不能跳过。
+
+本地品牌静态检查 **12 项**、既有静态测试 **30 项**及源码契约检查通过。用户已要求按既有个人公开仓库／标准 macOS 手动流程构建，**本轮原生测试与交付尚待结果**。完整行为、素材及验证边界见 [docs/APP_ICON_AND_LAUNCH.md](docs/APP_ICON_AND_LAUNCH.md)。下面 build 15 是最近的已交付历史，不是本次改动的测试结果。
+
+## 最近交付（2026-09-29）：0.5.2（build 15）— 首轮 SUCCESS，旧版冷启动准备页
 
 - [CI 36560321362](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36560321362)
    ／[job 109379367704](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36560321362/job/109379367704)，
