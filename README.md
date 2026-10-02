@@ -2,7 +2,19 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 当前交付：0.5.5 / build 18 启动耗时截图页，首轮 SUCCESS
+## 当前交付（2026-10-03）：0.5.6 / build 19，并行准备，首轮 SUCCESS
+
+分词器、主图像模型、文本模型改为 **3 个并行准备分支，全部就绪后才进首页**，不把加载移到首次查询。纯图标启动、FP32／`.all`、模型与索引／地点缓存身份、手动索引和 20 个索引 worker 不变，无需重建索引。
+
+[CI 37047342399](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37047342399)／[job 110971929351](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37047342399/job/110971929351)，构建源码 `382452945f80eda35174407890abf5b518e47994`，既有个人公开仓库完整 macos-15 手动门槛首轮成功：核心 **79**，App **527＝526 通过／1 既有 SQLite 跳过／0 失败**，UI **11 全通过**；CPU 参考及全部模型对齐门槛保留，设备 arm64 Release 构建通过。
+
+**[本地已校验 IPA](build/device-download/37047342399/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37047342399-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37047342399-1)。已完整流式核验 **1,418,554,098 字节**及 SHA-256 `adbefa8524b5521c1a00b58419b9f277bd2278f968f8ca98cc639fff7afecc38`，全量 CRC PASS；9 项资产、prerelease、非 draft／Latest。完整账本见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+
+父流程实际查看 [六附件联系图](build/ui-review/37047342399/timing-contact.jpg)：两张真实计时截图字节相同（全部三分支一屏可见，无需滚动），**仅一次模拟器记录**，总计 **4.554 秒**、并行父阶段 **4.533 秒**；其余四张为合成夹具。不能与 build 18 手机多次约 **5 秒**直接比较，不承诺快 3 秒，峰值内存未测。
+
+**build 19 真机安装／性能待确认**：原 Sideloadly 账号／有效 Bundle ID 覆盖安装，**不卸载、不清索引、不重建**；先正常查询确认，再到“设置 → 显示调试工具 → 诊断信息 → 启动耗时”截图总耗时及并行三行。计时／取消覆盖边界见 [docs/LAUNCH_TIMING.md](docs/LAUNCH_TIMING.md)，安装见 [docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)。以下旧记录含当时的待验证状态，不作为当前操作要求。
+
+## 历史交付：0.5.5 / build 18 启动耗时截图页，首轮 SUCCESS
 
 设置中开启“显示调试工具”，展开“诊断信息 → 启动耗时”，即可截图总耗时及模型／分词器／统计等分段。计时自动记录，启动页仍只有图标，不改变手动索引或加载策略。测量边界与查看步骤见 [docs/LAUNCH_TIMING.md](docs/LAUNCH_TIMING.md)。
 

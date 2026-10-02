@@ -5,7 +5,19 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前（2026-10-02）：0.5.5（build 18）— 启动耗时诊断版，首轮 SUCCESS
+## 当前（2026-10-03）：0.5.6（build 19）— 首轮 SUCCESS，可覆盖安装；真机待验
+
+**[本地已校验 IPA](../build/device-download/37047342399/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37047342399-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37047342399-1)（402078025）。原始 IPA **1,418,554,098 字节**，SHA-256 `adbefa8524b5521c1a00b58419b9f277bd2278f968f8ca98cc639fff7afecc38`；完整流式下载、实际哈希及 7-Zip 26.03 全量 CRC 通过，`ipaVerifiedLocally: true`。[下载记录](../build/device-download/37047342399/release-fetch-99209550-b1dd-46a4-8588-0a49dfef19f8.json) 与配套报告齐全。本机无需重下；另一台电脑从 Release 下载，核对同一长度／哈希。
+
+[CI 37047342399](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37047342399) 首轮完整 macos-15 手动流程 SUCCESS，源码 `382452945f80eda35174407890abf5b518e47994`：核心 **79**、App **527（526 通过／1 既有 SQLite 跳过）**、UI **11 全通过**，CPU 参考／全部模型对齐保留。包为 **arm64 Release、未签名、iOS 17+、SDK 18.5／Xcode 16.4**；9 项资产于 **2026-10-02T18:59:53Z** 发布，prerelease、非 draft／Latest。公开下载和原包校验不等于免签安装或手机已验证；详见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+1. 用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**；签名步骤见下方第 1–5 节。
+2. 等纯图标准备完成，先正常查询一次，确认已有索引仍可搜索。
+3. 打开 **设置 → 显示调试工具 → 诊断信息 → 启动耗时**，截图版本、总耗时与三条并行任务的时长／完成状态／开始偏移；只有一屏放不下才补第二张。不必先开调试再启动，也不需为测速反复重启或清数据。
+
+三项准备并行但仍全部就绪后才进首页，不转嫁到首搜；FP32／`.all`、模型与缓存身份、手动索引及 20 个索引 worker 不变。父流程已查看 [六附件联系图](../build/ui-review/37047342399/timing-contact.jpg)：两张实际计时截图字节相同（三分支已同屏），**只有一次模拟器记录 4.554 秒**；四张合成图不是手机测量。不能与 build 18 手机 **15.981 → 4.559 秒、随后多次约 5 秒**基线直接比较，不承诺快 3 秒；build 19 手机性能及峰值内存待验证。完整范围见 [LAUNCH_TIMING.md](LAUNCH_TIMING.md)。以下旧版包及当时操作仅保留历史，不照做旧迁移／清库步骤。
+
+## 历史（2026-10-02）：0.5.5（build 18）— 启动耗时诊断版，首轮 SUCCESS
 
 **[本地已校验 IPA](../build/device-download/37031320019/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开下载页](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37031320019-1)。原始 IPA 1,418,525,487 字节，SHA-256 `88fc52f0a9e957bc267fac02c396e4b0e3dade0f45d070eef5ffbcab5bda589f`；实际完整下载、哈希和全量 CRC 通过。核心 79、App 505（504 通过／1 既有跳过）、UI 11，无失败。设备 arm64 Release／未签名／iOS 17+，模型必需未绕过；本轮[验证账本](BUILD_STATUS.md)。
 
