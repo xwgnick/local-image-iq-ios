@@ -1,12 +1,54 @@
 # Cloud build status — 2026-10-02
 
-## Current preparation: 0.5.4 (build 17) — 用户手动管理索引，待原生验证
+## Current: 0.5.4 (build 17) — 首轮 SUCCESS；用户手动管理索引，已交付
 
-启动／自动刷新改为只读已存索引统计和小型地点元数据，不扫描图库、不删除记录、不解析完整边界；保留模型准备和 B02 纯图标门控。手动更新复用未变记录，全部重建需明确确认；搜索按当前访问范围过滤后才评分，不改写数据库。已有可访问但编辑过的照片仍按旧索引匹配，直到手动更新。
+[Run 37022941546](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546)
+／[job 110890327401](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546/job/110890327401)，源码 **`02d5bc72b4d463bf2adca50dbf1d571a93183354`**。
+既有个人公开仓库／标准 macos-15 流程，模型、全部计算单元及设备 IPA 开启，**首轮 COMPLETED / SUCCESS**。无测试绕过、无第二次构建；**PASS-NATIVE／PASS-PACKAGE／DELIVERED**，真机启动耗时仍未测量。
 
-地点 GeoJSON 仍为 15,175,079 字节／2,943 要素，SHA-256 `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`，缓存身份 `raycast-v1-93c9a925e35247f2` 不变。新增约 23KB 的清单字段在构建时计算原身份，运行时不为取版本解析几何。
+### build 17 行为与兼容性
 
-本地静态／品牌／地点 Python 测试 30＋12＋32 通过，Node 源码／地点／打包检查通过。Swift／原生测试与新 IPA 尚待本轮构建结果，不以本地通过推断真机性能。改动契约见 [MANUAL_INDEX_STARTUP.md](MANUAL_INDEX_STARTUP.md)。
+- 启动／自动刷新只读已存索引统计和小型地点元数据，**不扫描图库、不删除记录、不解析完整边界、不二次核对图库**；保留全部模型／分词器准备与 B02 纯图标门控。
+- “更新索引”手动处理新增／变化照片并复用未变记录；“全部重建索引”须明确确认后清空本地缓存再建。自动路径不会替用户发起更新。取消清除／重建时统计标为未知，可通过只读刷新恢复，不凭旧数值认为索引仍存在。
+- 搜索只读当前授权快照，在向量解码、排名、地点均值之前排除已删除／不可访问行；评分前后核对变化，结果发布时再检查授权、通知代数和返回照片。**搜索不写库、不清理索引**。可访问的编辑照片保留旧向量，直到用户手动更新；新增照片也不会自动纳入。
+- 搜索仍进行只读图库核对，不能声称整个 App 已不检查 PhotoKit。此成本不在启动路径内。没有真机分段计时，不承诺固定秒数提升。
+- 地点 GeoJSON **15,175,079 字节／2,943 要素**、SHA-256 `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4` 与缓存身份 **`raycast-v1-93c9a925e35247f2`** 不变。构建生成 22,960 字节小清单，运行时用其版本／覆盖说明；完整边界只供手动索引按需加载。
+- 模型、预览策略、SQLite schema、20 worker、搜索数学与翻译策略未变，不要求旧有效索引重建。
+
+### build 17 验证账本
+
+|项目|实际结果／边界|
+|---|---|
+|Swift 核心|79 通过，0 失败。|
+|App XCTest|484＝483 通过／1 项既有真机文件保护模拟器跳过／0 失败；176.486 秒，wall 212.219 秒。|
+|手动索引状态|ManualIndexStateTests 13 全通过；明确更新／清除再建顺序、取消、失败和前后台守卫。|
+|地点元数据|PlacePackMetadataTests 13 全通过；仅小清单读取、损坏／缺失元数据不回退解析几何、FNV 与旧解析器一致。|
+|启动与自动刷新|LaunchState 15、LaunchWorker 8、RefreshReadiness 14 全通过；自动路径零枚举、零清理、数据库不变及原模型门控。|
+|索引与存储|PhotoIndexWorker 29、SQLitePhotoStore 26（1 既有跳过）通过；权限筛选先于地点居中／解码，旧编辑向量手动替换，搜索只读。|
+|启动视觉|StartupPresentation 9 全通过，0.487 秒；初版 B02 与纯图标行为保留。|
+|真实模型对齐|GeneratedModelParity 8 全通过，120.257 秒；模型必需、对齐门槛不变。|
+|独立 UI|10 全通过，503.763 秒；导航 5／283.213 秒，键盘 5／220.550 秒。|
+|设备构建|BUILD SUCCEEDED；0.5.4 / 17，arm64 Release，未签名，SDK 18.5，Xcode 16.4，最低 iOS 17。|
+|发布与下载|9 项资产发布核验成功；本地 IPA 全量流式长度／SHA-256 验证通过。|
+|归档完整性|7-Zip 26.03 `t` 全量 CRC PASS，Everything is Ok；11 文件夹、30 文件，解压后 1,563,320,201 字节。|
+
+子套件已包含在 App 484 中，不重复相加；与 build 16 相比新增 55 项 App 测试。本地静态／品牌／地点 Python 测试 30＋12＋32 及 Node 检查通过，不能替代上表原生结果，也不能以 CI 耗时当手机性能。
+
+### build 17 安装包身份
+
+- [Release ci-37022941546-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37022941546-1)，ID **401925676**，**2026-10-02T15:15:39Z** 发布；非 draft、prerelease、非 Latest。
+- IPA asset **605869344**，**1,418,481,134 字节**，SHA-256 **`51068e4916314399c0ad7bae3e0db7c33ac652691976cfd51c4ae4a241e3b071`**。
+- [本地 IPA](../build/device-download/37022941546/LocalImageIQ-iphoneos-unsigned.ipa)、[设备报告](../build/device-download/37022941546/device-build.json)、[交付清单](../build/device-download/37022941546/delivery.json)、[校验文件](../build/device-download/37022941546/SHA256SUMS.txt)、[实际下载记录](../build/device-download/37022941546/release-fetch-1bcda8c5-e734-4b0b-9cb8-a815559b795d.json)，`ipaVerifiedLocally: true`。
+- 实际读取 IPA 的小型 Info.plist／地点清单：确认 **0.5.4 / 17、AppIcon**，及原 geography FNV 和几何 SHA。设备中的清单 SHA-256 为 `7edb232043452d9a6f718b8a59a121fa0938dfdd54e732ed97e2be60f195b7e5`；构建环境元数据可不同，地点几何与运行时缓存身份不变。
+- [UIReview.zip](../build/ui-review/37022941546/UIReview.zip) 已下载，asset **605869170**，**4,253,640 字节**，SHA-256 `afd7a841ca6c111cb124ed132062dd484a5ae64d7735bd0659f1c3aec1e9e4a3`。
+
+### build 17 有限视觉审核与安装
+
+实际仅查看 [1340×758 联系图](../build/ui-review/37022941546/manual-index-contact.jpg)：浅／深色合成启动图各 393×852，以及真实未授权首页／图库页各 1206×2622。启动图与 build 16 对应截图字节相同，测试水印不在生产界面；图库页显示手动建立／全部重建入口与说明。没有查看私人照片或声称审核了已授权大图库、重建确认点击／耗时。附件范围见 [审核清单](../build/ui-review/37022941546/manual-index-review.json)。
+
+原 Sideloadly 账号／有效 Bundle ID **覆盖安装，不卸载、不清索引，也不必为了升级重建**；需要纳入新照片／新编辑内容时再点“更新索引”。全部重建是可选明确操作，不是升级步骤。
+
+**PENDING-DEVICE**：手机安装、实际启动／搜索耗时、系统启动交接及真实图库行为待确认；模型仍会加载，不承诺秒开。完整契约见 [MANUAL_INDEX_STARTUP.md](MANUAL_INDEX_STARTUP.md)。未跟踪设计研究／原型仍仅本地保留，未加入公开提交；未改变个人公开仓库范围、CI 权限、计费或第三方许可证边界。
 
 ## Previous delivery: 0.5.3 (build 16) — 首轮 SUCCESS；B02 图标与纯图标启动页已交付
 

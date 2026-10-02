@@ -1,19 +1,28 @@
 # 初版图标 B02 与纯图标启动页
 
-## 当前源码补充（2026-10-02）：手动索引已实现，原生验证待完成
+## 当前交付（2026-10-02）：0.5.4 / build 17 首轮 SUCCESS，B02 画面保留
 
-**以下 build 16 SUCCESS 段落记录上次已交付的图标版本，不代表本轮新增源码已构建或交付。**用户已要求实现手动索引，相关源码／测试已本地修改；版本仍为 **0.5.3 / build 16**，没有对应的新 IPA。最后可下载的仍是下面的 [build 16 Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37004642577-1) 与 [../build/device-download/37004642577/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37004642577/LocalImageIQ-iphoneos-unsigned.ipa)，不含本轮改动。
+**手动索引与启动路径调整已完成原生验证和交付。**[CI 37022941546](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546)／[job 110890327401](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546/job/110890327401)，源码 **`02d5bc72b4d463bf2adca50dbf1d571a93183354`**；既有个人公开仓库标准 `macos-15` 手动工作流，模型／全部计算单元／设备构建三个输入均为 `true`，**attempt 1 SUCCESS，无追加重试**。核心 **79 通过**、App **484＝483 通过／1 既有 SQLite 文件保护模拟器跳过／0 失败**、UI **10 通过**；本轮启动展示 **9**、启动状态 **15**、启动 worker **8** 均通过，已包含在 App 总数中，不重复计数。
 
-- B02 纯图标画面、失败手势和**冷启动完整模型准备**保留；不是去掉模型加载或允许正常启动跳过准备。
-- 新源码的启动／自动刷新不再枚举 PhotoKit 全库、清理索引或读取完整地点几何；只读 SQL 聚合保存统计，数量不是当前可搜索数量。授权数量有未扫描 known flag，清除／重建后统计未知也可通过只读刷新恢复，不会永久锁死。
-- 完整边界仅由手动索引按需加载；约 22 KB 小 manifest 新增运行时元数据，支持注入／缓存，缺失或无效即不可用，不回退到完整解析。地点版本仍为 `raycast-v1-93c9a925e35247f2`，完整几何字节 SHA-256 仍为 `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`；模型流程、缓存身份及 SQLite schema 1 不变。
-- 手动更新按 ID／revision 复用未变化记录，只为新增、变化或缺少有效记录的照片编码，并负责清理。全部重建须明确确认，再执行既有 `clear()` → `index()`；20 worker、HQ224／Fast、取消／提交与 iCloud 规则不变。
-- 搜索保留初始／评分前／评分后三次只读授权快照，在向量解码和地点中心计算前过滤可访问 ID，不写入／prune 数据库。已编辑且仍可访问的照片故意沿用旧向量直到手动更新，新增照片不自动加入。跨 worker actor 返回后，UI 发布前再核对权限、generation 和返回 ID／修订；**不承诺 OS 权限原子性或绝对零竞态**。
-- 主流程报告本地品牌 **12**、静态 **30**、地点 **32** 通过，Node 源码检查及自测 **PASS**。**本轮 Swift 编译、原生测试、设备构建及真机验证尚未完成**；没有新增 telemetry／计时埋点，不能声称具体提速。主流程后续按既有流程构建后再更新实际结果。
+[build 17 Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37022941546-1)（**401925676**，**2026-10-02T15:15:39Z**，**9 项资产、公开 prerelease、非 draft**）已发布。[本地 IPA](../build/device-download/37022941546/LocalImageIQ-iphoneos-unsigned.ipa) 已完整流式下载并校验：**1,418,481,134 字节**，SHA-256 **`51068e4916314399c0ad7bae3e0db7c33ac652691976cfd51c4ae4a241e3b071`**；7-Zip 26.03 全量归档 CRC 通过。设备包为 **arm64 Release、未签名、SDK 18.5、Xcode 16.4、最低 iOS 17.0**，仍须用户在本机签名。
 
-完整的新行为与验证边界见 [MANUAL_INDEX_STARTUP.md](MANUAL_INDEX_STARTUP.md)。下文“本次未改 AppState／worker／索引”等表述，以及原生 PASS／截图，只适用于**上次 B02 交付**，不应当作新手动索引源码的现状或验证证据。下文历史记录保留。
+- B02 系统启动画面和 App 内准备页仍**只有同一个静态图标**，无名称、阶段文字、进度条或转圈。主图像模型、文本模型和分词器仍完整准备；正常准备不可跳过，不加人为等待。仅失败时轻点图标重试、长按约一秒先进入，辅助功能恢复动作保留。
+- 启动／自动刷新不枚举 PhotoKit 全库、不清理索引或解析完整地点几何；只读 SQL 聚合的是**已保存统计，不是当前可搜索数量**。搜索仍保留初始／评分前／评分后三次只读授权快照及 UI 发布前复查，不写入／prune 数据库，不承诺权限原子性或绝对零竞态。
+- 实际 IPA 已核验小 manifest 的运行时元数据：**22,960 字节**，新 SHA-256 `7edb232043452d9a6f718b8a59a121fa0938dfdd54e732ed97e2be60f195b7e5`；地点版本仍为 `raycast-v1-93c9a925e35247f2`。完整几何仍为 **15,175,079 字节／2,943 要素**，SHA-256 `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4` 不变。完整解析仅由手动索引按需执行；小元数据缺失／无效不回退到完整解析。
+- 模型、索引／地点缓存身份、SQLite schema 1、20 worker、HQ224／Fast 和 iCloud 规则不变。**原 Sideloadly 账号／有效 Bundle ID 覆盖安装，不卸载、不清库、不因升级重建或重跑索引**；需要纳入新增／编辑照片时才手动更新，未变化的有效向量复用，“全部重建索引”须确认且只是可选操作。
 
-## 状态：2026-10-02，0.5.3 / build 16 首轮 SUCCESS，已交付
+### build 17 截图范围与尚未验证的边界
+
+[UI 截图 ZIP](../build/ui-review/37022941546/UIReview.zip) 已下载并校验：**4,253,640 字节**，SHA-256 **`afd7a841ca6c111cb124ed132062dd484a5ae64d7735bd0659f1c3aec1e9e4a3`**。父流程实际仅查看 [1340×758 四图联系图](../build/ui-review/37022941546/manual-index-contact.jpg)：
+
+- 浅／深色合成启动图各 **393×852**，带测试水印；正式 App 无水印。**两张图各自 SHA-256 与 build 16 对应图相同**，本轮未重做启动视觉，只调整背后的工作路径。
+- 真实模拟器未授权首页／图库各 **1206×2622**，展示新的手动索引操作；**不是已授权图库，没有读取 Photos**。未声称查看其他图片。
+
+这些截图不是物理 iPhone 测试、启动视频或加速证据。**本轮没有实际 iPhone 耗时测量，也没有新增 telemetry／计时埋点**；模型／分词器仍完整准备，不承诺瞬时启动或具体提速。物理 iPhone 安装、系统启动页交接、失败手势互斥、图标缓存及真实图库性能仍待确认；不是说已执行的原生测试仍未验证。
+
+完整行为、测试子套件及包校验见 [MANUAL_INDEX_STARTUP.md](MANUAL_INDEX_STARTUP.md)，安装见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。**以下各节保留 build 16 原始接入历史**；其中“本次未改 AppState／worker／索引”、测试数与截图只属于当时 build 16，不描述 build 17 的改动或替代其证据。
+
+## 历史：2026-10-02，0.5.3 / build 16 首轮 SUCCESS，已交付
 
 用户选定 `AlbumVsPhotoSearch_2026-10-01 / B02`（照片＋搜索／高级感），并明确要求：App 有此图标；打开时的加载页面仅显示这一个图标，无文字、进度条、转圈或其他装饰。
 

@@ -1,10 +1,12 @@
 # 手动索引与冷启动边界
 
-## 当前状态（2026-10-02）：本地实现完成，新增行为待原生验证
+## 当前状态（2026-10-02）：0.5.4 / build 17 首轮 SUCCESS，已交付并完成本地校验
 
-用户已要求实现，而非仅提出方案。相关源码与测试已在本地修改；**本轮手动索引改动尚未经过 Swift 编译、原生测试、设备构建或真机验证，也没有对应的新 IPA**。工程版本仍为 **0.5.3 / build 16**，本次文档工作不改版本。
+**手动索引改动已通过完整原生／UI 测试及设备构建，不再是待验证的本地实现。**[CI 37022941546](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546)／[job 110890327401](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546/job/110890327401)，源码 **`02d5bc72b4d463bf2adca50dbf1d571a93183354`**；既有个人公开仓库标准 `macos-15` 手动工作流，`include_models`／`all_compute_units`／`build_device_ipa` 全为 `true`，**attempt 1 SUCCESS，无追加重试**。核心 **79 通过**、App **483 通过／1 既有跳过／0 失败**、UI **10 通过**，详细结果见第 6 节。
 
-最后已交付的包仍是 B02 图标／纯图标启动页的 [build 16 Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37004642577-1) 与 [../build/device-download/37004642577/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37004642577/LocalImageIQ-iphoneos-unsigned.ipa)。**该包未包含本轮手动索引改动**；其成功记录不能作为新源码的原生验证结果。主流程可继续使用既有构建流程，并在取得实际结果后更新交付状态。
+[build 17 公开 Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37022941546-1) 已发布，[本地 IPA](../build/device-download/37022941546/LocalImageIQ-iphoneos-unsigned.ipa) 已实际完整流式下载并通过长度／SHA-256 与全量归档 CRC 检查。**手机安装、实际启动／首搜耗时及失败手势等真机行为仍待确认**；不把模拟器测试当真机验收，也不承诺瞬时启动。
+
+使用原 Sideloadly 账号／有效 Bundle ID 覆盖安装，**不卸载、不清索引、不因升级重建或重跑 Index / resume**。已有当前策略有效记录沿用；需要纳入新增／编辑照片时才手动更新。B02 的 build 16 原始交付另保留于 [APP_ICON_AND_LAUNCH.md](APP_ICON_AND_LAUNCH.md)，其包与测试不是本轮证据。
 
 ## 1. 冷启动仍完整准备模型，但不扫描图库
 
@@ -30,6 +32,8 @@
 此时显示“待刷新”，暂不按旧统计开放搜索；用户可点“刷新索引统计”，或由后续正常只读刷新重新取得实际数量。**刷新不扫描照片、不更新索引；未知统计不是永久锁死。**刷新成功后按真实保存数量恢复状态；若为空，仍须手动建立索引。
 
 ## 3. 手动更新与全部重建
+
+模型、索引／地点缓存身份和 SQLite schema 未变，**覆盖安装 build 17 本身不需要更新或重建索引**。首次没有索引时才需建立；日常需要纳入新增／编辑照片时手动增量更新，全部重建只是可选维护操作。
 
 ### 建立／更新索引
 
@@ -69,11 +73,11 @@
 
 worker 返回后还存在一次 actor 切换。`AppState` 在 `MainActor` 真正发布结果前，先检查任务取消／operation token 和权限，再执行 `SearchResponse.validateAccess()`：核对权限状态、图库变化 generation，以及**实际返回 ID 的当前修订／可访问性**，通过后才更新 UI 结果。
 
-这些检查用于拒绝已观察到的过期或失去访问权的结果，**不是对 iOS 权限的原子锁，也不保证与系统权限变更之间绝对零竞态**。不将源码中的检查扩写为尚未完成的真机验证结论。
+这些检查用于拒绝已观察到的过期或失去访问权的结果，**不是对 iOS 权限的原子锁，也不保证与系统权限变更之间绝对零竞态**。相关原生回归已执行通过，但不扩写为尚未完成的真机验证结论。
 
 ## 5. 小地点元数据与不变的缓存身份
 
-- 启动、刷新、搜索和照片诊断读取约 **22 KB** 的 [../Resources/Places/places-manifest.json](../Resources/Places/places-manifest.json)，新增 `runtime` 元数据提供地点版本和覆盖说明，不读取完整坐标数组。
+- 启动、刷新、搜索和照片诊断读取小型 [../Resources/Places/places-manifest.json](../Resources/Places/places-manifest.json)，新增 `runtime` 元数据提供地点版本和覆盖说明，不读取完整坐标数组。**build 17 实际 IPA 已核验包含该元数据**；manifest 为 **22,960 字节**，新 SHA-256 为 **`7edb232043452d9a6f718b8a59a121fa0938dfdd54e732ed97e2be60f195b7e5`**。
 - `runtime.schemaVersion` 为 **1**；运行时版本仍为 **`raycast-v1-93c9a925e35247f2`**，沿用完整 GeoJSON 最终字节的既有 FNV-1a 身份，不重新定义地点算法或缓存版本。
 - 完整 [../Resources/Places/Places.geojson](../Resources/Places/Places.geojson) 仍为 **15,175,079 字节／2,943 个要素**；完整字节 SHA-256 **`41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`** 不变。新增的是 manifest 的运行时元数据，不是边界内容；不声称 manifest 自身哈希未变。
 - 应用中只有显式手动索引需要完整 resolver：首次按需解析，随后复用已缓存 resolver。注入 resolver 时直接使用其确切元数据；小元数据本身也按 worker 缓存。
@@ -82,19 +86,52 @@ worker 返回后还存在一次 actor 切换。`AppState` 在 `MainActor` 真正
 
 模型权重、模型准备流程、分词／预处理、图像输入策略、模型＋图像缓存身份、地点版本和搜索／翻译逻辑均不因此改变。**SQLite 缓存 schema 仍为 1，不做数据库迁移，也不因本轮改动要求清空重建。**这里的 schema 1 指 SQLite 缓存及地点元数据，不是更改模型 manifest 的 schema。
 
-## 6. 已有证据与待验证项
+## 6. build 17 已完成的验证与交付
 
-主流程报告本地验证通过：
+### 原生测试：本轮实际执行，不借用 build 16 结果
 
-| 检查 | 报告结果 | 能证明的范围 |
-| --- | --- | --- |
-| 品牌静态测试 | 12 通过 | 品牌资源与启动展示源码契约 |
-| 既有静态测试 | 30 通过 | 静态源码／配置契约 |
-| 地点测试 | 32 通过 | 地点构建与元数据相关本地测试 |
-| Node 源码检查及自测 | PASS | 项目源码契约与检查器自测 |
+- 核心 **79 通过**。
+- App **484 项＝483 通过／1 既有跳过／0 失败**，测试 **176.486 秒**（wall **212.219 秒**）。唯一跳过仍为 SQLite 真机文件保护在模拟器的既有限制。
+- 独立 UI **10 全通过／503.763 秒**：导航 **5／283.213 秒**、键盘 **5／220.550 秒**；模型必需，未绕过启动准备门控。
 
-本次文档编辑未重新执行这些检查。相关源码／测试见 [../App/State/PhotoIndexWorker.swift](../App/State/PhotoIndexWorker.swift)、[../App/State/AppState.swift](../App/State/AppState.swift)、[../App/Persistence/SQLitePhotoStore.swift](../App/Persistence/SQLitePhotoStore.swift)、[../App/Places/PlacePackMetadata.swift](../App/Places/PlacePackMetadata.swift)、[../Tests/ManualIndexStateTests.swift](../Tests/ManualIndexStateTests.swift)、[../Tests/RefreshReadinessTests.swift](../Tests/RefreshReadinessTests.swift) 与 [../Tests/PlacePackMetadataTests.swift](../Tests/PlacePackMetadataTests.swift)。新增／修改 Swift 测试已写入，**尚未运行验证，不能与本地静态 PASS 相加成原生通过数**。
+以下是 **App 484 项中的子套件，不是额外测试数**：
 
-仍待主流程通过既有工作流取得实际 Swift／原生测试、设备构建、UI 与交付结果；真机冷启动、权限变化、搜索发布、取消恢复及性能也未验证。**没有新增 telemetry、计时埋点或耗时测量，不能声称具体启动秒数、加速比例或零竞态。**
+| 子套件 | 本轮结果 |
+| --- | --- |
+| `LaunchStateTests` | 15 通过 |
+| `LaunchWorkerTests` | 8 通过 |
+| `ManualIndexStateTests` | 13 通过 |
+| `PlacePackMetadataTests` | 13 通过 |
+| `RefreshReadinessTests` | 14 通过 |
+| `PhotoIndexWorkerTests` | 29 通过 |
+| `SQLitePhotoStoreTests` | 26 项：25 通过／1 既有文件保护跳过／0 失败 |
+| `StartupPresentationTests` | 9 通过 |
+| `GeneratedModelParityTests` | 8 通过／120.257 秒 |
 
-图标与上次已交付启动展示的历史见 [APP_ICON_AND_LAUNCH.md](APP_ICON_AND_LAUNCH.md)；交付账本由主流程维护，见 [BUILD_STATUS.md](BUILD_STATUS.md)。历史 build 16 原生 PASS 只属于旧交付源码，不覆盖本轮新增行为。
+此前本地品牌 **12**、静态 **30**、地点 **32** 通过，Node 源码检查及自测 **PASS**，作为静态／本地证据保留，不与上述原生计数相加。本次仅整理已取得的结果，没有重新运行测试、构建或下载。
+
+相关源码／测试见 [../App/State/PhotoIndexWorker.swift](../App/State/PhotoIndexWorker.swift)、[../App/State/AppState.swift](../App/State/AppState.swift)、[../App/Persistence/SQLitePhotoStore.swift](../App/Persistence/SQLitePhotoStore.swift)、[../App/Places/PlacePackMetadata.swift](../App/Places/PlacePackMetadata.swift)、[../Tests/ManualIndexStateTests.swift](../Tests/ManualIndexStateTests.swift)、[../Tests/RefreshReadinessTests.swift](../Tests/RefreshReadinessTests.swift) 与 [../Tests/PlacePackMetadataTests.swift](../Tests/PlacePackMetadataTests.swift)。
+
+### 发布与本地完整包校验
+
+- Release **401925676**／tag **`ci-37022941546-1`**，**2026-10-02T15:15:39Z** 发布，**9 项资产、公开 prerelease、非 draft**。
+- 设备构建 **0.5.4 / 17、arm64 Release、未签名、SDK 18.5、Xcode 16.4、最低 iOS 17.0**；仍须用户在本机签名。
+- [已完整下载的 IPA](../build/device-download/37022941546/LocalImageIQ-iphoneos-unsigned.ipa)：asset **605869344**，**1,418,481,134 字节**，SHA-256 **`51068e4916314399c0ad7bae3e0db7c33ac652691976cfd51c4ae4a241e3b071`**。实际全量流式下载后的长度／哈希核验通过，`ipaVerifiedLocally: true`，不是只读取远端声明。
+- [设备报告](../build/device-download/37022941546/device-build.json)、[交付清单](../build/device-download/37022941546/delivery.json)、[校验文件](../build/device-download/37022941546/SHA256SUMS.txt) 与 [下载记录](../build/device-download/37022941546/release-fetch-1bcda8c5-e734-4b0b-9cb8-a815559b795d.json) 齐全。
+- **7-Zip 26.03 全量解压／CRC PASS**：11 文件夹、30 文件，解压后 **1,563,320,201 字节**。该结果只属于上述原始 IPA，不验证 Sideloadly 重签包或手机安装。
+- 实际 IPA 的小 manifest／运行时版本及完整几何身份已核验，见第 5 节；**manifest 哈希更新，不等于几何、地点缓存身份或 SQLite schema 改变**。
+
+### 仅四张图的审核范围
+
+[UI 截图 ZIP](../build/ui-review/37022941546/UIReview.zip) 已下载并校验：**4,253,640 字节**，SHA-256 **`afd7a841ca6c111cb124ed132062dd484a5ae64d7735bd0659f1c3aec1e9e4a3`**。父流程实际仅查看 [1340×758 联系图](../build/ui-review/37022941546/manual-index-contact.jpg) 内四图，记录见 [审核清单](../build/ui-review/37022941546/manual-index-review.json)：
+
+- 浅／深色启动图各 **393×852**：合成状态、带测试水印，正式启动页没有水印。两张图各自 SHA-256 与 build 16 对应图相同，纯图标启动视觉保留；变更的是背后的准备路径，不是重新设计启动画面。
+- 真实模拟器运行的未授权首页／图库各 **1206×2622**：展示 build 17 新的手动索引操作，**不是已授权图库，没有读取 Photos**；不能用它证明真实图库索引操作已在手机完成。
+
+没有把其他图片列为已审核，也没有把截图当作物理 iPhone 测试或提速证据。
+
+## 7. 剩余边界：真机安装、性能与交互
+
+build 17 的原生／UI 测试、设备编译和本地交付校验已完成；仍未确认物理 iPhone 安装、系统启动页交接、失败手势、真实图库权限变化／搜索发布／取消恢复及性能。**没有实际 iPhone 耗时测量，也没有新增 telemetry／计时埋点**；模型和分词器仍完整准备，不承诺具体启动秒数、加速比例、零等待或绝对零竞态。
+
+安装沿用 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md) 的原账号／有效 Bundle ID 覆盖路线，不卸载、不清库；手动增量更新只在需要纳入新增／编辑照片时发起，全部重建可选。图标与 build 16 原始交付历史见 [APP_ICON_AND_LAUNCH.md](APP_ICON_AND_LAUNCH.md)；交付账本由主流程维护于 [BUILD_STATUS.md](BUILD_STATUS.md)。
