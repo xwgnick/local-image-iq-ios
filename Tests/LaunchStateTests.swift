@@ -9,7 +9,7 @@ import ImageIQCore
 /// requests, image reads, translation sessions, network calls or timed sleeps.
 @MainActor
 final class LaunchStateTests: XCTestCase {
-    func testHeldLaunchPublishesActualStagesAndCannotBecomeReadyBeforeCompletion() async {
+    func testHeldLaunchPublishesActualStagesAndCannotBecomeReadyBeforeCompletion() async throws {
         let hold = heldLaunch("cold launch")
         let worker = FakeLaunchWorker(plans: [.init(hold: hold)])
         let state = makeState(worker)
@@ -17,6 +17,8 @@ final class LaunchStateTests: XCTestCase {
         let observation = state.$launchPhase.removeDuplicates().sink { phases.append($0) }
         defer { observation.cancel() }
         state.query = "TEST query"
+        XCTAssertFalse(state.debugToolsEnabled)
+        XCTAssertTrue(state.launchTimings.isEmpty)
 
         state.start()
         await fulfillment(of: [hold.checking], timeout: 3)
@@ -35,6 +37,7 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertEqual(state.activity, .starting)
         XCTAssertEqual(state.summary.indexedCount, 0, "A stage is not a completed summary.")
         XCTAssertFalse(state.canSearch)
+        XCTAssertTrue(state.launchTimings.isEmpty, "In-flight attempts are not completed reports.")
 
         await hold.finish.open()
         await state.waitUntilIdle()
@@ -45,6 +48,12 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertTrue(state.canSearch)
         XCTAssertNil(state.activity)
         XCTAssertNil(state.launchIssue)
+        XCTAssertFalse(state.debugToolsEnabled, "Recording must not require enabling debug tools.")
+        XCTAssertEqual(state.launchTimings.count, 1)
+        let report = try XCTUnwrap(state.launchTimings.first)
+        // This fake implements only the old worker method. The compatibility
+        // overload must still leave the AppState-owned timing stages intact.
+        assertReport(report, kind: .cold, outcome: .ready, stages: [.entry, .queue, .worker, .publish])
         await assertCalls(worker, launches: 1)
     }
 
@@ -118,6 +127,10 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertFalse(state.canSearch)
         XCTAssertFalse(state.canIndex)
         XCTAssertFalse(state.isBusy)
+        XCTAssertEqual(state.launchTimings.count, 1)
+        let failedReports = state.launchTimings
+        let failedReport = try XCTUnwrap(failedReports.first)
+        assertReport(failedReport, kind: .cold, outcome: .failed, stages: [.entry, .queue, .worker, .publish])
 
         state.retryLaunch()
         state.retryLaunch()
@@ -127,6 +140,7 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertNil(state.launchIssue)
         XCTAssertNil(state.errorMessage)
         XCTAssertFalse(state.canSearch)
+        assertReportsUnchanged(state.launchTimings, failedReports)
         await retry.prepare.open()
         await fulfillment(of: [retry.preparing], timeout: 3)
         await retry.finish.open()
@@ -137,6 +151,11 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertNil(state.errorMessage)
         XCTAssertNil(state.summary.modelIssue)
         XCTAssertTrue(state.canSearch)
+        XCTAssertEqual(state.launchTimings.count, 2)
+        assertReportsUnchanged(Array(state.launchTimings.prefix(1)), failedReports)
+        let retryReport = try XCTUnwrap(state.launchTimings.last)
+        XCTAssertNotEqual(retryReport.id, failedReport.id)
+        assertReport(retryReport, kind: .retry, outcome: .ready, stages: [.entry, .queue, .worker, .publish])
         await assertCalls(worker, launches: 2)
     }
 
@@ -155,6 +174,10 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertFalse(issue.isEmpty)
         XCTAssertFalse(issue.contains("TEST-launch-storage-failure"))
         XCTAssertFalse(state.isBusy)
+        XCTAssertEqual(state.launchTimings.count, 1)
+        let failedReports = state.launchTimings
+        let failedReport = try XCTUnwrap(failedReports.first)
+        assertReport(failedReport, kind: .cold, outcome: .failed, stages: [.entry, .queue, .worker])
         state.openHomeAfterLaunchFailure()
         await state.waitUntilIdle()
 
@@ -171,6 +194,7 @@ final class LaunchStateTests: XCTestCase {
         state.retryLaunch()
         state.openHomeAfterLaunchFailure()
         await state.waitUntilIdle()
+        assertReportsUnchanged(state.launchTimings, failedReports)
         await assertCalls(worker, launches: 1)
     }
 
@@ -199,7 +223,7 @@ final class LaunchStateTests: XCTestCase {
         await assertCalls(worker, launches: 1)
     }
 
-    func testBackgroundRejectsLateSuccessModelIssueAndThrowAndRemainsPending() async {
+    func testBackgroundRejectsLateSuccessModelIssueAndThrowAndRemainsPending() async throws {
         let outcomes: [FakeLaunchWorker.Outcome] = [
             .success(LibrarySummary(authorizedCount: 99, indexedCount: 99, modelVersion: "TEST-stale-model")),
             .success(LibrarySummary(authorizedCount: 99, modelIssue: "TEST-late-model-issue")),
@@ -213,9 +237,17 @@ final class LaunchStateTests: XCTestCase {
             await fulfillment(of: [hold.checking], timeout: 3)
             state.enterBackground()
             XCTAssertEqual(state.launchPhase, .pending)
+            // Inspect synchronously, before either held worker continuation opens.
+            XCTAssertEqual(state.launchTimings.count, 1)
+            let interruptedReports = state.launchTimings
+            let interrupted = try XCTUnwrap(interruptedReports.first)
+            assertReport(interrupted, kind: .cold, outcome: .interrupted, stages: [.entry, .queue, .worker])
+            let heldCalls = await worker.calls
+            XCTAssertEqual(heldCalls.active, 1, "Freezing must not wait for model preparation to drain.")
             await hold.prepare.open()
             await fulfillment(of: [hold.preparing], timeout: 3)
             XCTAssertEqual(state.launchPhase, .pending, "A late callback cannot leave the background gate.")
+            assertReportsUnchanged(state.launchTimings, interruptedReports)
             await hold.finish.open()
             await state.waitUntilIdle()
 
@@ -228,11 +260,12 @@ final class LaunchStateTests: XCTestCase {
             XCTAssertNil(state.errorMessage)
             XCTAssertNil(state.activity)
             XCTAssertFalse(state.canSearch)
+            assertReportsUnchanged(state.launchTimings, interruptedReports)
             await assertCalls(worker, launches: 1)
         }
     }
 
-    func testForegroundRestartDrainsCancelledLaunchBeforeStartingItsReplacement() async {
+    func testForegroundRestartDrainsCancelledLaunchBeforeStartingItsReplacement() async throws {
         let first = heldLaunch("cancelled launch")
         let second = heldLaunch("foreground replacement")
         let stale = LibrarySummary(authorizedCount: 99, indexedCount: 99, modelVersion: "TEST-stale-model")
@@ -241,10 +274,15 @@ final class LaunchStateTests: XCTestCase {
         state.start()
         await fulfillment(of: [first.checking], timeout: 3)
         state.enterBackground()
+        XCTAssertEqual(state.launchTimings.count, 1)
+        let interruptedReports = state.launchTimings
+        let interrupted = try XCTUnwrap(interruptedReports.first)
+        assertReport(interrupted, kind: .cold, outcome: .interrupted, stages: [.entry, .queue, .worker])
         state.enterForeground()
         state.enterForeground()
         state.start()
         XCTAssertEqual(state.launchPhase, .checkingLibrary)
+        assertReportsUnchanged(state.launchTimings, interruptedReports)
         await assertCalls(worker, launches: 1)
 
         await first.prepare.open()
@@ -257,24 +295,34 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertEqual(running.peakActive, 1, "Actor reentrancy alone must not allow overlapping launches.")
         XCTAssertEqual(running.launches, 2)
         XCTAssertEqual(state.summary.indexedCount, 0, "The cancelled predecessor must never publish its summary.")
+        assertReportsUnchanged(state.launchTimings, interruptedReports)
         await second.prepare.open()
         await fulfillment(of: [second.preparing], timeout: 3)
         await second.finish.open()
         await state.waitUntilIdle()
         XCTAssertEqual(state.launchPhase, .ready)
         XCTAssertEqual(state.summary.indexedCount, 2)
+        XCTAssertEqual(state.launchTimings.count, 2)
+        assertReportsUnchanged(Array(state.launchTimings.prefix(1)), interruptedReports)
+        let resumed = try XCTUnwrap(state.launchTimings.last)
+        XCTAssertNotEqual(resumed.id, interrupted.id)
+        assertReport(resumed, kind: .foreground, outcome: .ready, stages: [.entry, .queue, .worker, .publish])
         let finished = await worker.calls
         XCTAssertEqual(finished.active, 0)
         await assertCalls(worker, launches: 2)
     }
 
-    func testCompletedLaunchUsesOneLightRefreshOnForegroundWithoutRewarming() async {
+    func testCompletedLaunchUsesOneLightRefreshOnForegroundWithoutRewarming() async throws {
         let refreshed = LibrarySummary(authorizedCount: 9, indexedCount: 7, modelVersion: "TEST-refreshed-model")
         let worker = FakeLaunchWorker(refreshSummary: refreshed)
         let state = makeState(worker)
         state.start()
         await state.waitUntilIdle()
         XCTAssertEqual(state.launchPhase, .ready)
+        XCTAssertEqual(state.launchTimings.count, 1)
+        let completedReports = state.launchTimings
+        let completed = try XCTUnwrap(completedReports.first)
+        assertReport(completed, kind: .cold, outcome: .ready, stages: [.entry, .queue, .worker, .publish])
         state.enterForeground()
         await assertCalls(worker, launches: 1)
 
@@ -284,11 +332,13 @@ final class LaunchStateTests: XCTestCase {
         state.start()
         XCTAssertEqual(state.launchPhase, .ready)
         XCTAssertEqual(state.activity, .refreshing)
+        assertReportsUnchanged(state.launchTimings, completedReports)
         await state.waitUntilIdle()
         XCTAssertEqual(state.launchPhase, .ready)
         XCTAssertEqual(state.summary.indexedCount, 7)
         XCTAssertEqual(state.summary.modelVersion, refreshed.modelVersion)
         XCTAssertFalse(state.isBusy)
+        assertReportsUnchanged(state.launchTimings, completedReports)
         await assertCalls(worker, launches: 1, refreshes: 1)
     }
 
@@ -525,6 +575,74 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertEqual(state.resultLimit, 3)
         XCTAssertFalse(state.allowICloudDownload)
         await assertCalls(worker, launches: 1, indexes: 1, searches: 1)
+    }
+
+    func testQueuedForegroundTimingFreezesBeforeItsCancelledPredecessorReturns() async throws {
+        let first = heldLaunch("held predecessor for queued timing")
+        let worker = FakeLaunchWorker(plans: [.init(hold: first)])
+        let state = makeState(worker)
+        state.start()
+        await fulfillment(of: [first.checking], timeout: 3)
+        state.enterBackground()
+        XCTAssertEqual(state.launchTimings.count, 1)
+        let firstReports = state.launchTimings
+
+        // No suspension between these calls: queue timing must be installed in
+        // schedule(), before the replacement task can await the predecessor.
+        state.enterForeground()
+        state.enterBackground()
+        XCTAssertEqual(state.launchTimings.count, 2)
+        let frozenReports = state.launchTimings
+        assertReportsUnchanged(Array(frozenReports.prefix(1)), firstReports)
+        let firstReport = try XCTUnwrap(frozenReports.first)
+        let queuedReport = try XCTUnwrap(frozenReports.last)
+        XCTAssertNotEqual(firstReport.id, queuedReport.id)
+        assertReport(firstReport, kind: .cold, outcome: .interrupted, stages: [.entry, .queue, .worker])
+        assertReport(queuedReport, kind: .foreground, outcome: .interrupted, stages: [.entry, .queue])
+        let heldCalls = await worker.calls
+        XCTAssertEqual(heldCalls.active, 1)
+        await assertCalls(worker, launches: 1)
+
+        await first.prepare.open()
+        await fulfillment(of: [first.preparing], timeout: 3)
+        assertReportsUnchanged(state.launchTimings, frozenReports)
+        await first.finish.open()
+        await state.waitUntilIdle()
+        await worker.emit(.checkingLibrary, attempt: 1)
+        await worker.emit(.preparingSearch, attempt: 1)
+        XCTAssertEqual(state.launchPhase, .pending)
+        XCTAssertNil(state.activity)
+        XCTAssertNil(state.summary.modelVersion)
+        XCTAssertEqual(state.summary.indexedCount, 0)
+        assertReportsUnchanged(state.launchTimings, frozenReports)
+        await assertCalls(worker, launches: 1)
+    }
+
+    private func assertReport(_ report: LaunchTimingReport, kind: LaunchTimingKind,
+                              outcome: LaunchTimingOutcome, stages: [LaunchTimingStage],
+                              file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(report.kind, kind, file: file, line: line)
+        XCTAssertEqual(report.outcome, outcome, file: file, line: line)
+        XCTAssertEqual(report.rows.map(\.stage), stages, file: file, line: line)
+        XCTAssertEqual(report.rows.map(\.id), Array(report.rows.indices), file: file, line: line)
+        XCTAssertTrue(report.rows.allSatisfy { $0.seconds.isFinite && $0.seconds >= 0 }, file: file, line: line)
+        XCTAssertTrue(report.totalSeconds.isFinite, file: file, line: line)
+        XCTAssertEqual(report.rows.reduce(0) { $0 + $1.seconds }, report.totalSeconds,
+                       accuracy: 0.000000001, file: file, line: line)
+    }
+
+    private func assertReportsUnchanged(_ actual: [LaunchTimingReport], _ expected: [LaunchTimingReport],
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(actual.count, expected.count, file: file, line: line)
+        for (report, saved) in zip(actual, expected) {
+            XCTAssertEqual(report.id, saved.id, file: file, line: line)
+            XCTAssertEqual(report.kind, saved.kind, file: file, line: line)
+            XCTAssertEqual(report.outcome, saved.outcome, file: file, line: line)
+            XCTAssertEqual(report.totalSeconds, saved.totalSeconds, file: file, line: line)
+            XCTAssertEqual(report.rows.map(\.id), saved.rows.map(\.id), file: file, line: line)
+            XCTAssertEqual(report.rows.map(\.stage), saved.rows.map(\.stage), file: file, line: line)
+            XCTAssertEqual(report.rows.map(\.seconds), saved.rows.map(\.seconds), file: file, line: line)
+        }
     }
 
     private func heldLaunch(_ name: String) -> HeldStateLaunch {

@@ -11,13 +11,16 @@ final class LaunchWorkerTests: XCTestCase {
     private let resolver = OfflinePlaceResolver.unavailable("TEST-launch-boundaries")
 
     func testStagesBracketWarmupWithoutEnumerationOrReconciliation() async throws {
-        let context = try context([row("TEST-kept"), row("TEST-deleted")])
+        let clock = LaunchTimingTestClock(100)
+        let timing = LaunchTimingRecorder(kind: .cold, now: { clock.now() })
+        let context = try context([row("TEST-kept"), row("TEST-deleted")], timingClock: clock)
         context.library.replace([PhotoRevision(id: "TEST-kept", modificationTime: 123)])
         let version = version
         let geography = resolver.version
 
-        let summary = try await context.worker.prepareForLaunch { stage in
+        let summary = try await context.worker.prepareForLaunch(timing: timing) { stage in
             context.events.append(stage)
+            clock.advance(by: stage == .checkingLibrary ? 1 : 0.5)
             do {
                 let counts = try await context.store.counts(modelVersion: version, geographyVersion: geography)
                 XCTAssertEqual(counts.indexed, 2, "Neither progress stage may prune saved rows.")
@@ -25,8 +28,23 @@ final class LaunchWorkerTests: XCTestCase {
             } catch { XCTFail("Unable to inspect synthetic cache at stage: \(error)") }
         }
         context.events.append("returned")
+        clock.advance(by: 0.25)
+        let report = try XCTUnwrap(timing.finish(.ready))
 
-        XCTAssertEqual(context.events.values, ["checking", "preparing", "prepare-start", "prepare-end", "returned"])
+        XCTAssertEqual(context.events.values, ["checking", "metadata", "preparing", "prepare-start", "prepare-end", "returned"])
+        XCTAssertEqual(report.id, timing.id)
+        XCTAssertEqual(report.kind, .cold)
+        XCTAssertEqual(report.outcome, .ready)
+        XCTAssertEqual(report.rows.map(\.id), [0, 1, 2, 3, 4])
+        XCTAssertEqual(report.rows.map(\.stage), [.entry, .places, .models, .counts, .publish])
+        // The old encoder implements only prepare(), so its entire synthetic
+        // warmup belongs to the parent's .models stage, with no invented substeps.
+        // SQLite has no fake-clock advance; its count interval is legitimately zero.
+        XCTAssertEqual(report.rows.map(\.seconds), [1, 2, 3.5, 0, 0.25])
+        XCTAssertEqual(report.totalSeconds, 6.75)
+        XCTAssertEqual(report.rows.reduce(0) { $0 + $1.seconds }, report.totalSeconds)
+        XCTAssertEqual(report.slowest?.stage, .models)
+        XCTAssertNil(timing.finish(.ready))
         XCTAssertFalse(summary.authorizedCountKnown)
         XCTAssertEqual(summary.authorizedCount, 0, "Unknown is not evidence of an empty Photos library.")
         XCTAssertEqual(summary.indexedCount, 2)
@@ -82,11 +100,17 @@ final class LaunchWorkerTests: XCTestCase {
             let context = try context([row("TEST-kept"), row("TEST-deleted")],
                                       outcome: .failure(failure), hold: hold)
             context.library.replace([PhotoRevision(id: "TEST-kept", modificationTime: 123)])
-            let task = start(context, hold: hold)
+            let timing = LaunchTimingRecorder(kind: .cold)
+            let task = start(context, hold: hold, timing: timing)
             await fulfillment(of: [hold.started], timeout: 3)
             context.library.replace([], readable: false)
             await hold.release.open()
             let summary = try await task.value
+            let report = try XCTUnwrap(timing.finish(.failed))
+            XCTAssertEqual(report.outcome, .failed)
+            XCTAssertEqual(report.rows.map(\.stage), [.entry, .places, .models],
+                           "Failed preparation must not claim it reached counts or publication.")
+            XCTAssertNil(timing.finish(.ready))
 
             XCTAssertFalse(summary.authorizedCountKnown)
             XCTAssertEqual(summary.authorizedCount, 0)
@@ -220,14 +244,31 @@ final class LaunchWorkerTests: XCTestCase {
         XCTAssertTrue(summary.authorizedCountKnown)
         XCTAssertEqual(summary.authorizedCount, 7)
         XCTAssertEqual(summary.modelIssue, "TEST-legacy-summary")
+        let clock = LaunchTimingTestClock(10)
+        let timing = LaunchTimingRecorder(kind: .retry, now: { clock.now() })
+        let timed = try await service.prepareForLaunch(timing: timing) { stage in
+            events.append(stage)
+            clock.advance(by: 2)
+        }
+        XCTAssertEqual(timed.authorizedCount, summary.authorizedCount)
+        XCTAssertEqual(timed.authorizedCountKnown, summary.authorizedCountKnown)
+        XCTAssertEqual(timed.modelIssue, summary.modelIssue)
+        let report = try XCTUnwrap(timing.finish(.failed))
+        XCTAssertEqual(report.kind, .retry)
+        XCTAssertEqual(report.outcome, .failed)
+        XCTAssertEqual(report.rows.map(\.stage), [.entry], "Compatibility must not invent encoder substeps.")
+        XCTAssertEqual(report.rows.map(\.seconds), [2])
+        XCTAssertEqual(report.totalSeconds, 2)
+        XCTAssertEqual(events.values, ["checking", "legacy-refresh", "checking", "legacy-refresh"])
         let task = Task {
-            try await service.prepareForLaunch { stage in
+            try await service.prepareForLaunch(timing: timing) { stage in
                 events.append(stage)
                 withUnsafeCurrentTask { $0?.cancel() }
             }
         }
         await expectCancellation(task)
-        XCTAssertEqual(events.values, ["checking", "legacy-refresh", "checking"])
+        XCTAssertEqual(events.values, ["checking", "legacy-refresh", "checking", "legacy-refresh", "checking"])
+        XCTAssertNil(timing.finish(.interrupted))
     }
 
     private func row(_ id: String, model: String? = nil, geography: String? = nil,
@@ -239,7 +280,8 @@ final class LaunchWorkerTests: XCTestCase {
     }
 
     private func context(_ rows: [CachedPhoto], outcome: TESTLaunchEncoders.Outcome = .success,
-                         hold: TESTLaunchHold? = nil) throws -> TESTLaunchContext {
+                         hold: TESTLaunchHold? = nil,
+                         timingClock: LaunchTimingTestClock? = nil) throws -> TESTLaunchContext {
         let directory = try TestFixtures.temporaryDirectory()
         let store = SQLitePhotoStore(directory: directory, readOnly: true)
         addTeardownBlock {
@@ -251,8 +293,20 @@ final class LaunchWorkerTests: XCTestCase {
         let library = TESTLaunchLibrary(rows.map {
             PhotoRevision(id: $0.photo.id, modificationTime: $0.photo.modificationTime, creationTime: $0.photo.creationTime)
         }, events: events)
-        let encoders = try TESTLaunchEncoders(events: events, outcome: outcome, hold: hold)
-        let worker = PhotoIndexWorker(library: library, encoders: encoders, directory: directory, resolver: resolver)
+        let encoders = try TESTLaunchEncoders(events: events, outcome: outcome, hold: hold, clock: timingClock)
+        let resolver = resolver
+        let worker = PhotoIndexWorker(
+            library: library, encoders: encoders, directory: directory,
+            resolver: timingClock == nil ? resolver : nil,
+            metadataLoader: {
+                events.append("metadata")
+                timingClock?.advance(by: 2)
+                return PlacePackMetadata(version: resolver.version, coverageDescription: resolver.coverageDescription)
+            },
+            boundaryLoader: {
+                events.append("boundary-load")
+                return resolver
+            })
         return TESTLaunchContext(worker: worker, library: library, encoders: encoders, store: store,
                                  events: events, savedFiles: try cacheFiles(in: directory))
     }
@@ -273,8 +327,9 @@ final class LaunchWorkerTests: XCTestCase {
                        "Readiness must preserve every saved DB byte and create no sidecars.", file: file, line: line)
     }
 
-    private func start(_ context: TESTLaunchContext, hold: TESTLaunchHold) -> Task<LibrarySummary, Error> {
-        let task = Task { try await context.worker.prepareForLaunch { context.events.append($0) } }
+    private func start(_ context: TESTLaunchContext, hold: TESTLaunchHold,
+                       timing: LaunchTimingRecorder? = nil) -> Task<LibrarySummary, Error> {
+        let task = Task { try await context.worker.prepareForLaunch(timing: timing) { context.events.append($0) } }
         addTeardownBlock {
             task.cancel()
             await hold.release.open()
@@ -298,6 +353,7 @@ final class LaunchWorkerTests: XCTestCase {
         XCTAssertFalse(events.contains("preview-request"), file: file, line: line)
         XCTAssertFalse(events.contains("place-lookup"), file: file, line: line)
         XCTAssertFalse(events.contains("revision-lookup"), file: file, line: line)
+        XCTAssertFalse(events.contains("boundary-load"), "Readiness must not load the full map.", file: file, line: line)
     }
 }
 
@@ -404,13 +460,15 @@ private actor TESTLaunchEncoders: PhotoEncoding {
     private let events: TESTLaunchEvents
     private let outcome: Outcome
     private let hold: TESTLaunchHold?
+    private let clock: LaunchTimingTestClock?
     private(set) var calls = Calls()
-    init(events: TESTLaunchEvents, outcome: Outcome, hold: TESTLaunchHold?) throws {
+    init(events: TESTLaunchEvents, outcome: Outcome, hold: TESTLaunchHold?, clock: LaunchTimingTestClock? = nil) throws {
         manifest = try JSONDecoder().decode(ModelManifest.self, from: Data(
             TestFixtures.manifest.replacingOccurrences(of: "test-model", with: "TEST-launch-model").utf8))
         self.events = events
         self.outcome = outcome
         self.hold = hold
+        self.clock = clock
     }
     func inspectResources() async throws -> ModelManifest {
         calls.inspect += 1
@@ -420,6 +478,7 @@ private actor TESTLaunchEncoders: PhotoEncoding {
     func prepare() async throws -> ModelManifest {
         calls.prepare += 1
         events.append("prepare-start")
+        clock?.advance(by: 3)
         defer { events.append("prepare-end") }
         if let hold {
             hold.started.fulfill()

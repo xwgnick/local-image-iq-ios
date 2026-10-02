@@ -198,14 +198,22 @@ struct SettingsSheet: View {
 
     private var diagnosticsSection: some View {
         Section {
-            DisclosureGroup("诊断信息", isExpanded: $diagnosticsExpanded) {
+            DisclosureGroup(isExpanded: $diagnosticsExpanded) {
+                NavigationLink {
+                    LaunchTimingView(state: state)
+                } label: {
+                    Text("启动耗时")
+                }
+                .accessibilityIdentifier("debug-launch-timing")
                 diagnostic("状态", state.status)
                 diagnostic("模型版本", state.summary.modelVersion ?? "不可用")
                 if let issue = state.summary.modelIssue { diagnostic("模型检查", issue) }
                 diagnostic("离线地点", state.summary.placesDescription)
                 if let error = state.errorMessage { diagnostic("上次操作问题", error) }
+            } label: {
+                // Keep the group ID off its children, including the timing link.
+                Text("诊断信息").accessibilityIdentifier("debug-diagnostics")
             }
-            .accessibilityIdentifier("debug-diagnostics")
         }
         .listRowBackground(IQStyle.surface)
     }

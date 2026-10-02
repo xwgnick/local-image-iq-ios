@@ -12,6 +12,8 @@ final class AppState: ObservableObject {
     @Published private(set) var launchPhase: LaunchPhase = .pending
     @Published private(set) var launchIssue: String?
     private var launchWasRequested = false
+    @Published private(set) var launchTimings: [LaunchTimingReport] = []
+    private var launchTiming: LaunchTimingRecorder?
 
     /// Session-only presentation preference: each app launch starts in user mode.
     /// Hiding tools must never reset search settings or cancel normal work.
@@ -118,12 +120,12 @@ final class AppState: ObservableObject {
         guard launchPhase == .pending else { return }
         launchWasRequested = true
         guard isForeground else { return }
-        beginLaunch()
+        beginLaunch(kind: .cold)
     }
 
     func retryLaunch() {
         guard launchWasRequested, launchPhase == .failed, isForeground else { return }
-        beginLaunch()
+        beginLaunch(kind: .retry)
     }
 
     func openHomeAfterLaunchFailure() {
@@ -133,19 +135,28 @@ final class AppState: ObservableObject {
         launchPhase = .ready
     }
 
-    private func beginLaunch() {
+    private func beginLaunch(kind: LaunchTimingKind) {
+        finishLaunchTiming(launchTiming, outcome: .interrupted)
+        let timing = LaunchTimingRecorder(kind: kind)
+        launchTiming = timing
         launchWasRequested = true
         launchIssue = nil
         launchPhase = .checkingLibrary
         authorization = authorizationStatus()
         library.synchronizeObservation()
         invalidateDisplayedPhotos()
-        schedule(.starting) { [weak self, worker] token in
-            let summary = try await worker.prepareForLaunch { [weak self] stage in
+        schedule(.starting, timing: timing) { [weak self, worker] token in
+            timing.mark(.worker)
+            let summary = try await worker.prepareForLaunch(timing: timing) { [weak self] stage in
                 await self?.accept(launchStage: stage, token: token)
             }
+            timing.mark(.publish)
             return .launched(summary)
         }
+    }
+
+    private func finishLaunchTiming(_ timing: LaunchTimingRecorder?, outcome: LaunchTimingOutcome) {
+        if let report = timing?.finish(outcome) { launchTimings.append(report) }
     }
 
     private func accept(launchStage: LaunchStage, token: UUID) {
@@ -185,7 +196,10 @@ final class AppState: ObservableObject {
     func enterBackground() {
         isForeground = false
         translationAvailabilityID = UUID()
-        if launchWasRequested, activity == .starting { launchPhase = .pending }
+        if launchWasRequested, activity == .starting {
+            finishLaunchTiming(launchTiming, outcome: .interrupted)
+            launchPhase = .pending
+        }
         operationTask?.cancel()
         invalidateDisplayedPhotos()
         thumbnails.clear()
@@ -198,7 +212,7 @@ final class AppState: ObservableObject {
         guard !isForeground else { return }
         isForeground = true
         if launchWasRequested, launchPhase != .ready {
-            if launchPhase == .pending { beginLaunch() }
+            if launchPhase == .pending { beginLaunch(kind: .foreground) }
             return
         }
         refresh()
@@ -393,7 +407,8 @@ final class AppState: ObservableObject {
         case translationPrepared(QueryTranslationLanguage, QueryTranslationAvailability)
     }
 
-    private func schedule(_ activity: Activity, operation: @escaping @MainActor (UUID) async throws -> Outcome) {
+    private func schedule(_ activity: Activity, timing: LaunchTimingRecorder? = nil,
+                          operation: @escaping @MainActor (UUID) async throws -> Outcome) {
         let predecessor = operationTask
         predecessor?.cancel()
         let token = UUID()
@@ -402,6 +417,7 @@ final class AppState: ObservableObject {
         errorMessage = nil
         actionHint = nil
         status = activity == .indexing ? "Indexing on this device…" : "Working locally…"
+        timing?.mark(.queue)
         operationTask = Task { @MainActor [weak self] in
             // Critical: await completion, not merely cancellation, before a new job.
             await predecessor?.value
@@ -423,6 +439,7 @@ final class AppState: ObservableObject {
                         self.launchPhase = .ready
                     }
                     self.status = summary.modelIssue == nil ? "Launch preparation complete." : "Launch preparation needs attention."
+                    self.finishLaunchTiming(timing, outcome: summary.modelIssue == nil ? .ready : .failed)
                 case .summary(let summary, let message): self.summary = summary; self.status = message
                 case .search(let response, let query):
                     self.authorization = self.authorizationStatus()
@@ -450,6 +467,7 @@ final class AppState: ObservableObject {
                 guard let self, self.operationID == token else { return }
                 self.activity = nil
                 if activity == .starting {
+                    self.finishLaunchTiming(timing, outcome: !self.isForeground || error is CancellationError || Task.isCancelled ? .interrupted : .failed)
                     if !self.isForeground {
                         self.launchPhase = .pending
                         self.launchIssue = nil

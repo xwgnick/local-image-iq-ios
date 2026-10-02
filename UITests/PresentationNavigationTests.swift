@@ -233,6 +233,59 @@ final class PresentationNavigationTests: XCTestCase {
         assertHomeControls()
     }
 
+    func testLaunchTimingShowsRealReadyReportAndReturnsWithNativeBack() throws {
+        // Model-free runs cannot supply a real ready report. Never use the
+        // launch helper's model-free recovery route as evidence of readiness.
+        if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
+            throw XCTSkip("Live launch timing requires the real bundled models")
+        }
+        launch()
+        assertHomeControls()
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "startup-icon").firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "startup-recovery-icon").firstMatch.exists)
+        app.buttons["open-settings"].tap()
+        expectHittable(app.buttons["close-settings"])
+        let form = try sheetForm()
+        assertSettingsDebugOff(in: form)
+        setDebugTools(true, in: form)
+        let diagnostics = app.buttons["诊断信息"]
+        scrollTo(diagnostics, in: form, swipeUp: false)
+        let link = app.buttons["debug-launch-timing"]
+        XCTAssertFalse(link.exists, "The link belongs inside the initially collapsed diagnostics group")
+        tapDisclosure(diagnostics)
+        scrollTo(link, in: form)
+        XCTAssertEqual(link.label, "启动耗时")
+        link.tap()
+
+        let page = app.scrollViews["startup-timing-page"]
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["启动耗时"].exists)
+        let total = app.staticTexts["launch-timing-total"]
+        expectHittable(total)
+        XCTAssertNotNil(total.label.range(of: #"^[0-9]+\.[0-9]{3} 秒$"#, options: .regularExpression))
+        let seconds = try XCTUnwrap(Double(total.label.replacingOccurrences(of: " 秒", with: "")))
+        XCTAssertGreaterThan(seconds, 0, "Read the actual timed preparation, not a fixture or placeholder")
+        XCTAssertTrue(app.staticTexts["本进程首次启动 · 准备完成"].exists)
+        XCTAssertTrue(app.staticTexts["从 App 开始准备到发布首页就绪；不含 iOS 启动进程及首帧绘制"].exists)
+        XCTAssertFalse(app.alerts.firstMatch.exists, "Opening diagnostics must not request Photos access")
+        attach("launch-timing-live")
+
+        let counts = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "读取已存索引统计，")).firstMatch
+        scrollTo(counts, in: page)
+        XCTAssertTrue(counts.exists, "The real preparation must expose its production counts stage")
+        let back = app.navigationBars["启动耗时"].buttons.element(boundBy: 0)
+        expectHittable(back)
+        back.tap()
+        expectAbsent(page)
+        XCTAssertTrue(app.navigationBars["设置"].exists)
+        setDebugTools(false, in: try sheetForm())
+        assertSettingsDebugOff(in: try sheetForm())
+        app.buttons["close-settings"].tap()
+        assertHomeControls()
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
     private func launch(largeText: Bool = false) {
         // Intentionally keep the system keyboard/locale English for exact-key
         // fixtures and Apple's Search return key. The app's approved Chinese
@@ -251,6 +304,7 @@ final class PresentationNavigationTests: XCTestCase {
     private var settingsDebugElements: [XCUIElement] {
         [app.descendants(matching: .any).matching(identifier: "debug-advanced").firstMatch,
          app.descendants(matching: .any).matching(identifier: "debug-diagnostics").firstMatch,
+            app.descendants(matching: .any).matching(identifier: "debug-launch-timing").firstMatch,
          app.buttons["高级设置"], app.buttons["诊断信息"], app.sliders["location-weight"]]
     }
 

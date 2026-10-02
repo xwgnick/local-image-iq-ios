@@ -127,9 +127,19 @@ final class GeneratedModelParityTests: XCTestCase {
             try require(fixtures.images.cases.count == 6 && fixtures.text.cases.count == 17,
                         "App API parity requires exactly six image patterns and all seventeen text cases.")
             let encoders: any PhotoEncoding = CoreMLEncoders(bundle: fixtures.bundle)
-            let manifest = try await encoders.prepare()
+            let timing = LaunchTimingRecorder(kind: .cold)
+            let manifest = try await encoders.prepare(timing: timing)
             try require(manifest.modelVersion == fixtures.manifest.modelVersion,
                         "The app actor must load the fixture owner's model pair.")
+            let preparation = try XCTUnwrap(timing.finish(.ready))
+            XCTAssertEqual(preparation.rows.map(\.stage), [.entry, .resources, .tokenizer, .imageModel, .textModel],
+                           "The production protocol witness must record actual model substeps.")
+            XCTAssertTrue(preparation.rows.allSatisfy { $0.seconds.isFinite && $0.seconds >= 0 })
+            let reused = LaunchTimingRecorder(kind: .retry)
+            let reusedManifest = try await encoders.prepare(timing: reused)
+            XCTAssertEqual(reusedManifest.modelVersion, manifest.modelVersion)
+            XCTAssertEqual(try XCTUnwrap(reused.finish(.ready)).rows.map(\.stage), [.entry, .cachedModels],
+                           "Already-loaded models must not be reported as newly loaded.")
 
             for fixture in fixtures.images.cases {
                 let preview = try modelSizedPreview(fixture, resources: fixtures, report: &report)

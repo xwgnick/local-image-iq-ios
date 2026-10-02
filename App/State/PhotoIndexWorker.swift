@@ -63,6 +63,7 @@ struct SearchResponse: Sendable {
 protocol PhotoWorkServicing: Sendable {
     func refresh() async throws -> LibrarySummary
     func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary
+    func prepareForLaunch(timing: LaunchTimingRecorder?, progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse
     func checkPhoto(id: String, query: String, locationWeight: Float) async throws -> PhotoDiagnosticReport
@@ -70,6 +71,11 @@ protocol PhotoWorkServicing: Sendable {
 }
 
 extension PhotoWorkServicing {
+    /// Dynamic protocol requirement preserves existing injected services.
+    func prepareForLaunch(timing: LaunchTimingRecorder?, progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary {
+        try await prepareForLaunch(progress: progress)
+    }
+
     /// Keep existing injected services compatible; only production warms models.
     func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary {
         try Task.checkCancellation()
@@ -160,23 +166,30 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         try await readiness(prepareModels: true, progress: progress)
     }
 
+    func prepareForLaunch(timing: LaunchTimingRecorder?, progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary {
+        try await readiness(prepareModels: true, timing: timing, progress: progress)
+    }
+
     private func readiness(prepareModels: Bool,
+                           timing: LaunchTimingRecorder? = nil,
                            progress: (@Sendable (LaunchStage) async -> Void)? = nil) async throws -> LibrarySummary {
         try Task.checkCancellation()
         if let progress {
             await progress(.checkingLibrary)
             try Task.checkCancellation()
         }
+        timing?.mark(.places)
         let metadata = geography()
         let manifest: ModelManifest
         do {
             try Task.checkCancellation()
             if prepareModels {
+                timing?.mark(.models)
                 if let progress { await progress(.preparingSearch) }
                 try Task.checkCancellation()
                 // Only the primary image/text models and tokenizer, not indexing
                 // slots, previews, predictions or translation resources.
-                manifest = try await encoders.prepare()
+                manifest = try await encoders.prepare(timing: timing)
             } else {
                 // Warm foreground refresh remains metadata-only; no model loads.
                 manifest = try await encoders.inspectResources()
@@ -192,8 +205,10 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
         // Stored counts, NOT a current authorized-library count or vector validation.
         // The user decides when to reconcile and update this persisted snapshot.
+        timing?.mark(.counts)
         let counts = try await reader().storedCounts(modelVersion: cacheVersion, geographyVersion: metadata.version)
         try Task.checkCancellation()
+        timing?.mark(.publish)
         return LibrarySummary(indexedCount: counts.indexed,
                               locatedCount: counts.located, modelVersion: cacheVersion,
                       placesDescription: metadata.coverageDescription)

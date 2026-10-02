@@ -1,5 +1,9 @@
 # Cloud build status — 2026-10-02
 
+## Current preparation: 0.5.5 (build 18) — 启动耗时截图页
+
+仅增加单调时钟分段记录和调试入口，不改变已交付的手动索引、模型顺序或纯图标启动页。本地静态 30 项、品牌 12 项及源码检查通过；本轮 Swift／原生测试、设备构建与交付尚待结果。计时从准备入口到发布结果，不含系统启动与首帧绘制。[完整范围](LAUNCH_TIMING.md)。
+
 ## Current: 0.5.4 (build 17) — 首轮 SUCCESS；用户手动管理索引，已交付
 
 [Run 37022941546](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546)

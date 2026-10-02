@@ -2,6 +2,10 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
+## 最新代码：0.5.5 / build 18 启动计时，待原生验证
+
+设置中开启“显示调试工具”，展开“诊断信息 → 启动耗时”，即可截图总耗时及模型／分词器／统计等分段。计时自动记录，启动页仍只有图标，不改变手动索引或加载策略。测量边界与查看步骤见 [docs/LAUNCH_TIMING.md](docs/LAUNCH_TIMING.md)。本轮原生构建结果待确认，下方保留 build 17 的既有交付。
+
 ## 当前交付（2026-10-02）：0.5.4 / build 17，手动索引与启动路径调整，首轮 SUCCESS
 
 **原生测试、设备构建、公开发布及本地 IPA 全量校验已完成。**[CI 37022941546](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546)／[job 110890327401](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546/job/110890327401)，源码 **`02d5bc72b4d463bf2adca50dbf1d571a93183354`**；既有个人公开仓库标准 `macos-15` 手动工作流，`include_models`／`all_compute_units`／`build_device_ipa` 均为 `true`，**attempt 1 SUCCESS，无追加重试**。

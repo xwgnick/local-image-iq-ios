@@ -10,12 +10,15 @@ protocol PhotoImageEncoding: Sendable {
 protocol PhotoEncoding: PhotoImageEncoding {
     func inspectResources() async throws -> ModelManifest
     func prepare() async throws -> ModelManifest
+    func prepare(timing: LaunchTimingRecorder?) async throws -> ModelManifest
     func image(data: Data, orientation: CGImagePropertyOrientation) async throws -> [Float]
     func text(_ text: String) async throws -> [Float]
     func makeIndexingImageEncoders() async throws -> [any PhotoImageEncoding]
 }
 
 extension PhotoEncoding {
+    func prepare(timing: LaunchTimingRecorder?) async throws -> ModelManifest { try await prepare() }
+
     /// Compatibility for injected mocks; production inspects metadata without loading models.
     func inspectResources() async throws -> ModelManifest { try await prepare() }
 
@@ -53,6 +56,7 @@ actor CoreMLEncoders: PhotoEncoding {
     func inspectResources() async throws -> ModelManifest { try modelResources().manifest }
 
     func prepare() async throws -> ModelManifest { try await load().manifest }
+    func prepare(timing: LaunchTimingRecorder?) async throws -> ModelManifest { try await load(timing: timing).manifest }
 
     func image(data: Data, orientation: CGImagePropertyOrientation) async throws -> [Float] {
         try Task.checkCancellation()
@@ -131,16 +135,20 @@ actor CoreMLEncoders: PhotoEncoding {
         return try EmbeddingValidation.normalizeProjection(values)
     }
 
-    private func load() async throws -> Loaded {
+    private func load(timing: LaunchTimingRecorder? = nil) async throws -> Loaded {
         try Task.checkCancellation()
-        if let loaded { return loaded }
+        if let loaded {
+            timing?.mark(.cachedModels)
+            return loaded
+        }
         let task: Task<Void, Error>
         if let loadingTask {
+            timing?.mark(.sharedModels)
             task = loadingTask
         } else {
             // Installed before the first suspension: actor reentrancy cannot start a
             // second load. One cancelled caller does not cancel other callers' setup.
-            task = Task { try await self.loadBundledModels() }
+            task = Task { try await self.loadBundledModels(timing: timing) }
             loadingTask = task
         }
         try await task.value
@@ -177,15 +185,19 @@ actor CoreMLEncoders: PhotoEncoding {
         }
     }
 
-    private func loadBundledModels() async throws {
+    private func loadBundledModels(timing: LaunchTimingRecorder?) async throws {
         // Only the initializer clears its task. Waiters must not clear a newer retry.
         defer { loadingTask = nil }
         do {
+            timing?.mark(.resources)
             let resources = try modelResources()
             let manifest = resources.manifest
+            timing?.mark(.tokenizer)
             let tokenizer = try await SigLIPTokenizer.load(directory: resources.tokenizerDirectory)
+            timing?.mark(.imageModel)
             let image = CoreMLImageEncoder(modelURL: resources.imageURL, manifest: manifest)
             try await image.prepare()
+            timing?.mark(.textModel)
             let configuration = MLModelConfiguration()
             configuration.computeUnits = .all
             let text = try MLModel(contentsOf: resources.textURL, configuration: configuration)
