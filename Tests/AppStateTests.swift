@@ -65,6 +65,100 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(peak, 1)
     }
 
+    func testFinalSearchValidationFailurePublishesNeitherSummaryNorResults() async {
+        let failure = AppFailure.photo("TEST-final-search-access-changed")
+        let worker = StateTestWorker(finalValidation: { throw failure })
+        let state = AppState(worker: worker, authorizationStatus: { .authorized })
+        state.refresh()
+        await state.waitUntilIdle()
+        state.refresh()
+        await state.waitUntilIdle()
+        XCTAssertEqual(state.summary.indexedCount, 2, "The prepared search response has different counts.")
+        state.query = "Synthetic query"
+        XCTAssertTrue(state.canSearch)
+
+        state.search()
+        await state.waitUntilIdle()
+
+        XCTAssertEqual(state.authorization, .authorized)
+        XCTAssertEqual(state.summary.authorizedCount, 2)
+        XCTAssertEqual(state.summary.indexedCount, 2, "Validation must precede summary publication, not just results.")
+        XCTAssertTrue(state.results.isEmpty)
+        XCTAssertNil(state.completedQuery)
+        XCTAssertNil(state.completedSearchQuery)
+        XCTAssertEqual(state.errorMessage, failure.localizedDescription)
+        XCTAssertNotNil(state.actionHint)
+        XCTAssertFalse(state.isBusy)
+    }
+
+    func testSuccessfulFinalSearchValidationPublishesThePreparedResponse() async {
+        let validated = expectation(description: "Final publication access check ran")
+        let worker = StateTestWorker(finalValidation: { validated.fulfill() })
+        let state = AppState(worker: worker, authorizationStatus: { .limited })
+        state.refresh()
+        await state.waitUntilIdle()
+        state.query = "Synthetic query"
+
+        state.search()
+        await state.waitUntilIdle()
+        await fulfillment(of: [validated], timeout: 3)
+
+        XCTAssertEqual(state.authorization, .limited)
+        XCTAssertEqual(state.summary.indexedCount, 1)
+        XCTAssertTrue(state.summary.indexStatisticsKnown)
+        XCTAssertEqual(state.results.map(\.id), [TestFixtures.photo().photo.id])
+        XCTAssertEqual(state.completedQuery, "Synthetic query")
+        XCTAssertEqual(state.completedSearchQuery?.effective, "Synthetic query")
+        XCTAssertNil(state.errorMessage)
+        XCTAssertNil(state.actionHint)
+        XCTAssertFalse(state.isBusy)
+    }
+
+    func testPermissionRevokedAfterSearchPreparationRejectsPublicationWithoutLibraryChange() async {
+        for initialPermission in [PHAuthorizationStatus.authorized, .limited] {
+            let prepared = expectation(description: "Response prepared before publication for \(initialPermission)")
+            let worker = StateTestWorker(holding: .search, started: prepared, finalValidation: {
+                throw AppFailure.photo("TEST-response-validator-must-not-precede-permission-guard")
+            })
+            let authorization = StateTestAuthorization(initialPermission)
+            let state = AppState(worker: worker, authorizationStatus: { authorization.status })
+            addTeardownBlock {
+                await worker.release()
+                await state.waitUntilIdle()
+            }
+            state.refresh()
+            await state.waitUntilIdle()
+            state.refresh()
+            await state.waitUntilIdle()
+            state.query = "Synthetic query"
+            XCTAssertTrue(state.canSearch)
+            state.search()
+            await fulfillment(of: [prepared], timeout: 3)
+
+            // Mutate only the MainActor provider. No libraryChanged(), refresh(),
+            // cancellation or setting edit may invalidate this search for us.
+            authorization.status = .denied
+            XCTAssertEqual(state.authorization, initialPermission)
+            XCTAssertEqual(state.activity, .searching)
+            await worker.release()
+            await state.waitUntilIdle()
+
+            XCTAssertEqual(state.authorization, .denied)
+            XCTAssertFalse(state.canRead)
+            XCTAssertFalse(state.canSearch)
+            XCTAssertEqual(state.errorMessage, AppFailure.permission.localizedDescription)
+            XCTAssertNotNil(state.actionHint)
+            XCTAssertEqual(state.summary.authorizedCount, 2)
+            XCTAssertEqual(state.summary.indexedCount, 2)
+            XCTAssertTrue(state.results.isEmpty)
+            XCTAssertNil(state.completedQuery)
+            XCTAssertNil(state.completedSearchQuery)
+            XCTAssertFalse(state.isBusy)
+            let refreshCount = await worker.refreshCount
+            XCTAssertEqual(refreshCount, 2, "No Photos observer or refresh is needed to reject publication.")
+        }
+    }
+
     func testEditingWeightInvalidatesInFlightSearch() async {
         let started = expectation(description: "Search started")
         let worker = StateTestWorker(holding: .search, started: started)
@@ -127,6 +221,13 @@ final class AppStateTests: XCTestCase {
     }
 }
 
+@MainActor
+private final class StateTestAuthorization {
+    var status: PHAuthorizationStatus
+
+    init(_ status: PHAuthorizationStatus) { self.status = status }
+}
+
 private actor TestLatch {
     private var opened = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -151,16 +252,19 @@ private actor StateTestWorker: PhotoWorkServicing {
     private let latch = TestLatch()
     private let modelIssue: String?
     private let failRefresh: Bool
+    private let finalValidation: @Sendable () throws -> Void
     private var active = 0
     private(set) var peakConcurrency = 0
     private(set) var refreshCount = 0
     private(set) var networkAllowed: Bool?
 
-    init(holding: HeldOperation? = nil, started: XCTestExpectation? = nil, modelIssue: String? = nil, failRefresh: Bool = false) {
+    init(holding: HeldOperation? = nil, started: XCTestExpectation? = nil, modelIssue: String? = nil,
+         failRefresh: Bool = false, finalValidation: @escaping @Sendable () throws -> Void = {}) {
         self.holding = holding
         self.started = started
         self.modelIssue = modelIssue
         self.failRefresh = failRefresh
+        self.finalValidation = finalValidation
     }
 
     func release() async { await latch.open() }
@@ -190,10 +294,14 @@ private actor StateTestWorker: PhotoWorkServicing {
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse {
         begin()
         defer { active -= 1 }
-        if holding == .search { started?.fulfill(); await latch.wait() }
         let photo = TestFixtures.photo().photo
         let hits = try VectorSearch.search(query: TestFixtures.vector(), photos: [photo], limit: limit, locationWeight: locationWeight)
-        return SearchResponse(summary: LibrarySummary(authorizedCount: 1, indexedCount: 1, modelVersion: "test-model"), hits: hits)
+        let response = SearchResponse(summary: LibrarySummary(authorizedCount: 1, indexedCount: 1, modelVersion: "test-model"),
+                                      hits: hits, validateAccess: finalValidation)
+        // Hold only after preparing the response; its synchronous validator must
+        // run in AppState at publication, never inside this suspended worker.
+        if holding == .search { started?.fulfill(); await latch.wait() }
+        return response
     }
 
     func clear() async throws -> LibrarySummary { LibrarySummary(modelVersion: "test-model") }

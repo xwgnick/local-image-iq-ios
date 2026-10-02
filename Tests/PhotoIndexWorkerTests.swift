@@ -24,11 +24,16 @@ final class PhotoIndexWorkerTests: XCTestCase {
     }
 
     private func seed(_ context: WorkerTestContext, id: String, model: String, geography: String? = nil,
-                      label: String? = nil) async throws {
-        let place = label.map { PlaceEmbedding(text: "Photo taken in \($0).", vector: TestFixtures.vector(axis: 1)) }
+                      label: String? = nil, imageAxis: Int = 1, placeAxis: Int = 1) async throws {
+        let place = label.map { PlaceEmbedding(text: "Photo taken in \($0).", vector: TestFixtures.vector(axis: placeAxis)) }
         let photo = IndexedPhoto(id: id, modificationTime: 123, modelVersion: model,
-                                 imageEmbedding: TestFixtures.vector(axis: 1), location: place, creationTime: 100)
+                                 imageEmbedding: TestFixtures.vector(axis: imageAxis), location: place, creationTime: 100)
         try await context.store.save(CachedPhoto(photo: photo, geographyVersion: geography ?? resolver.version))
+    }
+
+    private func diskSnapshot(_ directory: URL) throws -> [String: Data] {
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        return try Dictionary(uniqueKeysWithValues: files.map { ($0.lastPathComponent, try Data(contentsOf: $0)) })
     }
 
     private func assertSources(_ progress: IndexProgress, local: Int = 0, reduced: Int = 0, network: Int = 0,
@@ -52,6 +57,7 @@ final class PhotoIndexWorkerTests: XCTestCase {
         let summary = try await context.worker.index(networkAllowed: false) { await progress.append($0) }
         let final = try await progress.last()
         XCTAssertEqual(summary.authorizedCount, 120)
+        XCTAssertTrue(summary.authorizedCountKnown)
         XCTAssertEqual(summary.indexedCount, 120)
         XCTAssertEqual(summary.locatedCount, 0)
         XCTAssertEqual(summary.modelVersion, cacheVersion)
@@ -224,7 +230,9 @@ final class PhotoIndexWorkerTests: XCTestCase {
         try await seed(context, id: "old-policy", model: "test-model|photokit-preview-v1")
         try await seed(context, id: "current", model: cacheVersion)
         let before = try await context.worker.refresh()
-        XCTAssertEqual(before.authorizedCount, 4)
+        XCTAssertEqual(before.authorizedCount, 0)
+        XCTAssertFalse(before.authorizedCountKnown)
+        XCTAssertEqual(context.library.enumerationCount, 0)
         XCTAssertEqual(before.indexedCount, 1)
         let beforeSearch = try await context.worker.search(text: "query", limit: 10, locationWeight: 0)
         XCTAssertEqual(beforeSearch.hits.map(\.id), ["current"])
@@ -282,7 +290,9 @@ final class PhotoIndexWorkerTests: XCTestCase {
         try await seed(context, id: "current", model: cacheVersion)
 
         let before = try await context.worker.refresh()
-        XCTAssertEqual(before.authorizedCount, 3)
+        XCTAssertEqual(before.authorizedCount, 0)
+        XCTAssertFalse(before.authorizedCountKnown)
+        XCTAssertEqual(context.library.enumerationCount, 0)
         XCTAssertEqual(before.indexedCount, 1)
         XCTAssertEqual(before.locatedCount, 0)
         XCTAssertNil(before.modelIssue)
@@ -570,7 +580,7 @@ final class PhotoIndexWorkerTests: XCTestCase {
         XCTAssertNil(row)
     }
 
-    func testCompleteAuthorizationSnapshotPrunesRemovedAndModifiedRowsAndPlaces() async throws {
+    func testManualIndexPrunesRemovedAndModifiedRowsAndPlacesButRefreshDoesNot() async throws {
         let preview = try WorkerPreviewFactory.make(.localPreview)
         let context = try makeWorker([
             WorkerTestRecord("kept", .preview(preview), label: "Kept Place"),
@@ -580,12 +590,32 @@ final class PhotoIndexWorkerTests: XCTestCase {
         _ = try await context.worker.index(networkAllowed: false) { _ in }
         context.library.replace([
             WorkerTestRecord("kept", .preview(preview), label: "Kept Place"),
-            WorkerTestRecord("modified", .preview(preview), revision: 124, label: "Modified Place")
+            WorkerTestRecord("modified", .cloudOnly, revision: 124, label: "Modified Place")
         ])
-        let summary = try await context.worker.refresh()
+        let before = try diskSnapshot(context.directory)
+        let enumerationCount = context.library.enumerationCount
+        let refreshed = try await context.worker.refresh()
+        XCTAssertFalse(refreshed.authorizedCountKnown)
+        XCTAssertEqual(refreshed.authorizedCount, 0)
+        XCTAssertEqual(refreshed.indexedCount, 3)
+        XCTAssertEqual(refreshed.locatedCount, 3)
+        XCTAssertEqual(context.library.enumerationCount, enumerationCount)
+        XCTAssertEqual(try diskSnapshot(context.directory), before)
+
+        // Explicit indexing still prunes old revisions before attempting their
+        // replacements. A failed preview must not resurrect the obsolete vector.
+        let progress = WorkerProgressTrace()
+        let summary = try await context.worker.index(networkAllowed: false) { await progress.append($0) }
+        let final = try await progress.last()
         XCTAssertEqual(summary.authorizedCount, 2)
+        XCTAssertTrue(summary.authorizedCountKnown)
         XCTAssertEqual(summary.indexedCount, 1)
         XCTAssertEqual(summary.locatedCount, 1)
+        XCTAssertEqual(final.reused, 1)
+        XCTAssertEqual(final.cloudSkipped, 1)
+        XCTAssertEqual(final.encoded, 0)
+        XCTAssertEqual(final.completed, 2)
+        assertSources(final)
         let rows = try await context.store.records(modelVersion: cacheVersion)
         XCTAssertEqual(rows.map(\.photo.id), ["kept"])
         for label in ["Removed Place", "Modified Place"] {
@@ -595,13 +625,232 @@ final class PhotoIndexWorkerTests: XCTestCase {
         let search = try await context.worker.search(text: "query", limit: 10, locationWeight: 0.6)
         XCTAssertEqual(search.hits.map(\.id), ["kept"])
         context.library.setReadable(false)
+        let beforeRevocationRefresh = try diskSnapshot(context.directory)
         let revoked = try await context.worker.refresh()
         XCTAssertEqual(revoked.authorizedCount, 0)
-        XCTAssertEqual(revoked.indexedCount, 0)
+        XCTAssertFalse(revoked.authorizedCountKnown)
+        XCTAssertEqual(revoked.indexedCount, 1)
+        XCTAssertEqual(try diskSnapshot(context.directory), beforeRevocationRefresh)
+        // The manual path retains its existing reconcile-before-permission rule.
+        do {
+            _ = try await context.worker.index(networkAllowed: false) { _ in }
+            XCTFail("Manual indexing with revoked permission must fail after reconciliation.")
+        } catch AppFailure.permission { }
+        catch { XCTFail("Unexpected failure: \(error)") }
         let remaining = try await context.store.records(modelVersion: cacheVersion)
         let place = try await context.store.place(text: "Photo taken in Kept Place.", modelVersion: cacheVersion)
         XCTAssertTrue(remaining.isEmpty)
         XCTAssertNil(place)
+    }
+
+    func testDeletedAndLimitedAccessRowsNeverBecomeHitsOrPolluteLocationMeanAndRemainStored() async throws {
+        for limitedAccess in [false, true] {
+            let visible = WorkerTestRecord("visible", .cloudOnly)
+            let unlocated = WorkerTestRecord("unlocated", .cloudOnly)
+            let hidden = WorkerTestRecord("hidden", .cloudOnly)
+            let context = try makeWorker([visible, unlocated, hidden])
+            try await seed(context, id: "visible", model: cacheVersion, label: "Visible Place", imageAxis: 0)
+            try await seed(context, id: "unlocated", model: cacheVersion)
+            try await seed(context, id: "hidden", model: cacheVersion, label: "Hidden Place", imageAxis: 0, placeAxis: 0)
+            await context.store.close()
+            let before = try diskSnapshot(context.directory)
+            context.library.replace([visible, unlocated])
+            if limitedAccess { context.library.setAuthorization(PHAuthorizationStatus.limited.rawValue) }
+
+            let response = try await context.worker.search(text: "query", limit: 10, locationWeight: 0.6)
+            XCTAssertEqual(response.hits.map(\.id), ["visible", "unlocated"])
+            let visibleHit = try XCTUnwrap(response.hits.first)
+            let unlocatedHit = try XCTUnwrap(response.hits.last)
+            // The only accessible place has a zero centered residual. Including
+            // Hidden Place in the mean before filtering would lower this to 0.1.
+            XCTAssertEqual(visibleHit.score, 0.4, accuracy: 0.000001)
+            XCTAssertEqual(unlocatedHit.score, 0, accuracy: 0.000001)
+            XCTAssertEqual(response.summary.authorizedCount, 2)
+            XCTAssertTrue(response.summary.authorizedCountKnown)
+            XCTAssertEqual(response.summary.indexedCount, 3, "Display counts describe stored rows, not current access.")
+            XCTAssertEqual(response.summary.locatedCount, 2)
+            XCTAssertEqual(context.library.enumerationCount, 3, "Initial, pre-score and post-score snapshots are required.")
+            let top = try await context.worker.search(text: "query", limit: 1, locationWeight: 0.6)
+            XCTAssertEqual(top.hits.map(\.id), ["visible"], "Inaccessible photos must not consume the top-K budget.")
+            let enumerationsBeforeDenial = context.library.enumerationCount
+            context.library.setReadable(false)
+            do {
+                _ = try await context.worker.search(text: "query", limit: 10, locationWeight: 0.6)
+                XCTFail("Complete revocation must reject search before enumeration, without deleting saved rows.")
+            } catch AppFailure.permission { }
+            catch { XCTFail("Unexpected permission error: \(error)") }
+            XCTAssertEqual(context.library.enumerationCount, enumerationsBeforeDenial)
+            XCTAssertEqual(try diskSnapshot(context.directory), before, "Deletion/access filtering must never prune photos or places.")
+            XCTAssertTrue(context.library.requests.isEmpty)
+            let previews = await context.encoders.previews
+            XCTAssertTrue(previews.isEmpty)
+        }
+    }
+
+    func testAccessibleEditedPhotoUsesOldEmbeddingUntilManualIndexReplacesIt() async throws {
+        let context = try makeWorker([
+            WorkerTestRecord("edited", .preview(try WorkerPreviewFactory.make(.localPreview)),
+                             revision: 124, label: "New Place")
+        ])
+        try await seed(context, id: "edited", model: cacheVersion, label: "Old Place")
+        await context.store.close()
+        let before = try diskSnapshot(context.directory)
+        let response = try await context.worker.search(text: "query", limit: 3, locationWeight: 0.6)
+        XCTAssertEqual(response.hits.map(\.id), ["edited"])
+        let old = try XCTUnwrap(response.hits.first)
+        XCTAssertEqual(old.photo.modificationTime, 123)
+        XCTAssertEqual(old.photo.imageEmbedding, TestFixtures.vector(axis: 1))
+        XCTAssertEqual(old.photo.location?.text, "Photo taken in Old Place.")
+        XCTAssertEqual(old.score, 0, accuracy: 0.000001)
+        XCTAssertEqual(response.summary.indexedCount, 1)
+        XCTAssertEqual(try diskSnapshot(context.directory), before)
+        XCTAssertTrue(context.library.requests.isEmpty)
+
+        let trace = WorkerProgressTrace()
+        let updated = try await context.worker.index(networkAllowed: false) { await trace.append($0) }
+        let final = try await trace.last()
+        XCTAssertTrue(updated.authorizedCountKnown)
+        XCTAssertEqual(final.reused, 0)
+        XCTAssertEqual(final.encoded, 1)
+        assertSources(final, local: 1)
+        XCTAssertEqual(context.library.requests.map(\.id), ["edited"])
+        let searched = try await context.worker.search(text: "query", limit: 3, locationWeight: 0.6)
+        let fresh = try XCTUnwrap(searched.hits.first)
+        XCTAssertEqual(fresh.photo.modificationTime, 124)
+        XCTAssertEqual(fresh.photo.imageEmbedding, TestFixtures.vector())
+        XCTAssertEqual(fresh.photo.location?.text, "Photo taken in New Place.")
+        XCTAssertEqual(fresh.score, 0.4, accuracy: 0.000001)
+        let oldPlace = try await context.store.place(text: "Photo taken in Old Place.", modelVersion: cacheVersion)
+        XCTAssertNil(oldPlace, "Only the explicit manual index may remove the obsolete label.")
+    }
+
+    func testSearchMasksStaleGeographyWithoutRewritingCachedPlace() async throws {
+        let context = try makeWorker([WorkerTestRecord("current", .cloudOnly), WorkerTestRecord("stale", .cloudOnly)])
+        try await seed(context, id: "current", model: cacheVersion, label: "Current Place", imageAxis: 0)
+        try await seed(context, id: "stale", model: cacheVersion, geography: "old-pack",
+                       label: "Stale Place", imageAxis: 0, placeAxis: 0)
+        await context.store.close()
+        let before = try diskSnapshot(context.directory)
+        let response = try await context.worker.search(text: "query", limit: 10, locationWeight: 0.6)
+        XCTAssertEqual(response.hits.map(\.id), ["current", "stale"])
+        for hit in response.hits { XCTAssertEqual(hit.score, 0.4, accuracy: 0.000001) }
+        let stale = try XCTUnwrap(response.hits.first { $0.id == "stale" })
+        XCTAssertNil(stale.photo.location)
+        XCTAssertEqual(response.summary.indexedCount, 2)
+        XCTAssertEqual(response.summary.locatedCount, 1)
+        XCTAssertEqual(try diskSnapshot(context.directory), before)
+    }
+
+    func testSearchIgnoresInaccessibleCorruptImageAndPlaceBeforeDecodingButRejectsAccessibleCorruption() async throws {
+        for corruptImage in [true, false] {
+            let context = try makeWorker([WorkerTestRecord("visible", .cloudOnly)])
+            let invalid = [Float](repeating: 0, count: 768)
+            let corrupt = IndexedPhoto(id: "hidden", modificationTime: 123, modelVersion: cacheVersion,
+                                       imageEmbedding: corruptImage ? invalid : TestFixtures.vector(),
+                                       location: PlaceEmbedding(text: "Corrupt Place", vector: corruptImage ? TestFixtures.vector() : invalid))
+            try TestFixtures.seedRawCache([CachedPhoto(photo: corrupt, geographyVersion: resolver.version)], directory: context.directory)
+            try await seed(context, id: "visible", model: cacheVersion, imageAxis: 0)
+            await context.store.close()
+            let before = try diskSnapshot(context.directory)
+            let response = try await context.worker.search(text: "query", limit: 10, locationWeight: 0.6)
+            XCTAssertEqual(response.hits.map(\.id), ["visible"])
+            XCTAssertEqual(response.summary.indexedCount, 2)
+            XCTAssertEqual(response.summary.locatedCount, 1, "Stored metadata counts do not validate inaccessible vectors.")
+            XCTAssertEqual(try diskSnapshot(context.directory), before)
+
+            context.library.replace([WorkerTestRecord("visible", .cloudOnly), WorkerTestRecord("hidden", .cloudOnly, revision: 124)])
+            do {
+                _ = try await context.worker.search(text: "query", limit: 10, locationWeight: 0.6)
+                XCTFail("An accessible ID must decode its stored content even when its current revision differs.")
+            } catch AppFailure.modelContract { }
+            catch { XCTFail("Unexpected corruption error: \(error)") }
+            XCTAssertEqual(try diskSnapshot(context.directory), before)
+        }
+    }
+
+    func testSearchRejectsAccessAndRevisionChangesAtBothScoringBoundariesWithoutWrites() async throws {
+        for check in [2, 3] {
+            for change in ["deleted", "edited", "creation-time", "limited", "denied"] {
+                let context = try makeWorker([WorkerTestRecord("kept", .cloudOnly), WorkerTestRecord("changed", .cloudOnly)])
+                try await seed(context, id: "kept", model: cacheVersion, imageAxis: 0)
+                try await seed(context, id: "changed", model: cacheVersion, label: "Changed Place")
+                await context.store.close()
+                let before = try diskSnapshot(context.directory)
+                switch change {
+                case "deleted":
+                    context.library.changeOnEnumeration(check, records: [WorkerTestRecord("kept", .cloudOnly)])
+                case "edited", "creation-time":
+                    context.library.changeOnEnumeration(check, records: [
+                        WorkerTestRecord("kept", .cloudOnly),
+                        WorkerTestRecord("changed", .cloudOnly, revision: change == "edited" ? 124 : 123,
+                                         creationTime: change == "creation-time" ? 101 : 100)
+                    ])
+                case "limited":
+                    // IDs and revisions stay identical; the authorization value alone changes.
+                    context.library.changeOnEnumeration(check, authorization: PHAuthorizationStatus.limited.rawValue)
+                default:
+                    context.library.changeOnEnumeration(check, readable: false)
+                }
+                do {
+                    // Invalid scoring input for check #2 proves access validation
+                    // occurs BEFORE scoring, not merely twice after scoring.
+                    _ = try await context.worker.search(text: "query", limit: 10, locationWeight: check == 2 ? -1 : 0.6)
+                    XCTFail("Search must reject \(change) at snapshot \(check).")
+                } catch AppFailure.permission {
+                    XCTAssertEqual(change, "denied")
+                } catch AppFailure.photo {
+                    XCTAssertNotEqual(change, "denied")
+                } catch { XCTFail("Unexpected search error for \(change) at \(check): \(error)") }
+                XCTAssertEqual(context.library.enumerationCount, check)
+                XCTAssertEqual(try diskSnapshot(context.directory), before)
+                XCTAssertTrue(context.library.requests.isEmpty)
+            }
+        }
+    }
+
+    func testRevocationAndCancellationDuringQueryEncodingRejectLateSuccessWithoutWrites() async throws {
+        for cancelled in [false, true] {
+            let started = expectation(description: "Search query encoding is held")
+            let encoders = try WorkerTestEncoders(holdQuery: true, started: started)
+            let context = try makeWorker([WorkerTestRecord("kept", .cloudOnly)], encoders: encoders)
+            try await seed(context, id: "kept", model: cacheVersion, label: "Kept Place", imageAxis: 0)
+            await context.store.close()
+            let before = try diskSnapshot(context.directory)
+            let task = Task { try await context.worker.search(text: "query", limit: 3, locationWeight: 0.6) }
+            addTeardownBlock {
+                task.cancel()
+                await encoders.release()
+                _ = await task.result
+            }
+            await fulfillment(of: [started], timeout: 3)
+            if cancelled { task.cancel() } else { context.library.setReadable(false) }
+            await encoders.release()
+            do { _ = try await task.value; XCTFail("Late query output must not publish results.") }
+            catch is CancellationError { XCTAssertTrue(cancelled) }
+            catch AppFailure.permission { XCTAssertFalse(cancelled) }
+            catch { XCTFail("Unexpected search error: \(error)") }
+            XCTAssertEqual(try diskSnapshot(context.directory), before)
+            XCTAssertTrue(context.library.requests.isEmpty)
+        }
+    }
+
+    func testFailedAndCancelledSearchEnumerationLeaveSavedRowsUnchanged() async throws {
+        for cancelled in [false, true] {
+            let context = try makeWorker([WorkerTestRecord("kept", .cloudOnly)])
+            try await seed(context, id: "kept", model: cacheVersion, label: "Kept Place")
+            await context.store.close()
+            let before = try diskSnapshot(context.directory)
+            if cancelled { context.library.cancelNextEnumeration() }
+            else { context.library.failEnumeration(AppFailure.photo("Incomplete search snapshot")) }
+            let task = Task { try await context.worker.search(text: "query", limit: 3, locationWeight: 0.6) }
+            do { _ = try await task.value; XCTFail("An incomplete snapshot must not be scored.") }
+            catch is CancellationError { XCTAssertTrue(cancelled) }
+            catch AppFailure.photo { XCTAssertFalse(cancelled) }
+            catch { XCTFail("Unexpected search error: \(error)") }
+            XCTAssertEqual(try diskSnapshot(context.directory), before)
+            let texts = await context.encoders.texts
+            XCTAssertTrue(texts.isEmpty)
+        }
     }
 
     func testIndexAndSearchUseInjectedReadPermission() async throws {
@@ -620,27 +869,38 @@ final class PhotoIndexWorkerTests: XCTestCase {
         XCTAssertTrue(context.library.requests.isEmpty)
     }
 
-    func testFailedEnumerationDoesNotPruneCompletedRecords() async throws {
+    func testFailedManualIndexEnumerationDoesNotPruneCompletedRecords() async throws {
         let context = try makeWorker([WorkerTestRecord("kept", .cloudOnly)])
         try await seed(context, id: "kept", model: cacheVersion, label: "Kept Place")
         context.library.failEnumeration(AppFailure.photo("Incomplete enumeration"))
-        do { _ = try await context.worker.refresh(); XCTFail("Expected enumeration failure.") }
+        let before = try diskSnapshot(context.directory)
+        let refreshed = try await context.worker.refresh()
+        XCTAssertFalse(refreshed.authorizedCountKnown)
+        XCTAssertEqual(refreshed.indexedCount, 1)
+        XCTAssertEqual(context.library.enumerationCount, 0)
+        do {
+            _ = try await context.worker.index(networkAllowed: false) { _ in }
+            XCTFail("Expected manual-index enumeration failure.")
+        }
         catch AppFailure.photo { }
         catch { XCTFail("Unexpected failure: \(error)") }
+        XCTAssertEqual(try diskSnapshot(context.directory), before)
         let row = try await context.store.record(id: "kept")
         let place = try await context.store.place(text: "Photo taken in Kept Place.", modelVersion: cacheVersion)
         XCTAssertNotNil(row)
         XCTAssertNotNil(place)
     }
 
-    func testCancelledEnumerationDoesNotPruneCompletedRecords() async throws {
+    func testCancelledManualIndexEnumerationDoesNotPruneCompletedRecords() async throws {
         let context = try makeWorker([WorkerTestRecord("kept", .cloudOnly)])
         try await seed(context, id: "kept", model: cacheVersion, label: "Kept Place")
         context.library.cancelNextEnumeration()
         let worker = context.worker
-        let task = Task { try await worker.refresh() }
+        let before = try diskSnapshot(context.directory)
+        let task = Task { try await worker.index(networkAllowed: false) { _ in } }
         do { _ = try await task.value; XCTFail("Cancelled empty snapshot must not be reconciled.") }
         catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(try diskSnapshot(context.directory), before)
         let row = try await context.store.record(id: "kept")
         let place = try await context.store.place(text: "Photo taken in Kept Place.", modelVersion: cacheVersion)
         XCTAssertNotNil(row)
@@ -726,6 +986,14 @@ private final class WorkerTestLibrary: PhotoLibraryIndexing, @unchecked Sendable
     private var history: [Request] = []
     private var enumerationError: Error?
     private var cancelEnumeration = false
+    private var enumerations = 0
+    private var authorization = PHAuthorizationStatus.authorized.rawValue
+    private struct EnumerationChange {
+        let records: [WorkerTestRecord]?
+        let readable: Bool?
+        let authorization: Int?
+    }
+    private var enumerationChanges: [Int: EnumerationChange] = [:]
 
     init(_ records: [WorkerTestRecord]) { self.records = records }
 
@@ -736,14 +1004,27 @@ private final class WorkerTestLibrary: PhotoLibraryIndexing, @unchecked Sendable
     }
 
     var canReadImages: Bool { locked { readable } }
+    var authorizationStatusRawValue: Int? { locked { authorization } }
+    var enumerationCount: Int { locked { enumerations } }
     var requests: [Request] { locked { history } }
     func replace(_ records: [WorkerTestRecord]) { locked { self.records = records } }
     func setReadable(_ value: Bool) { locked { readable = value } }
+    func setAuthorization(_ value: Int) { locked { authorization = value } }
+    func changeOnEnumeration(_ call: Int, records: [WorkerTestRecord]? = nil,
+                             readable: Bool? = nil, authorization: Int? = nil) {
+        locked { enumerationChanges[call] = EnumerationChange(records: records, readable: readable, authorization: authorization) }
+    }
     func failEnumeration(_ error: Error) { locked { enumerationError = error } }
     func cancelNextEnumeration() { locked { cancelEnumeration = true } }
 
     func enumerateAuthorizedImages() throws -> [PhotoRevision] {
         try locked {
+            enumerations += 1
+            if let change = enumerationChanges.removeValue(forKey: enumerations) {
+                if let records = change.records { self.records = records }
+                if let readable = change.readable { self.readable = readable }
+                if let authorization = change.authorization { self.authorization = authorization }
+            }
             if let enumerationError { throw enumerationError }
             if cancelEnumeration {
                 cancelEnumeration = false
@@ -813,7 +1094,9 @@ private actor WorkerTestEncoders: PhotoEncoding {
     private let imageFailure: AppFailure?
     private let holdPreviewCall: Int?
     private let holdPreviewSource: IndexingImage.Source?
+    private let holdQuery: Bool
     private var heldPreview = false
+    private var heldQuery = false
     private let started: XCTestExpectation?
     private let latch = WorkerEncoderLatch()
     private(set) var previews: [IndexingImage] = []
@@ -821,11 +1104,13 @@ private actor WorkerTestEncoders: PhotoEncoding {
     private(set) var dataCalls = 0
 
     init(imageFailure: AppFailure? = nil, holdPreviewCall: Int? = nil,
-         holdPreviewSource: IndexingImage.Source? = nil, started: XCTestExpectation? = nil) throws {
+            holdPreviewSource: IndexingImage.Source? = nil, holdQuery: Bool = false,
+            started: XCTestExpectation? = nil) throws {
         manifest = try JSONDecoder().decode(ModelManifest.self, from: Data(TestFixtures.manifest.utf8))
         self.imageFailure = imageFailure
         self.holdPreviewCall = holdPreviewCall
         self.holdPreviewSource = holdPreviewSource
+        self.holdQuery = holdQuery
         self.started = started
     }
 
@@ -851,8 +1136,13 @@ private actor WorkerTestEncoders: PhotoEncoding {
         return TestFixtures.vector()
     }
 
-    func text(_ text: String) throws -> [Float] {
+    func text(_ text: String) async throws -> [Float] {
         texts.append(text)
+        if holdQuery && !heldQuery && !text.hasPrefix("Photo taken in ") {
+            heldQuery = true
+            started?.fulfill()
+            await latch.wait() // Deliberate late success; cancellation must be checked by the worker.
+        }
         return TestFixtures.vector(axis: text.hasPrefix("Photo taken in ") ? 2 : 0)
     }
 

@@ -91,6 +91,13 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
     private let callbackLock = NSLock()
     private var changeHandler: (@Sendable () -> Void)?
     private var observing = false
+    private var generation: UInt64 = 0
+
+    var changeGeneration: UInt64? {
+        callbackLock.lock()
+        defer { callbackLock.unlock() }
+        return generation
+    }
 
     override init() {
         super.init()
@@ -122,6 +129,7 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
 
     func photoLibraryDidChange(_ changeInstance: PHChange) {
         callbackLock.lock()
+        generation &+= 1
         let callback = changeHandler
         callbackLock.unlock()
         callback?()

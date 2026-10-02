@@ -1,6 +1,14 @@
 # Cloud build status — 2026-10-02
 
-## Current: 0.5.3 (build 16) — 首轮 SUCCESS；B02 图标与纯图标启动页已交付
+## Current preparation: 0.5.4 (build 17) — 用户手动管理索引，待原生验证
+
+启动／自动刷新改为只读已存索引统计和小型地点元数据，不扫描图库、不删除记录、不解析完整边界；保留模型准备和 B02 纯图标门控。手动更新复用未变记录，全部重建需明确确认；搜索按当前访问范围过滤后才评分，不改写数据库。已有可访问但编辑过的照片仍按旧索引匹配，直到手动更新。
+
+地点 GeoJSON 仍为 15,175,079 字节／2,943 要素，SHA-256 `41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`，缓存身份 `raycast-v1-93c9a925e35247f2` 不变。新增约 23KB 的清单字段在构建时计算原身份，运行时不为取版本解析几何。
+
+本地静态／品牌／地点 Python 测试 30＋12＋32 通过，Node 源码／地点／打包检查通过。Swift／原生测试与新 IPA 尚待本轮构建结果，不以本地通过推断真机性能。改动契约见 [MANUAL_INDEX_STARTUP.md](MANUAL_INDEX_STARTUP.md)。
+
+## Previous delivery: 0.5.3 (build 16) — 首轮 SUCCESS；B02 图标与纯图标启动页已交付
 
 [Run 37004642577](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37004642577)
 ／[job 110829945285](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37004642577/job/110829945285)，

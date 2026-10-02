@@ -128,7 +128,7 @@ struct SettingsSheet: View {
                         Text(placeAvailability)
                             .font(.footnote)
                             .foregroundStyle(IQStyle.secondary)
-                        Text("上次检查时，\(state.summary.indexedCount.formatted()) 张已建索引的照片中有 \(state.summary.locatedCount.formatted()) 张保存了地点标签。这不是带定位照片的数量；本轮检查情况见「我的图库」。")
+                        Text("本机保存的 \(state.summary.indexedCount.formatted()) 张照片索引中，有 \(state.summary.locatedCount.formatted()) 张保存了地点标签。这不是当前可搜索或带定位照片的数量；手动索引的扫描记录见「我的图库」。")
                             .font(.footnote)
                             .foregroundStyle(IQStyle.secondary)
                     }
@@ -167,7 +167,7 @@ struct SettingsSheet: View {
 
     private var maintenanceSection: some View {
         Section {
-            Button("刷新图库", systemImage: "arrow.clockwise") { state.refresh() }
+            Button("刷新索引统计", systemImage: "arrow.clockwise") { state.refresh() }
                 .disabled(state.isBusy)
                 .frame(minHeight: 44)
                 .accessibilityIdentifier("refresh-library")
@@ -178,7 +178,7 @@ struct SettingsSheet: View {
             .disabled(state.isBusy)
             .accessibilityIdentifier("clear-index")
             if state.activity == .refreshing || state.activity == .clearing {
-                ProgressView(state.activity == .clearing ? "正在清除本地索引…" : "正在刷新图库…")
+                ProgressView(state.activity == .clearing ? "正在清除本地索引…" : "正在刷新索引统计…")
             }
             if let error = state.errorMessage {
                 Text(state.summary.modelIssue != nil || error.hasPrefix("Models unavailable:") || error.hasPrefix("Model contract mismatch:")
@@ -191,7 +191,7 @@ struct SettingsSheet: View {
         } header: {
             Text("图库维护")
         } footer: {
-            Text("刷新只检查照片权限与搜索覆盖，不重建索引。清除索引不会删除原照片。")
+            Text("刷新只读取本机保存的索引统计，不扫描照片或更新索引。请在「我的图库」手动更新或全部重建索引。清除索引不会删除原照片。")
         }
         .listRowBackground(IQStyle.surface)
     }

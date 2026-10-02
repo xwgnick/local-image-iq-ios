@@ -18,7 +18,7 @@ final class PresentationNavigationTests: XCTestCase {
         app = nil
     }
 
-    func testHomeAndUnauthorizedLibraryNavigation() {
+    func testHomeAndUnauthorizedLibraryNavigation() throws {
         launch()
         // Verify the real launch's settled outcome, not whether a possibly
         // brief startup icon happened to be sampled by accessibility.
@@ -44,6 +44,17 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertEqual(app.buttons["authorize-photos"].label, "选择照片")
         XCTAssertFalse(app.alerts.firstMatch.exists)
         attach("library-live")
+        let form = try sheetForm()
+        let update = app.buttons["index-photos"]
+        scrollTo(update, in: form, allowDisabled: true)
+        XCTAssertEqual(update.label, "建立索引")
+        XCTAssertFalse(update.isEnabled)
+        let rebuild = app.buttons["rebuild-index"]
+        scrollTo(rebuild, in: form, allowDisabled: true)
+        XCTAssertEqual(rebuild.label, "全部重建索引")
+        XCTAssertFalse(rebuild.isEnabled, "Rebuild is visible without debug tools, but requires index readiness")
+        XCTAssertFalse(app.buttons["confirm-rebuild-index"].exists,
+                   "Merely opening Library must not expose the destructive confirmation action")
         done.tap()
         expectAbsent(done)
         expectHittable(app.textFields["photo-query"])
@@ -333,6 +344,9 @@ final class PresentationNavigationTests: XCTestCase {
     private func assertSettingsDebugOff(in form: XCUIElement) {
         let picker = app.descendants(matching: .any).matching(identifier: "result-limit").firstMatch
         scrollTo(picker, in: form, swipeUp: false, expectingAbsent: settingsDebugElements)
+        let refresh = app.buttons["refresh-library"]
+        scrollTo(refresh, in: form, expectingAbsent: settingsDebugElements)
+        XCTAssertEqual(refresh.label, "刷新索引统计")
         scrollTo(debugToggle, in: form, expectingAbsent: settingsDebugElements)
         XCTAssertEqual(app.switches.matching(identifier: "show-debug-tools").count, 1)
         expectSwitch(debugToggle, enabled: false)

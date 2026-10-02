@@ -5,12 +5,33 @@ import Photos
 import ImageIQCore
 @testable import LocalImageIQ
 
-/// Three native review attachments, not pixel/text-visibility assertions. Real
+/// Four native review attachments, not pixel/text-visibility assertions. Real
 /// AppState and sheets; test-only service, labels and generated 768-D vectors.
 /// No image/model requests, Photos authorization/imports or index writes. These
 /// tests verify presentation of service results, NOT the worker's backfill logic.
 @MainActor
 final class IndexPlacesPresentationTests: XCTestCase {
+    func testOpeningSavedIndexLibraryDoesNotScanRefreshAgainOrClearSnapshot() async throws {
+        let worker = IndexPlacesTestWorker(photos: IndexPlacesFixtures.photos(count: 3, located: 0),
+                                          progress: IndexProgress())
+        let state = await readyState(worker)
+        XCTAssertFalse(state.summary.authorizedCountKnown)
+        XCTAssertEqual(LibrarySheet(state: state).storedCountText, "已索引 3 张")
+        XCTAssertEqual(LibrarySheet(state: state).authorizedCountSnapshotText, "未扫描")
+        XCTAssertFalse(state.debugToolsEnabled)
+        try await snapshot(LibrarySheet(state: state), id: "saved-index-unscanned")
+        await state.waitUntilIdle()
+        let refreshes = await worker.refreshCount
+        let requests = await worker.indexRequests
+        XCTAssertEqual(refreshes, 1, "Opening the sheet must not refresh or scan the library")
+        XCTAssertTrue(requests.isEmpty, "Rendering must not update or rebuild the index")
+        XCTAssertEqual(state.summary.indexedCount, 3)
+        XCTAssertFalse(state.summary.authorizedCountKnown)
+        XCTAssertNil(state.errorMessage)
+        // The worker fails immediately if clear/search is requested. Rebuild
+        // confirmation taps require separate authorized XCUI/device coverage.
+    }
+
     func testBackfillPublishesAllPlaceCountersAndReadyLibrarySnapshot() async throws {
         let photos = IndexPlacesFixtures.photos(count: 11, located: 4)
         try assertGeneratedRecords(photos)

@@ -585,8 +585,12 @@ final class IndexPipelineTests: XCTestCase {
         let context = try context([PipelineRow("a", place: .resolved("A")), PipelineRow("b", place: .unavailable)])
         _ = try await start(context).value
         let before = context.library.placeLookups
-        _ = try await context.worker.refresh()
+        let enumerations = context.events.values.filter { $0 == "enumerate" }.count
+        let refreshed = try await context.worker.refresh()
+        XCTAssertFalse(refreshed.authorizedCountKnown)
+        XCTAssertEqual(context.events.values.filter { $0 == "enumerate" }.count, enumerations)
         _ = try await context.worker.search(text: "synthetic query", limit: 2, locationWeight: 0.6)
+        XCTAssertEqual(context.events.values.filter { $0 == "enumerate" }.count, enumerations + 3)
         XCTAssertEqual(context.library.placeLookups, before)
         _ = try await context.worker.index(networkAllowed: false) { await context.progress.append($0) }
         let final = await context.progress.last
@@ -787,6 +791,8 @@ final class IndexPipelineTests: XCTestCase {
         XCTAssertTrue(context.library.networkFlags.allSatisfy { !$0 })
         XCTAssertEqual(holdingImages ? context.events.activeEncodes : context.events.activeRequests, 20)
         XCTAssertEqual(holdingImages ? context.events.activeRequests : context.events.activeEncodes, 0)
+        let database = context.directory.appendingPathComponent("index.sqlite3")
+        let before = try Data(contentsOf: database)
         let waiting = expectation(description: "Successor is waiting for the old index operation")
         context.events.watch("successor-waiting", with: waiting)
         // Match AppState's documented predecessor-await contract WITHOUT creating
@@ -813,6 +819,7 @@ final class IndexPipelineTests: XCTestCase {
             XCTAssertFalse(context.events.values.contains("successor-search"))
             XCTAssertEqual(context.events.values.filter { $0 == "enumerate" }.count, 1)
             XCTAssertEqual(context.events.values.filter { $0 == "prepare-model" }.count, 1)
+            XCTAssertFalse(context.events.values.contains("inspect-resources"))
             let texts = await context.encoders.texts
             XCTAssertTrue(texts.isEmpty)
             if holdingImages { await images[id]!.release.open() }
@@ -822,8 +829,13 @@ final class IndexPipelineTests: XCTestCase {
         await expectCancellation(task)
         let (refreshed, searched) = try await successor.value
         XCTAssertEqual(refreshed.indexedCount, 0)
+        XCTAssertEqual(refreshed.authorizedCount, 0)
+        XCTAssertFalse(refreshed.authorizedCountKnown)
         XCTAssertTrue(searched.hits.isEmpty)
         XCTAssertEqual(searched.summary.indexedCount, 0)
+        XCTAssertEqual(searched.summary.authorizedCount, ids.count)
+        XCTAssertTrue(searched.summary.authorizedCountKnown)
+        XCTAssertEqual(try Data(contentsOf: database), before, "Neither successor may reconcile or write the cancelled index.")
         XCTAssertEqual(context.library.requests.sorted(), window, "Cancelled window must never admit the 21st photo")
         XCTAssertTrue(context.library.placeLookups.isEmpty)
         XCTAssertEqual(context.events.activeRequests, 0)
@@ -840,6 +852,15 @@ final class IndexPipelineTests: XCTestCase {
         XCTAssertEqual(workers.count, 20)
         XCTAssertEqual(Set(workers.map { ObjectIdentifier($0) }).count, workerCount)
         let events = context.events.values
+        let lifecycle = events.filter {
+            ["enumerate", "prepare-model", "inspect-resources", "successor-waiting", "worker-return",
+             "successor-refresh", "successor-search", "text:synthetic query"].contains($0)
+        }
+        XCTAssertEqual(lifecycle, [
+            "enumerate", "prepare-model", "successor-waiting", "worker-return",
+            "successor-refresh", "inspect-resources",
+            "successor-search", "enumerate", "prepare-model", "text:synthetic query", "enumerate", "enumerate"
+        ], "Refresh does not enumerate; search takes initial, pre-score and post-score snapshots only after all old children drain.")
         let returned = try XCTUnwrap(events.firstIndex(of: "worker-return"))
         let refresh = try XCTUnwrap(events.firstIndex(of: "successor-refresh"))
         let search = try XCTUnwrap(events.firstIndex(of: "successor-search"))
@@ -1143,6 +1164,12 @@ private actor PipelineEncoders: PhotoEncoding {
 
     var imageCalls: [String] {
         events.values.filter { $0.hasPrefix("encode:") }.map { String($0.dropFirst("encode:".count)) }
+    }
+
+    func inspectResources() throws -> ModelManifest {
+        events.append("inspect-resources")
+        try manifest.validate()
+        return manifest
     }
 
     func prepare() throws -> ModelManifest {

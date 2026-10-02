@@ -10,6 +10,7 @@ struct LibrarySheet: View {
     @State private var showLimitedPicker = false
     @State private var detailsExpanded = false
     @State private var placesExpanded = false
+    @State private var confirmRebuild = false
 
     var body: some View {
         NavigationStack {
@@ -43,6 +44,17 @@ struct LibrarySheet: View {
             }
         }
         .tint(IQStyle.accent)
+        .confirmationDialog("全部重建索引？", isPresented: $confirmRebuild, titleVisibility: .visible) {
+            Button("全部重建索引", role: .destructive) {
+                guard state.canIndex else { return }
+                state.rebuildIndex()
+            }
+            .disabled(!state.canIndex)
+            .accessibilityIdentifier("confirm-rebuild-index")
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text("只清除本机的搜索索引和地点缓存，再重新建立索引；不会修改或删除系统相册中的原照片。重建期间，尚未完成索引的照片不可搜索。")
+        }
         .onChange(of: state.debugToolsEnabled) { _, enabled in
             if !enabled {
                 detailsExpanded = false
@@ -50,7 +62,7 @@ struct LibrarySheet: View {
             }
         }
         .sheet(isPresented: $showLimitedPicker, onDismiss: {
-            // The completion only dismisses. Refresh once here, including swipe dismissal.
+            // Notify the state of a permission change, without starting an index update.
             state.libraryChanged()
         }) {
             LimitedLibraryPicker { showLimitedPicker = false }
@@ -98,33 +110,31 @@ struct LibrarySheet: View {
                         .padding(18)
                         .background(IQStyle.accentSoft, in: RoundedRectangle(cornerRadius: 20))
                         .accessibilityHidden(true)
-                    Text(state.activity == .indexing ? "正在准备图库" : "准备图库")
+                    Text(state.activity == .indexing ? "正在更新索引" : "照片索引")
                         .font(.title2.weight(.semibold))
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
 
                 if state.activity == .refreshing || state.activity == .clearing {
-                    ProgressView(state.activity == .clearing ? "正在清除本地索引…" : "正在检查已授权照片…")
+                    ProgressView(state.activity == .clearing ? "正在清除本地索引…" : "正在刷新索引统计…")
                 } else if state.activity == .indexing {
                     scanProgress
                 } else {
                     VStack(spacing: 6) {
-                        Text("\(state.summary.indexedCount.formatted()) / \(state.summary.authorizedCount.formatted())")
+                        Text(storedCountText)
                             .font(.system(.title2, design: .rounded, weight: .bold))
                             .monospacedDigit()
                             .foregroundStyle(IQStyle.accent)
                             .fixedSize(horizontal: false, vertical: true)
-                        Text("可搜索 / 已授权照片")
-                            .font(.subheadline.weight(.medium))
-                        Text("以上为上次图库检查的结果")
+                        Text("本机保存的索引数量，不代表当前可搜索数量")
                             .font(.caption)
                             .foregroundStyle(IQStyle.secondary)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("上次图库检查：已授权 \(state.summary.authorizedCount) 张，可搜索 \(state.summary.indexedCount) 张")
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("stored-index-count")
                 }
             }
 
@@ -135,30 +145,37 @@ struct LibrarySheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if !state.summary.indexStatisticsKnown {
+                Button("刷新索引统计", systemImage: "arrow.clockwise") { state.refresh() }
+                    .disabled(state.isBusy)
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("refresh-index-statistics")
+            }
+
             if modelProblem != nil {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("搜索暂不可用", systemImage: "exclamationmark.circle")
                         .font(.headline)
                         .foregroundStyle(IQStyle.warning)
-                    Text("暂时无法准备图库或搜索，仍可管理照片权限。原照片未改变。")
+                    Text("暂时无法更新索引或搜索，仍可管理照片权限。原照片未改变。")
                         .font(.subheadline)
                         .foregroundStyle(IQStyle.secondary)
                 }
                 .fixedSize(horizontal: false, vertical: true)
-                Button("重新检查", systemImage: "arrow.clockwise") { state.refresh() }
+                Button("刷新索引统计", systemImage: "arrow.clockwise") { state.refresh() }
                     .disabled(state.isBusy)
                     .frame(minHeight: 44)
             }
 
             if state.activity == .indexing {
-                Button("暂停准备", systemImage: "pause.fill") { state.cancel() }
+                Button("暂停索引", systemImage: "pause.fill") { state.cancel() }
                     .buttonStyle(.bordered)
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("stop-indexing")
-                    .accessibilityHint("停止本次准备，保留已完成的记录")
+                    .accessibilityHint("停止本次索引，保留已完成的记录")
             } else {
                 Button { state.index() } label: {
-                    Label(state.summary.indexedCount > 0 || state.progress.completed > 0 ? "继续准备" : "开始准备", systemImage: "play.fill")
+                    Label(indexActionTitle, systemImage: "play.fill")
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(.borderedProminent)
@@ -167,13 +184,20 @@ struct LibrarySheet: View {
                 .accessibilityIdentifier("index-photos")
             }
 
+            Button("全部重建索引", systemImage: "arrow.triangle.2.circlepath") { confirmRebuild = true }
+                .buttonStyle(.bordered)
+                .disabled(!state.canIndex)
+                .frame(minHeight: 44)
+                .accessibilityIdentifier("rebuild-index")
+                .accessibilityHint("需要再次确认；只重建本地索引，不改变原照片")
+
             if state.canRead && state.activity != .indexing && state.progress.total > 0 {
                 scanProgress
             }
         } header: {
-            Text("搜索覆盖")
+            Text("索引管理")
         } footer: {
-            Text("准备时请保持应用在前台；已完成的记录会保留。")
+            Text(Self.manualIndexExplanation)
         }
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
@@ -181,7 +205,7 @@ struct LibrarySheet: View {
 
     private var scanProgress: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(state.activity == .indexing ? "本次准备" : "上次准备", systemImage: "photo.stack")
+            Label(state.activity == .indexing ? "本次手动索引" : "上次手动索引", systemImage: "photo.stack")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(IQStyle.accent)
             if state.activity == .indexing {
@@ -190,17 +214,17 @@ struct LibrarySheet: View {
                         .accessibilityLabel("已检查照片")
                         .accessibilityValue("\(state.progress.completed) 张，共 \(state.progress.total) 张")
                 } else {
-                    ProgressView("正在准备照片…")
+                    ProgressView("正在扫描照片以更新索引…")
                 }
             }
             if state.progress.total > 0 {
-                Text("已检查 \(state.progress.completed.formatted()) / \(state.progress.total.formatted()) 张")
+                Text("已检查 \(state.progress.completed.formatted()) 张 · 扫描范围 \(state.progress.total.formatted()) 张")
                     .font(.subheadline.weight(.medium))
             }
-            LabeledContent("可搜索", value: "\((state.progress.encoded + state.progress.reused).formatted()) 张")
+            LabeledContent("已完成索引", value: "\((state.progress.encoded + state.progress.reused).formatted()) 张")
             if state.progress.cloudSkipped > 0 {
                 LabeledContent("本地预览不可用", value: "\(state.progress.cloudSkipped.formatted()) 张")
-                Text("这些照片本次尚未准备好；允许 iCloud 后可重试，不保证能够下载。")
+                Text("这些照片本次尚未完成索引；允许 iCloud 后可手动更新索引重试，不保证能够下载。")
                     .font(.caption)
                     .foregroundStyle(IQStyle.secondary)
             }
@@ -211,12 +235,12 @@ struct LibrarySheet: View {
                 placeProgress
             }
             Text(state.activity == .indexing
-                  ? "以上仅为本次准备的数量，检查过不等于可搜索；图库总数在结束后更新。"
-                  : "以上仅为上次准备的数量，包含停止前完成的记录，不是整个图库的总数。")
+                ? "以上仅为本次手动索引的扫描进度，检查过不等于已完成索引。"
+                : "以上仅为上次手动索引的扫描记录，包含停止前完成的部分，不是当前图库总数或可搜索数量。")
                 .font(.caption)
                 .foregroundStyle(IQStyle.secondary)
             if state.activity != .indexing {
-                Button("刷新搜索覆盖", systemImage: "arrow.clockwise") { state.refresh() }
+                Button("刷新索引统计", systemImage: "arrow.clockwise") { state.refresh() }
                     .buttonStyle(.bordered)
                     .disabled(state.isBusy)
                     .frame(minHeight: 44)
@@ -251,7 +275,7 @@ struct LibrarySheet: View {
             }
         } label: {
             VStack(alignment: .leading, spacing: 4) {
-                Text(state.activity == .indexing ? "地点 · 本次准备" : "地点 · 上次准备")
+                Text(state.activity == .indexing ? "地点 · 本次索引" : "地点 · 上次索引")
                     .font(.subheadline.weight(.medium))
                 Text(state.progress.placeChecked > 0
                      ? "\(state.progress.gpsCount.formatted()) 张带定位 · 找到 \(state.progress.placeResolved.formatted()) 个标签"
@@ -271,13 +295,13 @@ struct LibrarySheet: View {
                         .font(.headline)
                         .foregroundStyle(IQStyle.warning)
                     Text(state.canRead
-                         ? "刷新图库后重试，原照片未改变。"
-                         : "请先检查上方照片权限，再刷新图库。")
+                        ? "可刷新索引统计后手动重试，原照片未改变。"
+                        : "请先检查上方照片权限，再刷新索引统计。")
                         .font(.subheadline)
                         .foregroundStyle(IQStyle.secondary)
                 }
                 .fixedSize(horizontal: false, vertical: true)
-                Button("刷新图库", systemImage: "arrow.clockwise") { state.refresh() }
+                Button("刷新索引统计", systemImage: "arrow.clockwise") { state.refresh() }
                     .disabled(state.isBusy)
                     .frame(minHeight: 44)
             }
@@ -293,7 +317,7 @@ struct LibrarySheet: View {
         } header: {
             Text("iCloud")
         } footer: {
-            Text("优先使用手机已有的预览。关闭时，准备图库不会下载图像；开启后，仅在本地预览不可用时，允许系统照片通过无线网络或移动数据下载。下载量由系统决定，应用不请求原图。")
+            Text("优先使用手机已有的预览。关闭时，建立或更新索引不会下载图像；开启后，仅在本地预览不可用时，允许系统照片通过无线网络或移动数据下载。下载量由系统决定，应用不请求原图。开关不会自动更新索引。")
         }
         .listRowBackground(IQStyle.surface)
     }
@@ -302,14 +326,14 @@ struct LibrarySheet: View {
         Section {
             DisclosureGroup("详细信息", isExpanded: $detailsExpanded) {
                 diagnostic("状态", state.status)
-                LabeledContent("已授权照片", value: state.summary.authorizedCount.formatted())
-                LabeledContent("上次检查时的有效索引", value: state.summary.indexedCount.formatted())
-                LabeledContent("上次检查时已保存的地点标签", value: state.summary.locatedCount.formatted())
-                Text("这是已建索引照片中保存的标签数，不是带定位照片数，也不是上次准备时的观察数。")
+                LabeledContent("上次操作核对时已授权", value: authorizedCountSnapshotText)
+                LabeledContent("本机已保存的索引", value: state.summary.indexStatisticsKnown ? state.summary.indexedCount.formatted() : "待刷新")
+                LabeledContent("本机已保存的地点标签", value: state.summary.indexStatisticsKnown ? state.summary.locatedCount.formatted() : "待刷新")
+                Text("授权数量仅为上次索引或搜索操作核对的快照，不代表当前权限范围；未扫描时不估算数量。标签数是索引中保存的标签数，不是带定位照片数，也不是上次索引时的观察数。")
                     .font(.footnote)
                     .foregroundStyle(IQStyle.secondary)
                 if state.progress.total > 0 {
-                    diagnostic(state.activity == .indexing ? "本次准备" : "上次准备", "\(state.progress.completed)/\(state.progress.total) 张已检查 · \(state.progress.encoded) 张新编码 · \(state.progress.reused) 张复用 · \(state.progress.cloudSkipped) 张本地预览不可用 · \(state.progress.failed) 张读取失败 · \(state.progress.localPreviews) 次本地预览 · \(state.progress.reducedPreviews) 次低清预览 · \(state.progress.networkPreviews) 次联网回退预览")
+                    diagnostic(state.activity == .indexing ? "本次手动索引" : "上次手动索引", "\(state.progress.completed) 张已检查 · 扫描共 \(state.progress.total) 张 · \(state.progress.encoded) 张新编码 · \(state.progress.reused) 张复用 · \(state.progress.cloudSkipped) 张本地预览不可用 · \(state.progress.failed) 张读取失败 · \(state.progress.localPreviews) 次本地预览 · \(state.progress.reducedPreviews) 次低清预览 · \(state.progress.networkPreviews) 次联网回退预览")
                 }
                 if let failure = state.progress.lastFailure {
                     diagnostic("最近跳过照片的问题", failure)
@@ -328,7 +352,7 @@ struct LibrarySheet: View {
                     .font(.footnote)
                     .foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("未变化的已完成记录会复用。来源数量只统计本轮新编码的照片；联网回退次数不代表下载次数或字节数。低清预览可能影响匹配，并会持续复用，直到照片或索引版本改变。")
+                Text("手动更新会复用未变化的已完成记录。来源数量只统计本轮新编码的照片；联网回退次数不代表下载次数或字节数。低清预览可能影响匹配；全部重建会重新请求预览，但不保证更高清。")
                     .font(.footnote)
                     .foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -359,31 +383,39 @@ struct LibrarySheet: View {
         }
     }
 
-    private var accessDescription: String {
+    // Pure presentation values also exercised by model-free contract tests.
+    var storedCountText: String {
+        state.summary.indexStatisticsKnown ? "已索引 \(state.summary.indexedCount.formatted()) 张" : "索引统计待刷新"
+    }
+
+    var indexActionTitle: String { state.summary.indexedCount == 0 ? "建立索引" : "更新索引" }
+
+    var authorizedCountSnapshotText: String {
+        state.summary.authorizedCountKnown ? "\(state.summary.authorizedCount.formatted()) 张" : "未扫描"
+    }
+
+    static let manualIndexExplanation = "新增照片在更新索引后才能搜索；编辑过的照片在更新前仍按旧内容匹配。搜索会检查访问权限并排除已删除或不可访问的照片。更新或重建时请保持应用在前台；已完成的记录会保留。"
+
+    var accessDescription: String {
         switch state.authorization {
         case .authorized:
-            return state.activity == .refreshing
-                ? "正在更新已授权照片数量…"
-                : "图库中有 \(state.summary.authorizedCount.formatted()) 张已授权照片。"
+            return "允许访问系统照片图库；新增或编辑照片后，请手动更新索引。"
         case .limited:
-            return state.activity == .refreshing
-                ? "正在更新已选照片数量…"
-                : "已授权 \(state.summary.authorizedCount.formatted()) 张，仅能访问你选中的照片。"
+            return "仅能访问你选中的照片；调整选择后，请手动更新索引。"
         case .denied: return "请在系统设置中允许访问所选照片或全部照片。"
         case .restricted: return "此设备的限制不允许访问照片，请检查系统设置。"
         default: return "可选择部分照片或整个图库，原照片仍保留在系统照片中。"
         }
     }
 
-    private var coverageDescription: String {
-        if !state.canRead { return "请先选择照片，授权后才能准备图库与搜索。" }
-        if state.activity == .refreshing || state.activity == .clearing { return "正在更新搜索覆盖…" }
-        if !state.modelsReady { return "暂时无法准备图库或搜索。" }
-        if state.summary.authorizedCount == 0 { return "当前照片权限下没有可用照片。" }
-        if state.summary.indexedCount < state.summary.authorizedCount {
-            return "尚有照片未准备好，暂不能搜索。开始或继续准备可尝试处理这些照片。"
-        }
-        return "上次检查时，已授权照片均可搜索。"
+    var coverageDescription: String {
+        if !state.canRead { return "请先选择照片，授权后可手动建立索引与搜索。" }
+        if state.activity == .clearing { return "正在清除本地索引，原照片不会改变。" }
+        if state.activity == .refreshing { return "正在读取本机保存的索引统计，不扫描照片。" }
+        if !state.modelsReady { return "暂时无法更新索引或搜索。" }
+        if !state.summary.indexStatisticsKnown { return "清除或重建后统计待确认，请刷新本机统计；不会扫描照片。" }
+        if state.summary.indexedCount == 0 { return "点「建立索引」后才能按照片内容搜索；索引由你手动更新。" }
+        return "点「更新索引」处理新增或编辑过的照片，未变化的索引会复用。"
     }
 
     private var modelProblem: String? {

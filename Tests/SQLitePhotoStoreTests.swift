@@ -14,6 +14,211 @@ final class SQLitePhotoStoreTests: XCTestCase {
         return (store, directory)
     }
 
+    private func diskSnapshot(_ directory: URL) throws -> [String: Data] {
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        return try Dictionary(uniqueKeysWithValues: files.map { ($0.lastPathComponent, try Data(contentsOf: $0)) })
+    }
+
+    /// Deliberate corruption/schema fixtures only; never a production connection.
+    private func executeRawSQL(_ sql: String, directory: URL) throws {
+        var handle: OpaquePointer?
+        let status = sqlite3_open_v2(directory.appendingPathComponent("index.sqlite3").path,
+                                     &handle, SQLITE_OPEN_READWRITE, nil)
+        defer { if let handle { sqlite3_close(handle) } }
+        guard status == SQLITE_OK, let database = handle else { throw AppFailure.storage("Synthetic SQLite connection") }
+        guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
+            throw AppFailure.storage("Synthetic SQLite mutation: \(String(cString: sqlite3_errmsg(database)))")
+        }
+    }
+
+    func testStoredCountsAndSearchRecordsDoNotCreateMissingDirectoryOrDatabase() async throws {
+        for missingDirectory in [false, true] {
+            let (_, root) = try makeStore()
+            let directory = missingDirectory ? root.appendingPathComponent("not-created", isDirectory: true) : root
+            let before = try diskSnapshot(root)
+            let reader = SQLitePhotoStore(directory: directory, readOnly: true)
+            addTeardownBlock { await reader.close() }
+            let counts = try await reader.storedCounts(modelVersion: "test-model", geographyVersion: "test-places")
+            let records = try await reader.searchRecords(modelVersion: "test-model", accessibleIDs: ["missing"])
+            let emptyAccess = try await reader.searchRecords(modelVersion: "test-model", accessibleIDs: [])
+            XCTAssertEqual(counts.indexed, 0)
+            XCTAssertEqual(counts.located, 0)
+            XCTAssertTrue(records.isEmpty)
+            XCTAssertTrue(emptyAccess.isEmpty)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("index.sqlite3").path))
+            if missingDirectory { XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path)) }
+            XCTAssertEqual(try diskSnapshot(root), before)
+        }
+    }
+
+    func testStoredCountsAndSearchRecordsRequireReadOnlyHandleBeforeCreatingFiles() async throws {
+        let (writer, directory) = try makeStore()
+        let before = try diskSnapshot(directory)
+        do {
+            _ = try await writer.storedCounts(modelVersion: "test-model", geographyVersion: "test-places")
+            XCTFail("Automatic counts must reject a writable handle, even before database creation.")
+        } catch AppFailure.storage { }
+        catch { XCTFail("Unexpected counts error: \(error)") }
+        do {
+            _ = try await writer.searchRecords(modelVersion: "test-model", accessibleIDs: [])
+            XCTFail("Search must require a read-only handle even for empty access.")
+        } catch AppFailure.storage { }
+        catch { XCTFail("Unexpected search error: \(error)") }
+        XCTAssertEqual(try diskSnapshot(directory), before)
+    }
+
+    func testStoredCountsAreReadOnlyMetadataAggregatesWithoutVectorDecodeOrOrphanCleanup() async throws {
+        let (writer, directory) = try makeStore()
+        let orphan = PlaceEmbedding(text: "Orphan Place", vector: TestFixtures.vector(axis: 1))
+        let shared = PlaceEmbedding(text: "Shared Place", vector: TestFixtures.vector(axis: 2))
+        try await writer.save(TestFixtures.photo(id: "a", location: orphan))
+        for id in ["a", "b"] { try await writer.save(TestFixtures.photo(id: id, location: shared)) }
+        let stale = TestFixtures.photo(id: "stale", location: shared)
+        try await writer.save(CachedPhoto(photo: stale.photo, geographyVersion: "old-places"))
+        try await writer.save(TestFixtures.photo(id: "unlocated"))
+        try await writer.save(TestFixtures.photo(id: "other-model", model: "other-model", location: shared))
+        await writer.close()
+        // Invalid JSON, not just an invalid unit vector: aggregates must never decode it.
+        try executeRawSQL("UPDATE photos SET image_embedding = x'FF'; UPDATE places SET embedding = x'FF';", directory: directory)
+        let before = try diskSnapshot(directory)
+        let reader = SQLitePhotoStore(directory: directory, readOnly: true)
+        addTeardownBlock { await reader.close() }
+        let current = try await reader.storedCounts(modelVersion: "test-model", geographyVersion: "test-places")
+        XCTAssertEqual(current.indexed, 4)
+        XCTAssertEqual(current.located, 2, "Shared labels count per stored photo; stale geography is excluded.")
+        let oldGeography = try await reader.storedCounts(modelVersion: "test-model", geographyVersion: "old-places")
+        XCTAssertEqual(oldGeography.indexed, 4)
+        XCTAssertEqual(oldGeography.located, 1)
+        let other = try await reader.storedCounts(modelVersion: "other-model", geographyVersion: "test-places")
+        XCTAssertEqual(other.indexed, 1)
+        XCTAssertEqual(other.located, 1)
+        let absent = try await reader.storedCounts(modelVersion: "missing-model", geographyVersion: "test-places")
+        XCTAssertEqual(absent.indexed, 0)
+        XCTAssertEqual(absent.located, 0)
+        do {
+            _ = try await reader.searchRecords(modelVersion: "test-model", accessibleIDs: ["a"])
+            XCTFail("Stored counts succeeding must not certify corrupt accessible embeddings.")
+        } catch is DecodingError { }
+        catch { XCTFail("Unexpected accessible-vector error: \(error)") }
+        XCTAssertEqual(try diskSnapshot(directory), before, "No migration, normalization, orphan cleanup or sidecars.")
+    }
+
+    func testStoredCountsDoNotRepairCorruptOrUnsupportedExistingDatabase() async throws {
+        for corruptFile in [true, false] {
+            let (writer, directory) = try makeStore()
+            if corruptFile {
+                try Data("not a SQLite database".utf8).write(to: directory.appendingPathComponent("index.sqlite3"))
+            } else {
+                try await writer.save(TestFixtures.photo())
+                await writer.close()
+                try executeRawSQL("PRAGMA user_version = 99", directory: directory)
+            }
+            let before = try diskSnapshot(directory)
+            let reader = SQLitePhotoStore(directory: directory, readOnly: true)
+            addTeardownBlock { await reader.close() }
+            do {
+                _ = try await reader.storedCounts(modelVersion: "test-model", geographyVersion: "test-places")
+                XCTFail("An existing invalid database must fail, not masquerade as a missing index.")
+            } catch AppFailure.storage { }
+            catch { XCTFail("Unexpected database error: \(error)") }
+            XCTAssertEqual(try diskSnapshot(directory), before)
+        }
+    }
+
+    func testSearchRecordsFilterInaccessibleIDsBeforeImageAndPlaceDecodeButAccessibleCorruptionThrows() async throws {
+        for corruptImage in [true, false] {
+            for corruption in ["json", "unit", "dimension"] {
+                let (writer, directory) = try makeStore()
+                let visibleID = "visible-'quote-照片"
+                let invalid = corruption == "dimension" ? [Float(1)] : [Float](repeating: 0, count: 768)
+                let hiddenPlace = PlaceEmbedding(text: "Hidden Place", vector: corruptImage ? TestFixtures.vector() : invalid)
+                let hidden = IndexedPhoto(id: "hidden", modificationTime: 122, modelVersion: "test-model",
+                                          imageEmbedding: corruptImage ? invalid : TestFixtures.vector(), location: hiddenPlace)
+                let obsolete = IndexedPhoto(id: "other-model", modificationTime: 123, modelVersion: "older-model",
+                                            imageEmbedding: invalid)
+                try TestFixtures.seedRawCache([CachedPhoto(photo: hidden, geographyVersion: "test-places"),
+                                              CachedPhoto(photo: obsolete, geographyVersion: "test-places")], directory: directory)
+                let visiblePlace = PlaceEmbedding(text: "Visible Place", vector: TestFixtures.vector(axis: 2))
+                try await writer.save(TestFixtures.photo(id: visibleID, location: visiblePlace))
+                await writer.close()
+                if corruption == "json" {
+                    let sql = corruptImage ? "UPDATE photos SET image_embedding = x'FF' WHERE id = 'hidden'"
+                        : "UPDATE places SET embedding = x'FF' WHERE text = 'Hidden Place'"
+                    try executeRawSQL(sql, directory: directory)
+                }
+                let before = try diskSnapshot(directory)
+                let reader = SQLitePhotoStore(directory: directory, readOnly: true)
+                addTeardownBlock { await reader.close() }
+                let filtered = try await reader.searchRecords(modelVersion: "test-model", accessibleIDs: [visibleID, "other-model", "absent"])
+                XCTAssertEqual(filtered.map(\.photo.id), [visibleID])
+                XCTAssertEqual(filtered.first?.photo.imageEmbedding, TestFixtures.vector())
+                XCTAssertEqual(filtered.first?.photo.location?.vector, visiblePlace.vector)
+                let noAccess = try await reader.searchRecords(modelVersion: "test-model", accessibleIDs: [])
+                XCTAssertTrue(noAccess.isEmpty)
+                XCTAssertEqual(try diskSnapshot(directory), before)
+                do {
+                    _ = try await reader.searchRecords(modelVersion: "test-model", accessibleIDs: [visibleID, "hidden"])
+                    XCTFail("Do not suppress corruption belonging to an accessible ID.")
+                } catch is DecodingError {
+                    XCTAssertEqual(corruption, "json")
+                } catch AppFailure.modelContract {
+                    XCTAssertNotEqual(corruption, "json")
+                } catch { XCTFail("Unexpected vector error: \(error)") }
+                // Reuse the same reader after failure; it must not cache old access decisions.
+                let filteredAgain = try await reader.searchRecords(modelVersion: "test-model", accessibleIDs: [visibleID])
+                XCTAssertEqual(filteredAgain.map(\.photo.id), [visibleID])
+                XCTAssertEqual(try diskSnapshot(directory), before)
+            }
+        }
+    }
+
+    func testSearchRecordsUseStoredRevisionAndDeterministicIDOrderWithoutWriting() async throws {
+        let (writer, directory) = try makeStore()
+        for id in ["z", "edited", "a"] {
+            try await writer.save(TestFixtures.photo(id: id, revision: id == "edited" ? 122 : 123))
+        }
+        await writer.close()
+        let before = try diskSnapshot(directory)
+        let reader = SQLitePhotoStore(directory: directory, readOnly: true)
+        addTeardownBlock { await reader.close() }
+        let records = try await reader.searchRecords(modelVersion: "test-model", accessibleIDs: ["z", "edited", "a"])
+        XCTAssertEqual(records.map(\.photo.id), ["a", "edited", "z"])
+        let edited = try XCTUnwrap(records.first { $0.photo.id == "edited" })
+        XCTAssertEqual(edited.photo.modificationTime, 122)
+        XCTAssertEqual(edited.photo.imageEmbedding, TestFixtures.vector())
+        XCTAssertEqual(try diskSnapshot(directory), before)
+    }
+
+    func testCancelledStoredCountsAndSearchRecordsLeaveDatabaseAndOrphansUnchanged() async throws {
+        let (writer, directory) = try makeStore()
+        let orphan = PlaceEmbedding(text: "Old Place", vector: TestFixtures.vector(axis: 1))
+        try await writer.save(TestFixtures.photo(location: orphan))
+        try await writer.save(TestFixtures.photo())
+        await writer.close()
+        let before = try diskSnapshot(directory)
+        let reader = SQLitePhotoStore(directory: directory, readOnly: true)
+        addTeardownBlock { await reader.close() }
+        let countsTask = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await reader.storedCounts(modelVersion: "test-model", geographyVersion: "test-places")
+        }
+        do { _ = try await countsTask.value; XCTFail("Cancelled stored counts must throw.") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let searchTask = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await reader.searchRecords(modelVersion: "test-model", accessibleIDs: ["synthetic-asset"])
+        }
+        do { _ = try await searchTask.value; XCTFail("Cancelled search reads must throw.") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let counts = try await reader.storedCounts(modelVersion: "test-model", geographyVersion: "test-places")
+        let retained = try await reader.place(text: orphan.text, modelVersion: "test-model")
+        XCTAssertEqual(counts.indexed, 1)
+        XCTAssertEqual(counts.located, 0)
+        XCTAssertEqual(retained, orphan.vector)
+        await reader.close()
+        XCTAssertEqual(try diskSnapshot(directory), before)
+    }
+
     func testRoundTripAndReopenPreservesIDRevisionModelAndPlace() async throws {
         let (store, directory) = try makeStore()
         let id = "synthetic-'quote-照片"

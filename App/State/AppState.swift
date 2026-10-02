@@ -107,9 +107,9 @@ final class AppState: ObservableObject {
     var photoCheckInitialQuery: String { completedSearchQuery?.effective ?? completedQuery ?? query }
     var canRead: Bool { authorization == .authorized || authorization == .limited }
     var modelsReady: Bool { summary.modelVersion != nil && summary.modelIssue == nil }
-    var canIndex: Bool { canRead && modelsReady && !isBusy }
+    var canIndex: Bool { isForeground && canRead && modelsReady && !isBusy }
     var canSearch: Bool {
-        isForeground && canRead && modelsReady && summary.indexedCount > 0 && !isBusy && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        isForeground && canRead && modelsReady && summary.indexStatisticsKnown && summary.indexedCount > 0 && !isBusy && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Root-view task is idempotent. Only a cold launch (or explicitly retried
@@ -168,13 +168,12 @@ final class AppState: ObservableObject {
         invalidateDisplayedPhotos()
         guard isForeground else { operationTask?.cancel(); return }
         if launchWasRequested, launchPhase != .ready {
-            // A Photos change during preparation invalidates that attempt. The
-            // same serialized chain drains it before restarting the launch check.
-            // Failed launches wait for an explicit retry, not an automatic loop.
-            if launchPhase != .failed { beginLaunch() }
+            // Preparation now loads models + stored metadata, not a Photos
+            // snapshot. Permission changes do not restart model initialization.
+            // Pending foreground recovery is handled by enterForeground().
             return
         }
-        schedule(.refreshing) { [worker] _ in .summary(try await worker.refresh(), "Library refreshed. Unchanged completed records can be reused.") }
+        schedule(.refreshing) { [worker] _ in .summary(try await worker.refresh(), "Saved index statistics refreshed. Update the index manually to include photo changes.") }
     }
 
     func libraryChanged() {
@@ -206,11 +205,28 @@ final class AppState: ObservableObject {
     }
 
     func index() {
+        beginManualIndex(rebuild: false)
+    }
+
+    /// Called only after the user's explicit destructive-local-cache confirmation.
+    func rebuildIndex() {
+        beginManualIndex(rebuild: true)
+    }
+
+    private func beginManualIndex(rebuild: Bool) {
         guard canIndex else { return }
         invalidateDisplayedPhotos()
         progress = IndexProgress()
         let networkAllowed = allowICloudDownload
+        // Clear may finish even if the user cancels while awaiting its result.
+        // Do not keep presenting old counts as known until fresh metadata arrives.
+        if rebuild { summary.indexStatisticsKnown = false }
         schedule(.indexing) { [weak self, worker] token in
+            if rebuild {
+                let cleared = try await worker.clear()
+                try Task.checkCancellation()
+                if let self, self.operationID == token { self.summary = cleared }
+            }
             let summary = try await worker.index(networkAllowed: networkAllowed) { [weak self] progress in
                 await self?.accept(progress: progress, token: token)
             }
@@ -348,6 +364,7 @@ final class AppState: ObservableObject {
     func clearIndex() {
         invalidateDisplayedPhotos()
         thumbnails.clear()
+        summary.indexStatisticsKnown = false
         schedule(.clearing) { [worker] _ in .summary(try await worker.clear(), "Local index deleted. Your Photos library was not changed.") }
     }
 
@@ -408,6 +425,9 @@ final class AppState: ObservableObject {
                     self.status = summary.modelIssue == nil ? "Launch preparation complete." : "Launch preparation needs attention."
                 case .summary(let summary, let message): self.summary = summary; self.status = message
                 case .search(let response, let query):
+                    self.authorization = self.authorizationStatus()
+                    guard self.canRead else { throw AppFailure.permission }
+                    try response.validateAccess()
                     self.summary = response.summary
                     self.results = response.hits
                     self.completedSearchQuery = query

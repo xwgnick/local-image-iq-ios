@@ -64,6 +64,41 @@ actor SQLitePhotoStore {
         guard !readOnly else { throw AppFailure.storage("This cache connection is read-only.") }
     }
 
+    /// Automatic launch/refresh never creates or changes a database. A fresh
+    /// install has no index yet, which is a normal empty result, not corruption.
+    func storedCounts(modelVersion: String, geographyVersion: String) throws -> (indexed: Int, located: Int) {
+        guard readOnly else { throw AppFailure.storage("Stored counts require a read-only connection.") }
+        defer { connection = nil }
+        try Task.checkCancellation()
+        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent("index.sqlite3").path) else {
+            return (0, 0)
+        }
+        return try counts(modelVersion: modelVersion, geographyVersion: geographyVersion)
+    }
+
+    /// Access filtering happens before vector decoding. Inaccessible rows do not
+    /// contribute to scores, place means, or errors about their vector contents.
+    /// This is a SELECT-only handle, never an implicit update/prune operation.
+    func searchRecords(modelVersion: String, accessibleIDs: Set<String>) throws -> [CachedPhoto] {
+        guard readOnly else { throw AppFailure.storage("Search requires a read-only connection.") }
+        defer { connection = nil }
+        try Task.checkCancellation()
+        guard !accessibleIDs.isEmpty,
+              FileManager.default.fileExists(atPath: directory.appendingPathComponent("index.sqlite3").path) else { return [] }
+        let db = try database()
+        return try db.statement(Self.select + " WHERE p.model_version = ? ORDER BY p.id") { statement in
+            try db.bind(modelVersion, at: 1, to: statement)
+            var records: [CachedPhoto] = []
+            while try db.next(statement) {
+                try Task.checkCancellation()
+                guard accessibleIDs.contains(try db.string(statement, at: 0)) else { continue }
+                records.append(try decode(statement))
+            }
+            try Task.checkCancellation()
+            return records
+        }
+    }
+
     func record(id: String) throws -> CachedPhoto? {
         let db = try database()
         return try db.statement(Self.select + " WHERE p.id = ?") { statement in

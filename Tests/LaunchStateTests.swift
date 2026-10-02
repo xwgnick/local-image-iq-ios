@@ -27,6 +27,7 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertFalse(state.canIndex)
         XCTAssertFalse(state.canSearch)
         XCTAssertEqual(state.summary.indexedCount, 0)
+        XCTAssertFalse(state.summary.authorizedCountKnown)
 
         await hold.prepare.open()
         await fulfillment(of: [hold.preparing], timeout: 3)
@@ -39,6 +40,7 @@ final class LaunchStateTests: XCTestCase {
         await state.waitUntilIdle()
         XCTAssertEqual(phases, [.pending, .checkingLibrary, .preparingSearch, .ready])
         XCTAssertEqual(state.summary.indexedCount, 2)
+        XCTAssertFalse(state.summary.authorizedCountKnown, "Launch reads metadata, not the current Photos count.")
         XCTAssertTrue(state.modelsReady)
         XCTAssertTrue(state.canSearch)
         XCTAssertNil(state.activity)
@@ -318,44 +320,109 @@ final class LaunchStateTests: XCTestCase {
         await assertCalls(worker, launches: 1)
     }
 
-    func testLibraryChangeAndRefreshInvalidateOldProgressAndLateCompletionThroughSameChain() async {
+    func testLibraryChangeAndRefreshDuringPreparationUpdatePermissionWithoutRestartingLaunch() async {
         for useLibraryChange in [true, false] {
-            let first = heldLaunch("invalidated attempt")
-            let second = heldLaunch("library replacement")
-            let stale = LibrarySummary(authorizedCount: 99, indexedCount: 99, modelVersion: "TEST-old-revision")
-            let worker = FakeLaunchWorker(plans: [.init(summary: stale, hold: first), .init(hold: second)])
-            let state = makeState(worker)
-            state.start()
-            await fulfillment(of: [first.checking], timeout: 3)
-            await first.prepare.open()
-            await fulfillment(of: [first.preparing], timeout: 3)
-            state.selection = AppState.Selection(id: "TEST-selection")
-            if useLibraryChange { state.libraryChanged() } else { state.refresh() }
-            XCTAssertEqual(state.launchPhase, .checkingLibrary)
-            XCTAssertNil(state.selection)
-            XCTAssertTrue(state.results.isEmpty)
-            XCTAssertNil(state.completedQuery)
-            await worker.emit(.preparingSearch, attempt: 1)
-            XCTAssertEqual(state.launchPhase, .checkingLibrary)
-            await assertCalls(worker, launches: 1)
+            for changedAuthorization in [PHAuthorizationStatus.denied, .limited] {
+                let hold = heldLaunch("photo-independent preparation")
+                let permission = LaunchStateAuthorization(.authorized)
+                let worker = FakeLaunchWorker(plans: [.init(hold: hold)])
+                let state = makeState(worker, authorizationStatus: { permission.value })
+                var phases: [AppState.LaunchPhase] = []
+                let observation = state.$launchPhase.removeDuplicates().sink { phases.append($0) }
+                defer { observation.cancel() }
+                state.query = "TEST query"
+                state.start()
+                await fulfillment(of: [hold.checking], timeout: 3)
+                await hold.prepare.open()
+                await fulfillment(of: [hold.preparing], timeout: 3)
+                state.selection = AppState.Selection(id: "TEST-selection")
+                permission.value = changedAuthorization
 
-            await first.finish.open()
-            await fulfillment(of: [second.checking], timeout: 3)
-            XCTAssertEqual(state.summary.indexedCount, 0)
-            await worker.emit(.preparingSearch, attempt: 1)
-            XCTAssertEqual(state.launchPhase, .checkingLibrary, "Old callbacks cannot advance the replacement.")
-            await second.prepare.open()
-            await fulfillment(of: [second.preparing], timeout: 3)
-            await worker.emit(.checkingLibrary, attempt: 1)
-            XCTAssertEqual(state.launchPhase, .preparingSearch, "Old callbacks cannot regress the replacement.")
-            await second.finish.open()
-            await state.waitUntilIdle()
-            await worker.emit(.checkingLibrary, attempt: 1)
-            XCTAssertEqual(state.launchPhase, .ready)
-            XCTAssertEqual(state.summary.indexedCount, 2)
-            XCTAssertEqual(state.summary.modelVersion, "TEST-launch-model")
-            await assertCalls(worker, launches: 2)
+                if useLibraryChange { state.libraryChanged() } else { state.refresh() }
+                XCTAssertEqual(state.authorization, changedAuthorization, "Permission updates before model preparation returns.")
+                XCTAssertEqual(state.canRead, changedAuthorization == .limited)
+                XCTAssertNil(state.selection)
+                XCTAssertTrue(state.results.isEmpty)
+                XCTAssertNil(state.completedQuery)
+                XCTAssertNil(state.completedSearchQuery)
+                XCTAssertEqual(state.launchPhase, .preparingSearch)
+                XCTAssertEqual(state.activity, .starting)
+                XCTAssertTrue(state.isBusy)
+                XCTAssertFalse(state.modelsReady)
+                XCTAssertFalse(state.canIndex)
+                XCTAssertFalse(state.canSearch)
+                XCTAssertEqual(state.summary.indexedCount, 0, "Only completion may publish the prepared metadata.")
+
+                // Repeated notifications neither cancel this attempt nor schedule
+                // a replacement model load/read-only refresh behind it.
+                state.libraryChanged()
+                state.refresh()
+                state.start()
+                state.retryLaunch()
+                await worker.emit(.preparingSearch, attempt: 1)
+                XCTAssertEqual(phases, [.pending, .checkingLibrary, .preparingSearch])
+                await assertCalls(worker, launches: 1)
+
+                await hold.finish.open()
+                await state.waitUntilIdle()
+                await worker.emit(.checkingLibrary, attempt: 1)
+                XCTAssertEqual(phases, [.pending, .checkingLibrary, .preparingSearch, .ready])
+                XCTAssertEqual(state.authorization, changedAuthorization)
+                XCTAssertEqual(state.summary.indexedCount, 2)
+                XCTAssertFalse(state.summary.authorizedCountKnown)
+                XCTAssertEqual(state.summary.modelVersion, "TEST-launch-model")
+                XCTAssertTrue(state.modelsReady)
+                XCTAssertEqual(state.canIndex, changedAuthorization == .limited)
+                XCTAssertEqual(state.canSearch, changedAuthorization == .limited)
+                XCTAssertNil(state.activity)
+                XCTAssertNil(state.launchIssue)
+                XCTAssertNil(state.errorMessage)
+                let calls = await worker.calls
+                XCTAssertEqual(calls.cancelledLaunches, 0, "Photos changes must not cancel model preparation.")
+                await assertCalls(worker, launches: 1)
+            }
         }
+    }
+
+    func testLibraryChangeAfterLaunchClearsRealSearchResultsAndUpdatesPermissionBeforeReadOnlyRefresh() async {
+        let permission = LaunchStateAuthorization(.authorized)
+        let refresh = HeldStateRefresh(started: expectation(description: "Read-only refresh started"))
+        let hit = SearchHit(photo: TestFixtures.photo(id: "TEST-visible-photo").photo, score: 0.75)
+        let worker = FakeLaunchWorker(refreshHold: refresh, searchHits: [hit])
+        let state = makeState(worker, authorizationStatus: { permission.value })
+        state.start()
+        await state.waitUntilIdle()
+        state.query = "TEST query"
+        state.search()
+        await state.waitUntilIdle()
+        XCTAssertEqual(state.results.map(\.id), [hit.id])
+        XCTAssertEqual(state.completedQuery, "TEST query")
+        XCTAssertNotNil(state.completedSearchQuery)
+        state.selection = AppState.Selection(id: hit.id)
+
+        permission.value = .denied
+        state.libraryChanged()
+        XCTAssertEqual(state.authorization, .denied)
+        XCTAssertFalse(state.canRead)
+        XCTAssertTrue(state.results.isEmpty)
+        XCTAssertNil(state.selection)
+        XCTAssertNil(state.completedQuery)
+        XCTAssertNil(state.completedSearchQuery)
+        XCTAssertEqual(state.launchPhase, .ready, "A Photos change must not replay the startup gate.")
+        XCTAssertEqual(state.activity, .refreshing)
+        await fulfillment(of: [refresh.started], timeout: 3)
+        await assertCalls(worker, launches: 1, refreshes: 1, searches: 1)
+        await refresh.finish.open()
+        await state.waitUntilIdle()
+
+        XCTAssertEqual(state.authorization, .denied)
+        XCTAssertEqual(state.launchPhase, .ready)
+        XCTAssertFalse(state.summary.authorizedCountKnown)
+        XCTAssertTrue(state.results.isEmpty)
+        XCTAssertNil(state.activity)
+        XCTAssertFalse(state.canIndex)
+        XCTAssertFalse(state.canSearch)
+        await assertCalls(worker, launches: 1, refreshes: 1, searches: 1)
     }
 
     func testStartRequestedBeforeFirstForegroundIsRememberedAndLaunchesInsteadOfRefreshing() async {
@@ -445,6 +512,7 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertTrue(state.canSearch)
         state.index()
         await state.waitUntilIdle()
+        XCTAssertTrue(state.summary.authorizedCountKnown, "An explicit mock scan supplies a current Photos count.")
         state.search()
         await state.waitUntilIdle()
         let network = await worker.networkRequests
@@ -465,13 +533,14 @@ final class LaunchStateTests: XCTestCase {
     }
 
     private func makeState(_ worker: FakeLaunchWorker,
-                           authorization: PHAuthorizationStatus = .authorized) -> AppState {
+                           authorization: PHAuthorizationStatus = .authorized,
+                           authorizationStatus: (() -> PHAuthorizationStatus)? = nil) -> AppState {
         // AppState still needs its concrete client to register the change handler.
         // Injected authorization does not grant real Photos access. On the
         // unauthorized simulator synchronizeObservation() never registers with
         // PHPhotoLibrary; all actual work below is handled by the actor fake.
         let state = AppState(library: PhotoLibraryClient(), worker: worker,
-                             authorizationStatus: { authorization })
+                             authorizationStatus: authorizationStatus ?? { authorization })
         addTeardownBlock {
             await state.enterBackground()
             await worker.releaseAll()
@@ -491,6 +560,12 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertEqual(calls.clears, 0, file: file, line: line)
         XCTAssertLessThanOrEqual(calls.peakActive, 1, "Cancelled predecessors must drain.", file: file, line: line)
     }
+}
+
+@MainActor
+private final class LaunchStateAuthorization {
+    var value: PHAuthorizationStatus
+    init(_ value: PHAuthorizationStatus) { self.value = value }
 }
 
 private actor LaunchStateLatch {
@@ -517,6 +592,11 @@ private struct HeldStateLaunch: Sendable {
     let finish = LaunchStateLatch()
 }
 
+private struct HeldStateRefresh: Sendable {
+    let started: XCTestExpectation
+    let finish = LaunchStateLatch()
+}
+
 /// Deliberately ignores cancellation and keeps old progress callbacks so tests
 /// can deliver stages/results after replacement. A real noninterruptible model
 /// load must be drained even though its result has already been invalidated.
@@ -530,7 +610,7 @@ private actor FakeLaunchWorker: PhotoWorkServicing {
         let outcome: Outcome
         let hold: HeldStateLaunch?
 
-        init(summary: LibrarySummary = LibrarySummary(authorizedCount: 2, indexedCount: 2,
+        init(summary: LibrarySummary = LibrarySummary(indexedCount: 2,
                                                        modelVersion: "TEST-launch-model"),
              hold: HeldStateLaunch? = nil) {
             self.init(outcome: .success(summary), hold: hold)
@@ -548,6 +628,7 @@ private actor FakeLaunchWorker: PhotoWorkServicing {
 
     struct Calls: Sendable {
         var launches = 0
+        var cancelledLaunches = 0
         var refreshes = 0
         var indexes = 0
         var searches = 0
@@ -564,16 +645,21 @@ private actor FakeLaunchWorker: PhotoWorkServicing {
 
     private let plans: [Plan]
     private let refreshSummary: LibrarySummary
+    private let refreshHold: HeldStateRefresh?
+    private let searchHits: [SearchHit]
     private var callbacks: [Int: @Sendable (LaunchStage) async -> Void] = [:]
     private(set) var calls = Calls()
     private(set) var networkRequests: [Bool] = []
     private(set) var searchRequests: [SearchRequest] = []
 
     init(plans: [Plan] = [Plan()],
-         refreshSummary: LibrarySummary = LibrarySummary(authorizedCount: 2, indexedCount: 2,
-                                                          modelVersion: "TEST-launch-model")) {
+         refreshSummary: LibrarySummary = LibrarySummary(indexedCount: 2,
+                                                          modelVersion: "TEST-launch-model"),
+         refreshHold: HeldStateRefresh? = nil, searchHits: [SearchHit] = []) {
         self.plans = plans
         self.refreshSummary = refreshSummary
+        self.refreshHold = refreshHold
+        self.searchHits = searchHits
     }
 
     private func begin() {
@@ -583,7 +669,10 @@ private actor FakeLaunchWorker: PhotoWorkServicing {
 
     func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary {
         begin()
-        defer { calls.active -= 1 }
+        defer {
+            calls.active -= 1
+            if Task.isCancelled { calls.cancelledLaunches += 1 }
+        }
         calls.launches += 1
         let attempt = calls.launches
         guard plans.indices.contains(attempt - 1) else {
@@ -622,12 +711,17 @@ private actor FakeLaunchWorker: PhotoWorkServicing {
                 await hold.finish.open()
             }
         }
+        if let refreshHold { await refreshHold.finish.open() }
     }
 
     func refresh() async throws -> LibrarySummary {
         begin()
         defer { calls.active -= 1 }
         calls.refreshes += 1
+        if let refreshHold, calls.refreshes == 1 {
+            refreshHold.started.fulfill()
+            await refreshHold.finish.wait()
+        }
         return refreshSummary
     }
 
@@ -636,7 +730,10 @@ private actor FakeLaunchWorker: PhotoWorkServicing {
         defer { calls.active -= 1 }
         calls.indexes += 1
         networkRequests.append(networkAllowed)
-        return refreshSummary
+        var summary = refreshSummary
+        summary.authorizedCount = max(summary.authorizedCount, summary.indexedCount)
+        summary.authorizedCountKnown = true
+        return summary
     }
 
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse {
@@ -644,7 +741,7 @@ private actor FakeLaunchWorker: PhotoWorkServicing {
         defer { calls.active -= 1 }
         calls.searches += 1
         searchRequests.append(SearchRequest(text: text, limit: limit, locationWeight: locationWeight))
-        return SearchResponse(summary: refreshSummary, hits: [])
+        return SearchResponse(summary: refreshSummary, hits: searchHits)
     }
 
     func clear() async throws -> LibrarySummary {

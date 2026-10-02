@@ -138,6 +138,75 @@ final class PresentationTests: XCTestCase {
         XCTAssertTrue(state.results.isEmpty)
     }
 
+    func testStoredIndexCopyNeverClaimsCurrentSearchCoverageFromSavedAuthorizationCounts() async {
+        // Preserve old synthetic count fixtures: a retained integer alone does
+        // not mean a scan happened, nor that indexed rows are still accessible.
+        let cases: [(authorized: Int, known: Bool)] = [
+            (0, false), (12, false), (24, false),
+            (0, true), (3, true), (12, true), (24, true)
+        ]
+        for entry in cases {
+            var summary = PresentationFixtures.readySummary
+            summary.authorizedCount = entry.authorized
+            summary.authorizedCountKnown = entry.known
+            let state = await readyState(worker: FakePhotoWorkServicing(summary: summary))
+            let home = ContentView(state: state)
+            let library = LibrarySheet(state: state)
+            XCTAssertEqual(home.libraryTitle, "已索引 12 张")
+            XCTAssertEqual(home.librarySubtitle, "本机保存的索引 · 手动更新")
+            XCTAssertEqual(library.storedCountText, home.libraryTitle)
+            XCTAssertEqual(library.indexActionTitle, "更新索引")
+            XCTAssertEqual(library.coverageDescription, "点「更新索引」处理新增或编辑过的照片，未变化的索引会复用。")
+            XCTAssertEqual(library.accessDescription, "允许访问系统照片图库；新增或编辑照片后，请手动更新索引。")
+            XCTAssertEqual(library.authorizedCountSnapshotText,
+                           entry.known ? "\(entry.authorized.formatted()) 张" : "未扫描")
+            XCTAssertNil(state.activity)
+            XCTAssertNil(state.completedQuery)
+        }
+    }
+
+    func testEmptyIndexCopyRequestsManualIndexingNotAClaimOfNoAccessiblePhotos() async {
+        for known in [false, true] {
+            var summary = PresentationFixtures.emptySummary
+            summary.authorizedCountKnown = known
+            let state = await readyState(worker: FakePhotoWorkServicing(summary: summary))
+            let home = ContentView(state: state)
+            let library = LibrarySheet(state: state)
+            XCTAssertEqual(home.libraryTitle, "已索引 0 张")
+            XCTAssertEqual(home.librarySubtitle, "本机保存的索引 · 手动更新")
+            XCTAssertEqual(library.storedCountText, "已索引 0 张")
+            XCTAssertEqual(library.indexActionTitle, "建立索引")
+            XCTAssertEqual(library.coverageDescription, "点「建立索引」后才能按照片内容搜索；索引由你手动更新。")
+            XCTAssertEqual(library.authorizedCountSnapshotText, known ? "0 张" : "未扫描")
+            XCTAssertTrue(state.canIndex)
+        }
+    }
+
+    func testLimitedPermissionCopyDoesNotLookLikeACurrentPhotoCount() async {
+        for authorized in [0, 12, 24] {
+            var summary = PresentationFixtures.readySummary
+            summary.authorizedCount = authorized
+            let state = AppState(worker: FakePhotoWorkServicing(summary: summary),
+                                 authorizationStatus: { .limited })
+            state.refresh()
+            await state.waitUntilIdle()
+            XCTAssertFalse(state.summary.authorizedCountKnown, "Old synthetic fixtures remain unscanned by default")
+            let library = LibrarySheet(state: state)
+            XCTAssertEqual(library.accessDescription, "仅能访问你选中的照片；调整选择后，请手动更新索引。")
+            XCTAssertEqual(library.authorizedCountSnapshotText, "未扫描")
+            XCTAssertEqual(library.indexActionTitle, "更新索引")
+            XCTAssertEqual(ContentView(state: state).libraryTitle, "已索引 12 张")
+        }
+    }
+
+    func testManualIndexExplanationCoversNewEditedDeletedAndInaccessiblePhotos() {
+        let explanation = LibrarySheet.manualIndexExplanation
+        XCTAssertTrue(explanation.contains("新增照片在更新索引后才能搜索"))
+        XCTAssertTrue(explanation.contains("编辑过的照片在更新前仍按旧内容匹配"))
+        XCTAssertTrue(explanation.contains("搜索会检查访问权限并排除已删除或不可访问的照片"))
+        XCTAssertTrue(explanation.contains("更新或重建时请保持应用在前台"))
+    }
+
     func testSearchPublishesCompletedQueryAndPreservesWorkerOrderAndScores() async {
         let source = PresentationFixtures.hits(count: 3)
         // Intentionally neither ID order nor descending score order: this test

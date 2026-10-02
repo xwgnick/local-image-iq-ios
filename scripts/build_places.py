@@ -100,6 +100,29 @@ def fingerprint(stream) -> dict:
     return {"sha256": digest.hexdigest(), "bytes": length}
 
 
+def runtime_version(stream) -> str:
+    """Exact OfflinePlaceResolver identity: FNV-1a over final GeoJSON bytes.
+
+    Not SHA-256, reserialized JSON, source fingerprints or padded hexadecimal.
+    Keep this algorithm/prefix unchanged to preserve existing geography caches.
+    """
+    value = 14695981039346656037
+    while chunk := stream.read(CHUNK_SIZE):
+        for byte in chunk:
+            value = ((value ^ byte) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return f"raycast-v1-{value:x}"
+
+
+def runtime_coverage_description(countries: list[str], feature_count: int) -> str:
+    # Generated polygons are validated before emission; check_places and native
+    # bundled tests verify that the resolver accepts every emitted feature.
+    coverage = (f"Offline country coverage: {', '.join(countries)}." if countries
+                else "Offline coverage: this pack only.")
+    return (f"{coverage} Administrative boundaries may be incomplete or historical; "
+            f"not live GPS or global coverage. {feature_count} features; "
+            "0 unsupported/invalid features skipped.")
+
+
 def verify_sha(actual: dict, source: dict) -> None:
     if actual["sha256"] != source["sha256"]:
         raise BuildError(
@@ -427,6 +450,9 @@ def build_pack(sources: list[dict], output: Path, source_directory: Path | None 
             target.write("]}\n")
         with (stage / PACK_NAME).open("rb") as stream:
             generated = {"file": PACK_NAME, **fingerprint(stream), "featureCount": feature_count}
+            stream.seek(0)
+            runtime = {"schemaVersion": 1, "version": runtime_version(stream),
+                       "coverageDescription": runtime_coverage_description(countries, feature_count)}
         totals = {key: sum(report["counts"][key] for report in reports) for key in reports[0]["counts"]}
         attribution_bytes = attribution_text.encode("utf-8")
         manifest = {
@@ -437,7 +463,7 @@ def build_pack(sources: list[dict], output: Path, source_directory: Path | None 
             "additionalSimplification": False, "sources": reports, "totals": totals,
             "attribution": {"text": attribution_text, "licenseURLs": LICENSE_URLS,
                             "sha256": hashlib.sha256(attribution_bytes).hexdigest(), "bytes": len(attribution_bytes)},
-            "generated": generated,
+            "generated": generated, "runtime": runtime,
         }
         (stage / MANIFEST_NAME).write_text(compact(manifest) + "\n", encoding="utf-8", newline="\n")
         check_owned_outputs(output)

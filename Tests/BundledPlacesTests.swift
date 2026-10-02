@@ -29,7 +29,14 @@ final class BundledPlacesTests: XCTestCase {
 
         let resolver = OfflinePlaceResolver.bundled()
         let sameBytes = try OfflinePlaceResolver(data: bytes)
+        let lightweight = PlacePackMetadata.bundled()
         XCTAssertEqual(resolver.version, sameBytes.version, "Production lookup must parse the verified artifact")
+        XCTAssertEqual(manifest.runtime.schemaVersion, 1)
+        XCTAssertEqual(manifest.runtime.version, sameBytes.version,
+                   "Manifest identity must retain the exact raycast-v1 FNV of artifact bytes")
+        XCTAssertEqual(manifest.runtime.coverageDescription, sameBytes.coverageDescription)
+        XCTAssertEqual(lightweight.version, sameBytes.version, "Lightweight cache filtering must not invalidate existing geography")
+        XCTAssertEqual(lightweight.coverageDescription, sameBytes.coverageDescription)
         XCTAssertEqual(resolver.coverageCountries.sorted(), countries)
         XCTAssertGreaterThan(resolver.featureCount, 0, resolver.coverageDescription)
         XCTAssertEqual(resolver.featureCount, manifest.generated.featureCount,
@@ -70,6 +77,12 @@ final class BundledPlacesTests: XCTestCase {
         let schemaVersion: Int
         let coverageCountries: [String]
         let generated: Artifact
+        let runtime: Runtime
+        struct Runtime: Decodable {
+            let schemaVersion: Int
+            let version: String
+            let coverageDescription: String
+        }
         struct Artifact: Decodable {
             let file: String
             let bytes: Int

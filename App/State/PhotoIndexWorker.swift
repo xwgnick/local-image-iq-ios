@@ -36,6 +36,9 @@ struct IndexProgress: Sendable, Equatable {
 
 struct LibrarySummary: Sendable {
     var authorizedCount = 0
+    /// False for lightweight launch/refresh: no current Photos enumeration was performed.
+    var authorizedCountKnown = false
+    var indexStatisticsKnown = true
     var indexedCount = 0
     var locatedCount = 0
     var modelVersion: String?
@@ -46,6 +49,15 @@ struct LibrarySummary: Sendable {
 struct SearchResponse: Sendable {
     let summary: LibrarySummary
     let hits: [SearchHit]
+    /// Synchronous check at MainActor publication, after the worker's actor hop.
+    let validateAccess: @Sendable () throws -> Void
+
+    init(summary: LibrarySummary, hits: [SearchHit],
+         validateAccess: @escaping @Sendable () throws -> Void = {}) {
+        self.summary = summary
+        self.hits = hits
+        self.validateAccess = validateAccess
+    }
 }
 
 protocol PhotoWorkServicing: Sendable {
@@ -85,14 +97,22 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     private let suppliedDirectory: URL?
     private var store: SQLitePhotoStore?
     private var places: OfflinePlaceResolver?
+    private var placeMetadata: PlacePackMetadata?
+    private let loadPlaceMetadata: @Sendable () -> PlacePackMetadata
+    private let loadBoundaries: @Sendable () -> OfflinePlaceResolver
     private var placeVectors: [Data: [Float]] = [:]
 
     init(library: any PhotoLibraryIndexing, encoders: any PhotoEncoding = CoreMLEncoders(), directory: URL? = nil,
-         resolver: OfflinePlaceResolver? = nil) {
+         resolver: OfflinePlaceResolver? = nil,
+         metadataLoader: @escaping @Sendable () -> PlacePackMetadata = { PlacePackMetadata.bundled() },
+         boundaryLoader: @escaping @Sendable () -> OfflinePlaceResolver = { OfflinePlaceResolver.bundled() }) {
         self.library = library
         self.encoders = encoders
         suppliedDirectory = directory
         places = resolver
+        placeMetadata = resolver.map { PlacePackMetadata(version: $0.version, coverageDescription: $0.coverageDescription) }
+        loadPlaceMetadata = metadataLoader
+        loadBoundaries = boundaryLoader
     }
 
     private func storage() throws -> SQLitePhotoStore {
@@ -105,9 +125,23 @@ actor PhotoIndexWorker: PhotoWorkServicing {
 
     private func boundaries() -> OfflinePlaceResolver {
         if let places { return places }
-        let resolver = OfflinePlaceResolver.bundled()
+        let resolver = loadBoundaries()
         places = resolver
+        placeMetadata = PlacePackMetadata(version: resolver.version, coverageDescription: resolver.coverageDescription)
         return resolver
+    }
+
+    private func geography() -> PlacePackMetadata {
+        if let placeMetadata { return placeMetadata }
+        let metadata = loadPlaceMetadata()
+        placeMetadata = metadata
+        return metadata
+    }
+
+    /// Automatic paths use a read-only connection; no creation, migration or pruning.
+    private func reader() throws -> SQLitePhotoStore {
+        let directory = try suppliedDirectory ?? SQLitePhotoStore.defaultDirectory(create: false)
+        return SQLitePhotoStore(directory: directory, readOnly: true)
     }
 
     private func reconcile() async throws -> [PhotoRevision] {
@@ -133,9 +167,7 @@ actor PhotoIndexWorker: PhotoWorkServicing {
             await progress(.checkingLibrary)
             try Task.checkCancellation()
         }
-        var snapshot = try await reconcile()
-        try Task.checkCancellation()
-        let resolver = boundaries()
+        let metadata = geography()
         let manifest: ModelManifest
         do {
             try Task.checkCancellation()
@@ -153,23 +185,18 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         catch is CancellationError { throw CancellationError() }
         catch {
             try Task.checkCancellation()
-            return LibrarySummary(authorizedCount: snapshot.count, modelIssue: error.localizedDescription,
-                                  placesDescription: resolver.coverageDescription)
+            return LibrarySummary(modelIssue: error.localizedDescription,
+                                  placesDescription: metadata.coverageDescription)
         }
         try Task.checkCancellation()
-        // Loading may suspend for a long time. Re-enumerate authorization and
-        // revisions, pruning edits/deletions/revocations before reporting counts.
-        // A model failure above reports the initial snapshot, never readiness.
-        if prepareModels { snapshot = try await reconcile() }
-        try Task.checkCancellation()
         let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
-        // Display counts only: even a successful warmup does not validate cached
-        // vectors. Search/index still perform their full validation before use.
-        let counts = try await storage().counts(modelVersion: cacheVersion, geographyVersion: resolver.version)
+        // Stored counts, NOT a current authorized-library count or vector validation.
+        // The user decides when to reconcile and update this persisted snapshot.
+        let counts = try await reader().storedCounts(modelVersion: cacheVersion, geographyVersion: metadata.version)
         try Task.checkCancellation()
-        return LibrarySummary(authorizedCount: snapshot.count, indexedCount: counts.indexed,
+        return LibrarySummary(indexedCount: counts.indexed,
                               locatedCount: counts.located, modelVersion: cacheVersion,
-                              placesDescription: resolver.coverageDescription)
+                      placesDescription: metadata.coverageDescription)
     }
 
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary {
@@ -418,25 +445,65 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     }
 
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse {
-        let snapshot = try await reconcile()
-        guard library.canReadImages else { throw AppFailure.permission }
-        let manifest = try await encoders.prepare()
-        let resolver = boundaries()
-        let photos = try await currentPhotos(manifest: manifest, resolver: resolver)
-        let query = try await encoders.text(text)
         try Task.checkCancellation()
+        guard library.canReadImages else { throw AppFailure.permission }
+        let authorization = library.authorizationStatusRawValue
+        let generation = library.changeGeneration
+        let snapshot = try library.enumerateAuthorizedImages()
+        try Task.checkCancellation()
+        let manifest = try await encoders.prepare()
+        let metadata = geography()
+        let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
+        // Filter by current access BEFORE decoding/scoring/location centering.
+        // Edited but still accessible photos intentionally retain their last
+        // manually indexed content until the user updates the index.
+        let cached = try await reader().searchRecords(modelVersion: cacheVersion,
+                                                      accessibleIDs: Set(snapshot.map(\.id)))
+        let photos = cached.map { item in
+            let photo = item.photo
+            return IndexedPhoto(id: photo.id, modificationTime: photo.modificationTime,
+                                modelVersion: photo.modelVersion, imageEmbedding: photo.imageEmbedding,
+                                location: item.geographyVersion == metadata.version ? photo.location : nil,
+                                creationTime: photo.creationTime)
+        }
+        let query = try await encoders.text(text)
+        // Fetch display-only stored counts before the final access checks so no
+        // suspended database operation can invalidate an already checked result.
+        let counts = try await reader().storedCounts(modelVersion: cacheVersion, geographyVersion: metadata.version)
+        try Task.checkCancellation()
+        try validateSearchAccess(snapshot, authorization: authorization)
         // Core owns exact scoring, distinct-place mean, missing-place neutrality
         // and deterministic ties. There are no date/place predicates or rerankers.
         let hits = try VectorSearch.search(query: query, photos: photos, limit: limit, locationWeight: locationWeight)
         try Task.checkCancellation()
         // Also catch edits/access changes whose PhotoKit observer callback has not
         // yet reached MainActor. Never publish scores centered on a stale library.
+        try validateSearchAccess(snapshot, authorization: authorization)
+                let library = self.library
+                let returnedIDs = Set(hits.map(\.id))
+                let returnedRevisions = snapshot.filter { returnedIDs.contains($0.id) }
+                return SearchResponse(summary: LibrarySummary(authorizedCount: snapshot.count, authorizedCountKnown: true,
+                                                       indexedCount: counts.indexed, locatedCount: counts.located,
+                                                       modelVersion: cacheVersion, placesDescription: metadata.coverageDescription),
+                                                            hits: hits, validateAccess: {
+                        guard library.canReadImages else { throw AppFailure.permission }
+                        guard library.authorizationStatusRawValue == authorization,
+                                    library.changeGeneration == generation,
+                                    returnedRevisions.allSatisfy({ library.currentRevision(id: $0.id) == $0 }) else {
+                                throw AppFailure.photo("Photo access changed before results could be displayed. Search again.")
+                        }
+                })
+    }
+
+    private func validateSearchAccess(_ snapshot: [PhotoRevision], authorization: Int?) throws {
+        try Task.checkCancellation()
+        guard library.canReadImages else { throw AppFailure.permission }
         let current = try library.enumerateAuthorizedImages()
-        guard current == snapshot else {
-            try await storage().reconcile(completeEnumeration: current)
-            throw AppFailure.photo("The authorized library changed during search. Refresh and search again.")
+        try Task.checkCancellation()
+        guard library.canReadImages else { throw AppFailure.permission }
+        guard authorization == library.authorizationStatusRawValue, current == snapshot else {
+            throw AppFailure.photo("The authorized library changed during search. Search again; the saved index is unchanged.")
         }
-        return SearchResponse(summary: makeSummary(snapshot: snapshot, photos: photos, manifest: manifest, resolver: resolver), hits: hits)
     }
 
     /// Read-only observation, not a quality fix. Uses the same local preview and
@@ -456,7 +523,7 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         try validateDiagnosticSnapshot(snapshot, selected: selected, authorization: authorization)
         try manifest.validate()
         let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
-        let resolver = boundaries()
+        let metadata = geography()
         let directory = try suppliedDirectory ?? SQLitePhotoStore.defaultDirectory(create: false)
         let reader = SQLitePhotoStore(directory: directory, readOnly: true)
         let cached = try await reader.diagnosticSnapshot(modelVersion: cacheVersion, selectedID: id)
@@ -468,7 +535,7 @@ actor PhotoIndexWorker: PhotoWorkServicing {
             guard revisions[photo.id] == photo.modificationTime else { return nil }
             return IndexedPhoto(id: photo.id, modificationTime: photo.modificationTime,
                                 modelVersion: photo.modelVersion, imageEmbedding: photo.imageEmbedding,
-                                location: record.geographyVersion == resolver.version ? photo.location : nil,
+                                location: record.geographyVersion == metadata.version ? photo.location : nil,
                                 creationTime: photo.creationTime)
         }
         let currentPhoto = photos.first { $0.id == id }
@@ -582,7 +649,7 @@ actor PhotoIndexWorker: PhotoWorkServicing {
 
     private func makeSummary(snapshot: [PhotoRevision], photos: [IndexedPhoto], manifest: ModelManifest,
                              resolver: OfflinePlaceResolver) -> LibrarySummary {
-        LibrarySummary(authorizedCount: snapshot.count, indexedCount: photos.count,
+        LibrarySummary(authorizedCount: snapshot.count, authorizedCountKnown: true, indexedCount: photos.count,
                        locatedCount: photos.filter { $0.location != nil }.count,
                        modelVersion: IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion),
                        placesDescription: resolver.coverageDescription)

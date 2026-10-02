@@ -33,6 +33,19 @@ const json = file => JSON.parse(readFileSync(file, 'utf8'));
 const key = source => `${source.iso}/${source.level}`;
 const slash = relative => relative.split(path.sep).join('/');
 
+/** Exact existing Swift resolver identity, including wrapping UInt64 and unpadded lowercase hex. */
+export function runtimeVersion(bytes) {
+  let value = 14695981039346656037n;
+  for (const byte of bytes) value = BigInt.asUintN(64, (value ^ BigInt(byte)) * 1099511628211n);
+  return `raycast-v1-${value.toString(16)}`;
+}
+
+function runtimeCoverageDescription(countries, featureCount) {
+  const coverage = countries.length ? `Offline country coverage: ${countries.join(', ')}.` : 'Offline coverage: this pack only.';
+  return `${coverage} Administrative boundaries may be incomplete or historical; not live GPS or global coverage. ` +
+    `${featureCount} features; 0 unsupported/invalid features skipped.`;
+}
+
 function nonempty(value, label) {
   assert.ok(typeof value === 'string' && value.trim().length > 0, `${label} must be nonempty text`);
 }
@@ -122,6 +135,15 @@ function validateManifest(manifest, collection, bytes, sources) {
   count(generated.featureCount, 'Generated feature count', true);
   assert.equal(generated.featureCount, collection.features.length, 'Generated feature count');
 
+  // Packaging is the integrity boundary: lightweight app inspection must never
+  // read/hash geometry to discover stale metadata after caches have been filtered.
+  const runtime = manifest.runtime;
+  assert.equal(runtime?.schemaVersion, 1, 'Runtime metadata schema');
+  assert.match(runtime.version, /^raycast-v1-(?:0|[1-9a-f][0-9a-f]{0,15})$/, 'Runtime version format');
+  assert.equal(runtime.version, runtimeVersion(bytes), 'Runtime version must match exact GeoJSON bytes');
+  assert.equal(runtime.coverageDescription, runtimeCoverageDescription(collection.coverageCountries, collection.features.length),
+    'Runtime coverage description must match resolver');
+
   const attribution = manifest.attribution;
   nonempty(attribution?.text, 'Attribution text');
   assert.equal(attribution.bytes, Buffer.byteLength(attribution.text, 'utf8'), 'Attribution byte count');
@@ -201,6 +223,7 @@ export function validatePlaces(directory, { appBundle = false } = {}) {
     file: slash(path.relative(directory, files.pack)), manifest: slash(path.relative(directory, files.manifest)),
     sha256: manifest.generated.sha256, bytes: manifest.generated.bytes, featureCount: manifest.generated.featureCount,
     manifestSHA256: sha256(manifestBytes), manifestBytes: manifestBytes.length,
+    runtime: { ...manifest.runtime },
     coverageCountries: manifest.coverageCountries, sourceCount: manifest.sources.length,
     sourceMetadataSHA256: manifest.sourceMetadataSHA256, sourceNote: manifest.sourceNote,
     parentMethod: manifest.parentMethod, additionalSimplification: manifest.additionalSimplification,
@@ -246,6 +269,8 @@ function fixtureBytes(value) { return Buffer.from(JSON.stringify(value.collectio
 function refreshFingerprint(value) {
   const bytes = fixtureBytes(value);
   Object.assign(value.manifest.generated, { bytes: bytes.length, sha256: sha256(bytes) });
+  value.manifest.runtime = { schemaVersion: 1, version: runtimeVersion(bytes),
+    coverageDescription: runtimeCoverageDescription(value.collection.coverageCountries, value.collection.features.length) };
 }
 function writeFixture(folder, value) {
   mkdirSync(folder, { recursive: true });
@@ -254,6 +279,14 @@ function writeFixture(folder, value) {
 }
 
 function selfTest() {
+  for (const [text, hex] of [['', 'cbf29ce484222325'], ['a', 'af63dc4c8601ec8c'], ['fo', '8985907b541d342'],
+    ['hello', 'a430d84680aabd0b'], ['foobar', '85944171f73967e8']]) {
+    assert.equal(runtimeVersion(Buffer.from(text)), `raycast-v1-${hex}`, 'Fixed FNV-1a vector; no zero padding');
+  }
+  // Exact fixture shared with Python and native PlacePackMetadataTests, including LF.
+  const smallGeometry = Buffer.from('{"type":"FeatureCollection","coverageCountries":["Synthetic"],"features":[{"type":"Feature","properties":{"label":"Square, Synthetic","level":"ADM1"},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}}]}\n');
+  assert.equal(runtimeVersion(smallGeometry), 'raycast-v1-4b2d9ec5135d4ccc');
+  assert.equal(runtimeVersion(smallGeometry.subarray(0, -1)), 'raycast-v1-da2e3970db8ea20e');
   const sources = validateSources(json(path.join(root, 'scripts', 'place_sources.json')));
   const valid = fixture(sources);
   const temporary = mkdtempSync(path.join(tmpdir(), 'imageiq-places-contract-'));
@@ -271,6 +304,7 @@ function selfTest() {
     assert.deepEqual(report.coverageCountries, coverageCountries);
     assert.equal(report.sources.reduce((sum, s) => sum + s.featureCount, 0), report.featureCount);
     assert.equal(report.sourceNote, valid.manifest.sourceNote);
+    assert.deepEqual(report.runtime, valid.manifest.runtime);
     assert.equal(report.attributionSHA256, valid.manifest.attribution.sha256);
     assert.doesNotMatch(JSON.stringify(report), /"coordinates"|"features"/);
     assert.deepEqual(JSON.parse(JSON.stringify({ places: report })).places, report, 'Device report JSON contract');
@@ -282,6 +316,19 @@ function selfTest() {
       assert.throws(() => validatePlaces(direct), pattern);
     };
     rejectManifest(m => { m.schemaVersion = 2; }, /manifest schema/);
+    rejectManifest(m => { delete m.runtime; }, /Runtime metadata schema/);
+    rejectManifest(m => { m.runtime = null; }, /Runtime metadata schema/);
+    rejectManifest(m => { m.runtime.schemaVersion = 2; }, /Runtime metadata schema/);
+    rejectManifest(m => { m.runtime.schemaVersion = '1'; }, /Runtime metadata schema/);
+    rejectManifest(m => { delete m.runtime.version; }, /string|Runtime version format/);
+    for (const version of ['', 'places-unavailable', 'raycast-v2-abc', 'raycast-v1-ABC',
+      'raycast-v1-01', 'raycast-v1-', 'raycast-v1-1234567890abcdef0', 'raycast-v1-abc\n']) {
+      rejectManifest(m => { m.runtime.version = version; }, /Runtime version/);
+    }
+    rejectManifest(m => { m.runtime.version = 'raycast-v1-0'; }, /Runtime version must match/);
+    rejectManifest(m => { delete m.runtime.coverageDescription; }, /Runtime coverage description/);
+    rejectManifest(m => { m.runtime.coverageDescription = ''; }, /Runtime coverage description/);
+    rejectManifest(m => { m.runtime.coverageDescription += ' changed'; }, /Runtime coverage description/);
     rejectManifest(m => { m.generated.sha256 = '0'.repeat(64); }, /Generated SHA-256/);
     rejectManifest(m => { m.generated.bytes++; }, /Generated byte count/);
     rejectManifest(m => { m.generated.featureCount++; }, /Generated feature count/);
@@ -301,6 +348,19 @@ function selfTest() {
     rejectManifest(m => { m.attribution.sha256 = '0'.repeat(64); }, /Attribution SHA-256/);
     rejectManifest(m => { delete m.attribution.licenseURLs.geoBoundaries; }, /Attribution license URLs/);
     rejectManifest(m => { delete m.sourceNote; }, /Manifest source note/);
+
+    // Resealing SHA alone must not hide stale geography cache identity. Even
+    // semantically identical geometry with one extra byte has a new identity.
+    writeFixture(direct, valid);
+    const changedBytes = Buffer.concat([fixtureBytes(valid), Buffer.from(' ')]);
+    const stale = structuredClone(valid.manifest);
+    Object.assign(stale.generated, { bytes: changedBytes.length, sha256: sha256(changedBytes) });
+    writeFileSync(path.join(direct, packName), changedBytes);
+    writeFileSync(path.join(direct, manifestName), JSON.stringify(stale));
+    assert.throws(() => validatePlaces(direct), /Runtime version must match exact GeoJSON bytes/);
+    stale.runtime.version = runtimeVersion(changedBytes);
+    writeFileSync(path.join(direct, manifestName), JSON.stringify(stale));
+    assert.equal(validatePlaces(direct).runtime.version, stale.runtime.version);
 
     const rejectPack = (mutate, pattern) => {
       const value = structuredClone(valid);
@@ -350,7 +410,7 @@ function selfTest() {
     mkdirSync(absent);
     assert.throws(() => validatePlaces(absent, { appBundle: true }), /Missing Places.geojson/);
   } finally { rmSync(temporary, { recursive: true, force: true }); }
-  console.log('PASS: synthetic Places schema, fingerprints, coverage, source totals, attribution, bundle paths and report contracts; no downloads/GPS/native tests.');
+  console.log('PASS: synthetic Places schema, SHA/FNV fingerprints, runtime metadata/stale-version rejection, coverage, source totals, attribution, bundle paths and report contracts; no downloads/GPS/native tests.');
 }
 
 function main(args) {

@@ -45,6 +45,9 @@ protocol PhotoLibraryIndexing: Sendable {
     /// Optional for existing test libraries; production also detects full/limited
     /// permission transitions that happen to leave the same authorized image IDs.
     var authorizationStatusRawValue: Int? { get }
+    /// Changes synchronously when a PhotoKit notification arrives, before its
+    /// MainActor callback is scheduled. Nil for legacy injected test libraries.
+    var changeGeneration: UInt64? { get }
     func enumerateAuthorizedImages() throws -> [PhotoRevision]
     func currentRevision(id: String) -> PhotoRevision?
     func placeLabel(id: String, resolver: OfflinePlaceResolver) -> String?
@@ -54,6 +57,7 @@ protocol PhotoLibraryIndexing: Sendable {
 
 extension PhotoLibraryIndexing {
     var authorizationStatusRawValue: Int? { nil }
+    var changeGeneration: UInt64? { nil }
 
     func placeResult(id: String, resolver: OfflinePlaceResolver) -> PhotoPlaceResult {
         // Legacy/test libraries cannot distinguish missing GPS from other causes.

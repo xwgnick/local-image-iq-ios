@@ -144,24 +144,21 @@ struct ContentView: View {
             .accessibilityValue(!state.canRead ? "authorization-required" : "library-accessible")
     }
 
-    private var libraryTitle: String {
-        if state.activity == .indexing { return "正在准备照片" }
-        if state.activity == .refreshing { return "正在检查图库" }
+    var libraryTitle: String {
+        if state.activity == .indexing { return "正在更新索引" }
+        if state.activity == .refreshing { return "正在刷新索引统计" }
         if !state.canRead { return "选择照片" }
         if !state.modelsReady { return "图库需要处理" }
-        if state.summary.indexedCount == 0 { return "准备可搜索的照片" }
-        return "\(state.summary.indexedCount.formatted()) 张照片可搜索"
+        if !state.summary.indexStatisticsKnown { return "索引统计待刷新" }
+        return "已索引 \(state.summary.indexedCount.formatted()) 张"
     }
 
-    private var librarySubtitle: String {
-        if state.activity == .indexing { return "已检查 \(state.progress.completed.formatted()) / \(state.progress.total.formatted()) 张 · 查看进度" }
-        if state.activity == .refreshing { return "照片仍保留在系统相册" }
+    var librarySubtitle: String {
+        if state.activity == .indexing { return "已检查 \(state.progress.completed.formatted()) 张 · 查看索引进度" }
+        if state.activity == .refreshing { return "只读取本机统计，不扫描照片" }
         if !state.canRead { return "可以只选部分照片，之后随时调整" }
         if !state.modelsReady { return "查看原因与下一步" }
-        if state.summary.indexedCount < state.summary.authorizedCount {
-            return "已授权 \(state.summary.authorizedCount.formatted()) 张 · 部分尚不可搜索"
-        }
-        return state.summary.authorizedCount == 0 ? "当前没有可访问的照片" : "本机搜索 · 管理图库"
+        return "本机保存的索引 · 手动更新"
     }
 
     private var searchField: some View {
@@ -245,16 +242,16 @@ struct ContentView: View {
             }
         } else if state.completedQuery != nil {
             emptyCard(symbol: "magnifyingglass", title: "暂时没有可显示的照片",
-                      detail: "换一种描述，或检查图库中哪些照片已可搜索。")
+                      detail: "换一种描述，或检查照片权限并手动更新索引。")
         } else {
             if state.canRead && state.summary.indexedCount > 0 && !isSearchFocused {
                 emptyCard(symbol: "photo.on.rectangle.angled", title: "不必从头翻起",
                           detail: "颜色、场景，或一个小细节。")
             } else if !state.canRead || state.summary.indexedCount == 0 {
-                Text("先选择照片并完成准备。搜索在本机进行，不会上传照片或查询到应用服务器。")
+                Text("先选择照片并手动建立索引。搜索在本机进行，不会上传照片或查询到应用服务器。")
                     .font(.subheadline).foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Button(state.canRead ? "准备照片" : "选择可搜索的照片") { isSearchFocused = false; showLibrary = true }
+                Button(state.canRead ? "建立索引" : "选择可搜索的照片") { isSearchFocused = false; showLibrary = true }
                     .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 50)
                     .background(IQStyle.accent, in: RoundedRectangle(cornerRadius: 16))
                     .foregroundStyle(IQStyle.onAccent).buttonStyle(.plain).accessibilityIdentifier("setup-library")

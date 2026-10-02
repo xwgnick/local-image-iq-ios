@@ -60,6 +60,41 @@ def region(name: str, geometry: dict) -> places.Region:
     return places.Region("synthetic-region", 1, name, output, predicate)
 
 
+class RuntimeMetadataTests(unittest.TestCase):
+    def test_fixed_fnv1a_vectors_including_unpadded_hex(self):
+        for data, expected in ((b"", "cbf29ce484222325"), (b"a", "af63dc4c8601ec8c"),
+                               (b"fo", "8985907b541d342"), (b"hello", "a430d84680aabd0b"),
+                               (b"foobar", "85944171f73967e8")):
+            with self.subTest(data=data):
+                self.assertEqual(places.runtime_version(io.BytesIO(data)), f"raycast-v1-{expected}")
+
+    def test_exact_synthetic_geometry_vector_shared_with_swift_resolver_test(self):
+        # Keep these exact bytes in sync with PlacePackMetadataTests, including LF.
+        data = (b'{"type":"FeatureCollection","coverageCountries":["Synthetic"],"features":'
+                b'[{"type":"Feature","properties":{"label":"Square, Synthetic","level":"ADM1"},'
+                b'"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}}]}\n')
+        self.assertEqual(places.runtime_version(io.BytesIO(data)), "raycast-v1-4b2d9ec5135d4ccc")
+        self.assertEqual(places.runtime_version(io.BytesIO(data[:-1])), "raycast-v1-da2e3970db8ea20e")
+
+    def test_hashes_binary_bytes_across_bounded_chunks_without_json_decoding(self):
+        data = bytes(range(256)) * 3
+        # Different independent arithmetic expression: modulo 2**64 instead of a mask.
+        expected = 14695981039346656037
+        for byte in data:
+            expected = ((expected ^ byte) * 1099511628211) % (2 ** 64)
+        for chunk_size in (1, 7, 64, places.CHUNK_SIZE):
+            with self.subTest(chunk_size=chunk_size), patch.object(places, "CHUNK_SIZE", chunk_size):
+                self.assertEqual(places.runtime_version(io.BytesIO(data)), f"raycast-v1-{expected:x}")
+
+    def test_coverage_matches_resolver_wording(self):
+        suffix = (" Administrative boundaries may be incomplete or historical; not live GPS or global "
+                  "coverage. 1 features; 0 unsupported/invalid features skipped.")
+        self.assertEqual(places.runtime_coverage_description(["Synthetic"], 1),
+                         "Offline country coverage: Synthetic." + suffix)
+        self.assertEqual(places.runtime_coverage_description([], 1),
+                         "Offline coverage: this pack only." + suffix)
+
+
 class PlacesTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="test-public-places-")
@@ -446,6 +481,42 @@ class PlacesTests(unittest.TestCase):
         self.assertEqual(on_disk, manifest)
         # Source provenance has no source geometry or photo-location payload.
         self.assertNotIn('"coordinates":', places.compact(manifest))
+
+    def test_runtime_manifest_is_derived_from_final_utf8_bytes_not_reserialized_json(self):
+        self.write_source("CHN", "ADM1", [feature("unicode", "最后 Première", rectangle())])
+        manifest, pack = self.build()
+        data = (self.root / "output" / places.PACK_NAME).read_bytes()
+        expected = 14695981039346656037
+        for byte in data:
+            expected = ((expected ^ byte) * 1099511628211) % (2 ** 64)
+        runtime = manifest["runtime"]
+        self.assertEqual(runtime, {"schemaVersion": 1, "version": f"raycast-v1-{expected:x}",
+            "coverageDescription": places.runtime_coverage_description(pack["coverageCountries"], len(pack["features"]))})
+        self.assertTrue(data.endswith(b"\n"))
+        self.assertNotEqual(runtime["version"], places.runtime_version(io.BytesIO(data[:-1])))
+        self.assertNotEqual(runtime["version"], places.runtime_version(io.BytesIO(json.dumps(pack).encode("utf-8"))))
+        self.assertNotEqual(runtime["version"], "raycast-v1-" + manifest["generated"]["sha256"])
+        written = json.loads((self.root / "output" / places.MANIFEST_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(written["runtime"], runtime)
+
+    def test_old_owned_manifest_without_runtime_is_upgraded_without_changing_geography(self):
+        manifest, _ = self.build("upgrade")
+        output = self.root / "upgrade"
+        geometry_before = (output / places.PACK_NAME).read_bytes()
+        old = copy.deepcopy(manifest)
+        del old["runtime"]
+        (output / places.MANIFEST_NAME).write_text(places.compact(old) + "\n", encoding="utf-8")
+        rebuilt, _ = self.build("upgrade")
+        self.assertEqual((output / places.PACK_NAME).read_bytes(), geometry_before)
+        self.assertEqual(rebuilt, manifest)
+
+    def test_changed_geometry_updates_runtime_identity_even_when_feature_count_is_unchanged(self):
+        first, _ = self.build("updated")
+        self.write_source("CHN", "ADM2", [feature("CHN-ADM2-synthetic", "Changed label", rectangle(1, 1, 2, 2))])
+        second, _ = self.build("updated")
+        self.assertEqual(first["generated"]["featureCount"], second["generated"]["featureCount"])
+        self.assertNotEqual(first["runtime"]["version"], second["runtime"]["version"])
+        self.assertEqual(first["runtime"]["coverageDescription"], second["runtime"]["coverageDescription"])
 
     def test_cli_download_requires_flag_and_only_forwards_mode(self):
         output = self.root / "cli-not-built"

@@ -10,7 +10,7 @@ final class LaunchWorkerTests: XCTestCase {
     private let version = IndexImagePolicy.cacheVersion(modelVersion: "TEST-launch-model")
     private let resolver = OfflinePlaceResolver.unavailable("TEST-launch-boundaries")
 
-    func testStagesBracketActualEnumerationReconciliationAndWarmup() async throws {
+    func testStagesBracketWarmupWithoutEnumerationOrReconciliation() async throws {
         let context = try context([row("TEST-kept"), row("TEST-deleted")])
         context.library.replace([PhotoRevision(id: "TEST-kept", modificationTime: 123)])
         let version = version
@@ -20,23 +20,24 @@ final class LaunchWorkerTests: XCTestCase {
             context.events.append(stage)
             do {
                 let counts = try await context.store.counts(modelVersion: version, geographyVersion: geography)
-                XCTAssertEqual(counts.indexed, stage == .checkingLibrary ? 2 : 1,
-                               "Checking precedes pruning; preparing follows committed reconciliation.")
+                XCTAssertEqual(counts.indexed, 2, "Neither progress stage may prune saved rows.")
+                XCTAssertEqual(counts.located, 2)
             } catch { XCTFail("Unable to inspect synthetic cache at stage: \(error)") }
         }
         context.events.append("returned")
 
-        XCTAssertEqual(context.events.values, ["checking", "enumerate", "preparing", "prepare-start",
-                                               "prepare-end", "enumerate", "returned"])
-        XCTAssertEqual(summary.authorizedCount, 1)
-        XCTAssertEqual(summary.indexedCount, 1)
-        XCTAssertEqual(summary.locatedCount, 1)
+        XCTAssertEqual(context.events.values, ["checking", "preparing", "prepare-start", "prepare-end", "returned"])
+        XCTAssertFalse(summary.authorizedCountKnown)
+        XCTAssertEqual(summary.authorizedCount, 0, "Unknown is not evidence of an empty Photos library.")
+        XCTAssertEqual(summary.indexedCount, 2)
+        XCTAssertEqual(summary.locatedCount, 2)
         XCTAssertEqual(summary.modelVersion, version)
         XCTAssertNil(summary.modelIssue)
         XCTAssertEqual(summary.placesDescription, resolver.coverageDescription)
-        let orphan = try await context.store.place(text: "TEST-deleted", modelVersion: version)
-        XCTAssertNil(orphan)
-        await assertCalls(context, inspect: 0, prepare: 1, enumerations: 2)
+        let retainedPlace = try await context.store.place(text: "TEST-deleted", modelVersion: version)
+        XCTAssertEqual(retainedPlace, TestFixtures.vector(axis: 1))
+        await assertCalls(context, inspect: 0, prepare: 1, enumerations: 0)
+        try await assertCacheUnchanged(context)
     }
 
     func testLaunchUsesMetadataCountsNotVectorValidationAndRefreshRemainsInspectionOnly() async throws {
@@ -48,14 +49,18 @@ final class LaunchWorkerTests: XCTestCase {
             row("TEST-old-policy", model: "TEST-launch-model|TEST-old-policy")
         ])
         let before = try await context.worker.refresh()
-        await assertCalls(context, inspect: 1, prepare: 0, enumerations: 1)
+        await assertCalls(context, inspect: 1, prepare: 0, enumerations: 0)
+        try await assertCacheUnchanged(context)
         let launched = try await context.worker.prepareForLaunch { context.events.append($0) }
-        await assertCalls(context, inspect: 1, prepare: 1, enumerations: 3)
+        await assertCalls(context, inspect: 1, prepare: 1, enumerations: 0)
+        try await assertCacheUnchanged(context)
         let foreground = try await context.worker.refresh()
-        await assertCalls(context, inspect: 2, prepare: 1, enumerations: 4)
+        await assertCalls(context, inspect: 2, prepare: 1, enumerations: 0)
+        try await assertCacheUnchanged(context)
 
         for summary in [before, launched, foreground] {
-            XCTAssertEqual(summary.authorizedCount, 5)
+            XCTAssertFalse(summary.authorizedCountKnown)
+            XCTAssertEqual(summary.authorizedCount, 0)
             XCTAssertEqual(summary.indexedCount, 3)
             XCTAssertEqual(summary.locatedCount, 2)
             XCTAssertEqual(summary.modelVersion, version)
@@ -68,9 +73,10 @@ final class LaunchWorkerTests: XCTestCase {
             XCTFail("Zero vectors must still fail full validation.")
         } catch AppFailure.modelContract { }
         catch { XCTFail("Unexpected validation error: \(error)") }
+        try await assertCacheUnchanged(context)
     }
 
-    func testMissingAndCorruptModelsReturnInitialSnapshotIssueNotSuccessfulReadiness() async throws {
+    func testMissingAndCorruptModelsReturnIssueWithoutCountingOrPruningSavedRows() async throws {
         for failure in [AppFailure.modelsMissing("TEST-missing"), .modelContract("TEST-corrupt")] {
             let hold = TESTLaunchHold()
             let context = try context([row("TEST-kept"), row("TEST-deleted")],
@@ -82,18 +88,20 @@ final class LaunchWorkerTests: XCTestCase {
             await hold.release.open()
             let summary = try await task.value
 
-            XCTAssertEqual(summary.authorizedCount, 1, "Failed warmup reports the initial snapshot only.")
+            XCTAssertFalse(summary.authorizedCountKnown)
+            XCTAssertEqual(summary.authorizedCount, 0)
             XCTAssertEqual(summary.indexedCount, 0)
             XCTAssertEqual(summary.locatedCount, 0)
             XCTAssertNil(summary.modelVersion)
             XCTAssertEqual(summary.modelIssue, failure.localizedDescription)
             XCTAssertEqual(summary.placesDescription, resolver.coverageDescription)
             let rows = try await context.store.records(modelVersion: version)
-            let orphan = try await context.store.place(text: "TEST-deleted", modelVersion: version)
-            XCTAssertEqual(rows.map(\.photo.id), ["TEST-kept"])
-            XCTAssertNil(orphan, "Initial reconciliation still precedes failed warmup.")
-            XCTAssertEqual(context.events.values, ["checking", "enumerate", "preparing", "prepare-start", "prepare-end"])
-            await assertCalls(context, inspect: 0, prepare: 1, enumerations: 1)
+            let retainedPlace = try await context.store.place(text: "TEST-deleted", modelVersion: version)
+            XCTAssertEqual(rows.map(\.photo.id), ["TEST-deleted", "TEST-kept"])
+            XCTAssertEqual(retainedPlace, TestFixtures.vector(axis: 1))
+            XCTAssertEqual(context.events.values, ["checking", "preparing", "prepare-start", "prepare-end"])
+            await assertCalls(context, inspect: 0, prepare: 1, enumerations: 0)
+            try await assertCacheUnchanged(context)
         }
     }
 
@@ -114,12 +122,13 @@ final class LaunchWorkerTests: XCTestCase {
             switch target {
             case nil: expected = []
             case .checkingLibrary: expected = ["checking"]
-            case .preparingSearch: expected = ["checking", "enumerate", "preparing"]
+            case .preparingSearch: expected = ["checking", "preparing"]
             }
             XCTAssertEqual(context.events.values, expected)
             let rows = try await context.store.records(modelVersion: version)
-            XCTAssertEqual(rows.count, target == .preparingSearch ? 1 : 2)
-            await assertCalls(context, inspect: 0, prepare: 0, enumerations: target == .preparingSearch ? 1 : 0)
+            XCTAssertEqual(rows.map(\.photo.id), ["TEST-deleted", "TEST-kept"])
+            await assertCalls(context, inspect: 0, prepare: 0, enumerations: 0)
+            try await assertCacheUnchanged(context)
         }
     }
 
@@ -137,13 +146,14 @@ final class LaunchWorkerTests: XCTestCase {
             await expectCancellation(task)
 
             let rows = try await context.store.records(modelVersion: version)
-            XCTAssertEqual(rows.map(\.photo.id), ["TEST-kept"], "No second reconciliation after cancellation.")
-            XCTAssertEqual(context.events.values, ["checking", "enumerate", "preparing", "prepare-start", "prepare-end"])
-            await assertCalls(context, inspect: 0, prepare: 1, enumerations: 1)
+            XCTAssertEqual(rows.map(\.photo.id), ["TEST-kept"], "Cancellation must leave the saved index unchanged.")
+            XCTAssertEqual(context.events.values, ["checking", "preparing", "prepare-start", "prepare-end"])
+            await assertCalls(context, inspect: 0, prepare: 1, enumerations: 0)
+            try await assertCacheUnchanged(context)
         }
     }
 
-    func testAuthorizationRevocationAndEditsDuringHeldWarmupAreReconciledBeforeSuccess() async throws {
+    func testAuthorizationRevocationAndEditsDuringHeldWarmupLeaveSavedSnapshotPendingManualUpdate() async throws {
         for revoked in [false, true] {
             let hold = TESTLaunchHold()
             let context = try context([row("TEST-kept"), row("TEST-edited"), row("TEST-deleted")], hold: hold)
@@ -159,40 +169,47 @@ final class LaunchWorkerTests: XCTestCase {
             await hold.release.open()
             let summary = try await task.value
 
-            XCTAssertEqual(summary.authorizedCount, revoked ? 0 : 3)
-            XCTAssertEqual(summary.indexedCount, revoked ? 0 : 1)
-            XCTAssertEqual(summary.locatedCount, revoked ? 0 : 1)
+            XCTAssertFalse(summary.authorizedCountKnown)
+            XCTAssertEqual(summary.authorizedCount, 0)
+            XCTAssertEqual(summary.indexedCount, 3)
+            XCTAssertEqual(summary.locatedCount, 3)
             XCTAssertEqual(summary.modelVersion, version)
             XCTAssertNil(summary.modelIssue)
             let rows = try await context.store.records(modelVersion: version)
-            XCTAssertEqual(rows.map(\.photo.id), revoked ? [] : ["TEST-kept"])
-            for label in revoked ? ["TEST-kept", "TEST-edited", "TEST-deleted"] : ["TEST-edited", "TEST-deleted"] {
-                let orphan = try await context.store.place(text: label, modelVersion: version)
-                XCTAssertNil(orphan)
+            XCTAssertEqual(rows.map(\.photo.id), ["TEST-deleted", "TEST-edited", "TEST-kept"])
+            XCTAssertTrue(rows.allSatisfy { $0.photo.modificationTime == 123 })
+            for label in ["TEST-kept", "TEST-edited", "TEST-deleted"] {
+                let retainedPlace = try await context.store.place(text: label, modelVersion: version)
+                XCTAssertEqual(retainedPlace, TestFixtures.vector(axis: 1))
             }
-            XCTAssertEqual(context.events.values, ["checking", "enumerate", "preparing", "prepare-start", "prepare-end", "enumerate"])
-            await assertCalls(context, inspect: 0, prepare: 1, enumerations: 2)
+            let added = try await context.store.record(id: "TEST-added")
+            XCTAssertNil(added, "Warmup must not automatically index new photos.")
+            XCTAssertEqual(context.events.values, ["checking", "preparing", "prepare-start", "prepare-end"])
+            await assertCalls(context, inspect: 0, prepare: 1, enumerations: 0)
+            try await assertCacheUnchanged(context)
         }
     }
 
-    func testInitiallyUnauthorizedLaunchPrunesCacheAndPreparesWithoutRequestingAccess() async throws {
+    func testInitiallyUnauthorizedLaunchRetainsCacheAndPreparesWithoutRequestingAccess() async throws {
         let context = try context([row("TEST-now-inaccessible")])
         context.library.replace([], readable: false)
         let summary = try await context.worker.prepareForLaunch { context.events.append($0) }
 
+        XCTAssertFalse(summary.authorizedCountKnown)
         XCTAssertEqual(summary.authorizedCount, 0)
-        XCTAssertEqual(summary.indexedCount, 0)
-        XCTAssertEqual(summary.locatedCount, 0)
+        XCTAssertEqual(summary.indexedCount, 1)
+        XCTAssertEqual(summary.locatedCount, 1)
         XCTAssertEqual(summary.modelVersion, version)
         XCTAssertNil(summary.modelIssue)
         let rows = try await context.store.records(modelVersion: version)
-        let orphan = try await context.store.place(text: "TEST-now-inaccessible", modelVersion: version)
-        XCTAssertTrue(rows.isEmpty)
-        XCTAssertNil(orphan)
+        let retainedPlace = try await context.store.place(text: "TEST-now-inaccessible", modelVersion: version)
+        XCTAssertEqual(rows.map(\.photo.id), ["TEST-now-inaccessible"])
+        XCTAssertEqual(retainedPlace, TestFixtures.vector(axis: 1))
         // The injected PhotoLibraryIndexing witness has no authorization-request API.
         XCTAssertFalse(context.library.canReadImages)
-        XCTAssertEqual(context.events.values, ["checking", "enumerate", "preparing", "prepare-start", "prepare-end", "enumerate"])
-        await assertCalls(context, inspect: 0, prepare: 1, enumerations: 2)
+        XCTAssertEqual(context.events.values, ["checking", "preparing", "prepare-start", "prepare-end"])
+        await assertCalls(context, inspect: 0, prepare: 1, enumerations: 0)
+        try await assertCacheUnchanged(context)
     }
 
     func testOldServiceUsesDefaultCheckingThenRefreshWithoutImplementingNewRequirement() async throws {
@@ -200,6 +217,7 @@ final class LaunchWorkerTests: XCTestCase {
         let service: any PhotoWorkServicing = TESTLegacyLaunchService(events: events)
         let summary = try await service.prepareForLaunch { events.append($0) }
         XCTAssertEqual(events.values, ["checking", "legacy-refresh"])
+        XCTAssertTrue(summary.authorizedCountKnown)
         XCTAssertEqual(summary.authorizedCount, 7)
         XCTAssertEqual(summary.modelIssue, "TEST-legacy-summary")
         let task = Task {
@@ -235,7 +253,24 @@ final class LaunchWorkerTests: XCTestCase {
         }, events: events)
         let encoders = try TESTLaunchEncoders(events: events, outcome: outcome, hold: hold)
         let worker = PhotoIndexWorker(library: library, encoders: encoders, directory: directory, resolver: resolver)
-        return TESTLaunchContext(worker: worker, library: library, encoders: encoders, store: store, events: events)
+        return TESTLaunchContext(worker: worker, library: library, encoders: encoders, store: store,
+                                 events: events, savedFiles: try cacheFiles(in: directory))
+    }
+
+    private func cacheFiles(in directory: URL) throws -> [String: Data] {
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        return try files.reduce(into: [String: Data]()) { result, file in
+            result[file.lastPathComponent] = try Data(contentsOf: file)
+        }
+    }
+
+    private func assertCacheUnchanged(_ context: TESTLaunchContext,
+                                      file: StaticString = #filePath, line: UInt = #line) async throws {
+        await context.store.close()
+        let directory = await context.store.directory
+        XCTAssertNotNil(context.savedFiles["index.sqlite3"], file: file, line: line)
+        XCTAssertEqual(try cacheFiles(in: directory), context.savedFiles,
+                       "Readiness must preserve every saved DB byte and create no sidecars.", file: file, line: line)
     }
 
     private func start(_ context: TESTLaunchContext, hold: TESTLaunchHold) -> Task<LibrarySummary, Error> {
@@ -272,6 +307,7 @@ private struct TESTLaunchContext: Sendable {
     let encoders: TESTLaunchEncoders
     let store: SQLitePhotoStore
     let events: TESTLaunchEvents
+    let savedFiles: [String: Data]
 }
 
 private final class TESTLaunchEvents: @unchecked Sendable {
@@ -419,7 +455,7 @@ private struct TESTLegacyLaunchService: PhotoWorkServicing {
     let events: TESTLaunchEvents
     func refresh() async throws -> LibrarySummary {
         events.append("legacy-refresh")
-        return LibrarySummary(authorizedCount: 7, modelIssue: "TEST-legacy-summary")
+        return LibrarySummary(authorizedCount: 7, authorizedCountKnown: true, modelIssue: "TEST-legacy-summary")
     }
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary {
         throw AppFailure.photo("TEST-unexpected-index")
