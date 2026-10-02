@@ -2,13 +2,20 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 最新代码（2026-10-02）：0.5.3 / build 16，B02 图标＋纯图标启动页，待原生构建
+## 当前交付（2026-10-02）：0.5.3 / build 16，B02 图标＋纯图标启动页，首轮 SUCCESS
 
 已接入用户选定的 B02。系统 Launch Screen 与 App 内实际准备页均只显示同一张静态图标，无名称、阶段文字、进度条或转圈；不改变模型准备门控、不加人为等待。失败恢复使用图标轻点／长按与辅助功能动作，正常准备不能跳过。
 
-本地品牌静态检查 **12 项**、既有静态测试 **30 项**及源码契约检查通过。用户已要求按既有个人公开仓库／标准 macOS 手动流程构建，**本轮原生测试与交付尚待结果**。完整行为、素材及验证边界见 [docs/APP_ICON_AND_LAUNCH.md](docs/APP_ICON_AND_LAUNCH.md)。下面 build 15 是最近的已交付历史，不是本次改动的测试结果。
+已按既有个人公开仓库／标准 macOS 手动流程完成 [CI 37004642577](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37004642577)，源码 `ffbe286e9f130bc325d1a2d2e5993b6e9c240f12`。核心 **79 通过**，App **429＝428 通过／1 既有跳过／0 失败**，UI **10 通过**，启动展示 **9 通过**；模型必需，未绕过准备。设备 arm64 Release 编译通过。
 
-## 最近交付（2026-09-29）：0.5.2（build 15）— 首轮 SUCCESS，旧版冷启动准备页
+- [下载发布包](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37004642577-1) · [本地已校验 IPA](build/device-download/37004642577/LocalImageIQ-iphoneos-unsigned.ipa)。
+- 1,418,464,962 字节，SHA-256 `1e5f1fe7329563dd7e60c83d42a19d327109e548c90cc5f22d582e1ec3ab187c`；完整下载与归档 CRC 检查通过。
+- 已查看 [本轮四张原生启动截图](build/ui-review/37004642577/startup-contact.jpg)；“测试场景”只在测试截图上，正式 App 无此文字。尚非真机验收。
+- 使用原 Sideloadly 账号／有效 Bundle ID 覆盖安装，**不卸载、不清索引、不必重新 Index / resume**。
+
+完整行为与验证边界见 [docs/APP_ICON_AND_LAUNCH.md](docs/APP_ICON_AND_LAUNCH.md)，账本见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。下面保留 build 15 的历史，不能混作本次结果。
+
+## 历史交付（2026-09-29）：0.5.2（build 15）— 首轮 SUCCESS，旧版冷启动准备页
 
 - [CI 36560321362](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36560321362)
    ／[job 109379367704](https://github.com/xwgnick/local-image-iq-ios/actions/runs/36560321362/job/109379367704)，

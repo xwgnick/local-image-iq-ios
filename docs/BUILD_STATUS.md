@@ -1,10 +1,50 @@
 # Cloud build status — 2026-10-02
 
-## Current preparation: 0.5.3 (build 16) — B02 初版图标与纯图标启动页
+## Current: 0.5.3 (build 16) — 首轮 SUCCESS；B02 图标与纯图标启动页已交付
 
-用户要求沿用既有构建方式：精确个人公开仓库 xwgnick/local-image-iq-ios，手动 ios.yml，标准 macos-15，include_models / all_compute_units / build_device_ipa 全部开启。保留全部原生／模型／设备验证门槛，不绕过测试，不使用企业 origin。
+[Run 37004642577](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37004642577)
+／[job 110829945285](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37004642577/job/110829945285)，
+源码 **`ffbe286e9f130bc325d1a2d2e5993b6e9c240f12`**，**首轮 COMPLETED / SUCCESS**。
+**PASS-NATIVE／PASS-PACKAGE／DELIVERED**；真机安装与系统启动切换仍待验证。
 
-本地 12 项品牌静态检查＋30 项既有静态测试及源码契约检查通过；版本已准备为 0.5.3 / 16。尚未取得本轮远端 run ID 或原生结果，不能声称构建成功或已有可安装新包。改动见 [APP_ICON_AND_LAUNCH.md](APP_ICON_AND_LAUNCH.md)。
+沿用精确个人公开仓库 xwgnick/local-image-iq-ios、手动 ios.yml、标准 macos-15，include_models / all_compute_units / build_device_ipa 全部开启。没有删除／绕过测试，没有重跑凑通过，没有操作企业 origin 或调整计费／权限／发布规则。
+
+### build 16 验证账本
+
+|项目|实际结果／边界|
+|---|---|
+|Swift 核心|79 通过，0 失败。|
+|App XCTest|429＝428 通过／1 项既有真机文件保护模拟器跳过／0 失败；213.350 秒，wall 228.444 秒。|
+|StartupPresentationTests|9 全通过，0.992 秒；资源入包、阶段像素一致、失败动作守卫、错误脱敏及四张原生渲染截图。|
+|LaunchStateTests／LaunchWorkerTests|14／8 全通过；状态与准备门控未改。|
+|GeneratedModelParityTests|8 全通过，141.113 秒；模型必需，不降低对齐门槛。|
+|独立 UI|10 全通过，581.430 秒；导航 5／347.772 秒，键盘 5／233.658 秒。|
+|设备构建|BUILD SUCCEEDED；0.5.3 / 16，arm64 Release，未签名，iphoneos18.5，Xcode 16.4，最低 iOS 17.0。|
+|公开发布|Release 401805766／ci-37004642577-1，2026-10-02T12:38:55Z 发布；非 draft、prerelease、非 Latest，9 项资产已核验。|
+|本地 IPA|完整流式下载，实际长度与 SHA-256 相符，`ipaVerifiedLocally: true`。|
+|归档 CRC|7-Zip 26.03 `t` 全量检查通过，Everything is Ok；11 文件夹、30 文件，解压后 1,563,223,849 字节。|
+
+App 子套件已计入总数，UI 另计；测试耗时不代表手机性能。本轮模型必需，真实 UI 没有通过失败页继续以绕过准备。新增品牌静态检查 12 项、既有静态 30 项本地通过；本机 Node 18.0 不支持 `--test`，发布器测试保留并随远端 Node 22 源码检查步骤通过，而非被跳过。
+
+### build 16 安装包与证据
+
+- [公开 Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37004642577-1)。IPA asset **605585618**，**1,418,464,962 字节**，SHA-256：
+  `1e5f1fe7329563dd7e60c83d42a19d327109e548c90cc5f22d582e1ec3ab187c`。
+- [本地 IPA](../build/device-download/37004642577/LocalImageIQ-iphoneos-unsigned.ipa)、[设备报告](../build/device-download/37004642577/device-build.json)、[校验文件](../build/device-download/37004642577/SHA256SUMS.txt)、[交付清单](../build/device-download/37004642577/delivery.json)、[完整下载校验记录](../build/device-download/37004642577/release-fetch-33222525-354b-4fc2-a217-7aaf6c931082.json)。
+- [UIReview.zip](../build/ui-review/37004642577/UIReview.zip)：asset **605585388**，**3,940,859 字节**，SHA-256 `65922109b9c2fbdb0a3dc2c63cae61017d06d858be43fde9a5727cb26c943289`，已下载校验。
+- 在实际 IPA 中读取小型 Info.plist，确认 **0.5.3／16**、`CFBundleIconName=AppIcon`、`UILaunchStoryboardName=LaunchScreen`、`UIStatusBarHidden=true`；确认 Assets.car 及编译后的 LaunchScreen.storyboardc 三个文件存在。不是只检查源文件。
+
+### build 16 有限视觉审核
+
+只提取四张启动页原生截图（各 393×852），制作并实际查看 [1340×758 联系图](../build/ui-review/37004642577/startup-contact.jpg)：浅／深色加载、浅／深色失败。App 可见内容均为选定 B02 图标，未见名称、阶段、spinner、进度或错误装饰。对应主题下的加载／失败 PNG SHA-256 完全相同。
+
+截图保留右上“测试场景”水印，**仅存在于测试宿主，不在生产启动页**。这是无真实照片的合成状态原生渲染，不是系统 Launch Screen 交接或真机截图；不声称失败手势真实触摸互斥和 iOS 图标缓存已验证。提取范围与 IPA 元数据见 [审核清单](../build/ui-review/37004642577/startup-review-manifest.json)。没有批量查看其他图片。
+
+### 安装与保留行为
+
+继续用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引**。模型／索引身份、20 worker、HQ224／Fast、排名、翻译与准备流程未变；已有当前策略数据沿用，不必重新 Index / resume。仅失败时图标轻点重试、长按进入；正常准备不可跳过，无人为延时。详见 [APP_ICON_AND_LAUNCH.md](APP_ICON_AND_LAUNCH.md) 与 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
+
+**PENDING-DEVICE**：Sideloadly 重签包／手机安装、系统启动页交接、失败手势、缓存刷新及真实图库性能仍需真机确认。第三方权利边界不变；未跟踪研究／原型保留本地未暂存，本轮公开提交仅限图标实现及其验证／交付文档。
 
 ## Previous delivery: 0.5.2 (build 15) — 首轮 SUCCESS；旧冷启动准备页已交付，本地 IPA 与 CRC 校验完成
 

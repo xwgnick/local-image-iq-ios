@@ -1,10 +1,10 @@
 # 初版图标 B02 与纯图标启动页
 
-## 状态：2026-10-02，0.5.3 / build 16 准备按既有流程构建
+## 状态：2026-10-02，0.5.3 / build 16 首轮 SUCCESS，已交付
 
 用户选定 `AlbumVsPhotoSearch_2026-10-01 / B02`（照片＋搜索／高级感），并明确要求：App 有此图标；打开时的加载页面仅显示这一个图标，无文字、进度条、转圈或其他装饰。
 
-用户已要求按此前流程进行 iOS 编译。版本更新为 0.5.3 / build 16；本次仅向已批准的个人公开仓库推送，并手动运行标准 macos-15 含模型测试与设备 IPA 构建。当前尚无本轮原生通过或交付结论；旧 build 15 的测试／发布记录不是本次验证结果。
+已按此前流程完成：[CI 37004642577](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37004642577)，源码 `ffbe286e9f130bc325d1a2d2e5993b6e9c240f12`，标准 macos-15 含模型／全部计算单元验证及设备构建，首轮 SUCCESS。[Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37004642577-1) 已发布；[本地 IPA](../build/device-download/37004642577/LocalImageIQ-iphoneos-unsigned.ipa) 已完整下载并通过 SHA-256 与全量归档 CRC 检查。未改变企业 origin、计费或发布规则。
 
 ## 素材
 
@@ -42,6 +42,8 @@
 - 更新真实启动 UI 测试：仍等待首页或失败；只有明确 `IMAGEIQ_REQUIRE_MODELS=0` 才能长按失败图标继续，模型必需的运行不得绕过。
 - 将品牌静态检查加入现有**手动**验证流程；本轮按用户授权运行同一流程，不改变权限、计费或发布条件。
 
-**当前未验证：Swift 编译、actool／ibtool、Swift XCTest／XCUI、系统启动页到 SwiftUI 的真实交接、失败手势互斥的真机触摸行为、安装后图标缓存。** 当前 Windows 环境未找到 Swift、Xcode 或 XcodeGen，不能把静态通过当成原生通过。下次 macOS 构建必须运行上述原生测试，并确认浅／深色、横／竖屏交接无偏移；同 Bundle ID 更新后的系统启动截图／图标缓存也需真机确认。
+**本轮原生验证已完成：**核心 79、App 429（428 通过／1 既有跳过）、UI 10，无失败；StartupPresentationTests 9 全通过，含不同阶段的像素一致检查。设备编译通过；实际 IPA 中核验了 AppIcon 元数据、Assets.car 和编译后的 LaunchScreen.storyboardc。
 
-最近真正交付的 IPA 仍见 [BUILD_STATUS.md](BUILD_STATUS.md) 中的 build 15 记录。
+已查看 [四张启动原生截图联系图](../build/ui-review/37004642577/startup-contact.jpg)，浅／深色加载与失败均只显示 B02；右上角“测试场景”仅为测试水印。相同主题下加载与失败截图字节一致。
+
+**仍未验证：**物理 iPhone 安装、系统启动页到 SwiftUI 的真实交接、失败手势互斥的真机触摸行为、安装后的系统图标缓存及真实图库性能。截图是合成状态，不把它当成真机冷启动视频。详见 [BUILD_STATUS.md](BUILD_STATUS.md) 的 build 16 账本。

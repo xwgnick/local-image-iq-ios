@@ -5,7 +5,18 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前（2026-09-29）：0.5.2（build 15）— 已交付并本地校验，可签名覆盖安装
+## 当前（2026-10-02）：0.5.3（build 16）— B02 图标与纯图标启动页，已交付
+
+- [公开 Release：ci-37004642577-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37004642577-1)，无需登录。
+- [本地已下载 IPA](../build/device-download/37004642577/LocalImageIQ-iphoneos-unsigned.ipa)：**1,418,464,962 字节**，SHA-256 `1e5f1fe7329563dd7e60c83d42a19d327109e548c90cc5f22d582e1ec3ab187c`。已流式全量核验哈希并通过 7-Zip 全量归档 CRC 检查，不必再次下载。
+- [CI 37004642577](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37004642577) 首轮 SUCCESS：核心 79、App 429（428 通过／1 既有跳过）、UI 10；设备包为 arm64 Release、未签名、iOS 17+，Xcode 16.4／SDK 18.5。
+- 已打包用户选定 B02 系统图标与静态启动画面；真正准备模型时也只显示图标，不显示文字／spinner。仅失败时轻点图标重试，长按约一秒先进入；正常准备不可跳过。
+
+用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不 Clear index、不重建索引**。模型、索引身份及语言包策略未改，已有有效数据沿用。签名操作同下方原步骤。
+
+本轮尚未获物理 iPhone 安装／行为确认；不要把原生模拟器测试或 CRC 通过当成手机已验证。系统图标／启动截图缓存可能需要后续真机确认，不能因此建议先卸载清数据。完整证据见 [BUILD_STATUS.md](BUILD_STATUS.md)，[四张启动原生截图](../build/ui-review/37004642577/startup-contact.jpg) 中的“测试场景”水印不在正式 App 内。
+
+## 历史（2026-09-29）：0.5.2（build 15）— 已交付并本地校验
 
 - [公开 Release：ci-36560321362-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-36560321362-1)
   （**399087745**），**2026-09-29T11:40:49Z** 发布；**9 项资产已核验，非 draft、prerelease、非 Latest**，无需登录。
