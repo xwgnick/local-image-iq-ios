@@ -1,10 +1,39 @@
 # Cloud build status — 2026-10-02
 
-## Current preparation: 0.5.5 (build 18) — 启动耗时截图页
+## Current: 0.5.5 (build 18) — 首轮 SUCCESS；启动耗时截图页已交付
 
-仅增加单调时钟分段记录和调试入口，不改变已交付的手动索引、模型顺序或纯图标启动页。本地静态 30 项、品牌 12 项及源码检查通过；本轮 Swift／原生测试、设备构建与交付尚待结果。计时从准备入口到发布结果，不含系统启动与首帧绘制。[完整范围](LAUNCH_TIMING.md)。
+[Run 37031320019](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37031320019)／[job 110918589407](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37031320019/job/110918589407)，源码 **`930efe39b839f6594f1dc1424a7bedc869c5e982`**。既有个人公开仓库标准 macos-15 手动流程，模型／全部计算单元／设备 IPA 均开启，首轮 COMPLETED / SUCCESS，无重试或测试绕过。**PASS-NATIVE／PASS-PACKAGE／DELIVERED**。
 
-## Current: 0.5.4 (build 17) — 首轮 SUCCESS；用户手动管理索引，已交付
+仅增加单调时钟分段记录和调试入口，不改变手动索引、模型顺序、计算单元、20 worker 或纯图标启动页。计时从准备入口到发布结果，不含系统启动、此前 App 初始化及首帧绘制；数据仅在进程内存，默认记录、调试入口显示，不包含照片 ID／查询／路径／GPS，不上传。[完整范围和截图步骤](LAUNCH_TIMING.md)。
+
+### build 18 验证账本
+
+|项目|实际结果|
+|---|---|
+|Swift 核心|79 全通过。|
+|App XCTest|505＝504 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败；234.712 秒，wall 241.475 秒。|
+|计时记录与页面|LaunchTimingTests 8／0.016 秒；LaunchTimingPresentationTests 12／0.864 秒，全通过。|
+|启动状态|LaunchStateTests 16／0.104 秒，全通过，含队列中断冻结、重试和普通前台不覆盖。|
+|真实模型对齐|GeneratedModelParityTests 8／151.975 秒，全通过；新增真实模型计时标记与缓存复用断言，原数值门槛和预测覆盖不变。|
+|独立 UI|11 全通过／770.431 秒；导航 6／518.978 秒，键盘 5／251.453 秒。包含真实准备记录的设置入口导航及返回。|
+|设备构建|BUILD SUCCEEDED；0.5.5 / 18，arm64 Release，未签名，SDK 18.5，Xcode 16.4，最低 iOS 17。|
+|本地校验|完整 IPA 流式字节／SHA-256 验证通过；7-Zip 26.03 全量归档 CRC PASS。|
+
+子套件计入总数，不重复相加；新增 App 21 项、UI 1 项。测试耗时不是 iPhone 性能。共享模型等待仍按已有实现运行；已完成的顺序首次加载／缓存复用检查不等于证明所有真实双等待者取消交错都覆盖。
+
+### build 18 资产与有限视觉检查
+
+- [Release ci-37031320019-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37031320019-1)，ID **401985943**，**2026-10-02T16:39:12Z** 发布，非 draft、prerelease、非 Latest，9 项资产核验。
+- IPA asset **606027059**，**1,418,525,487 字节**，SHA-256 **`88fc52f0a9e957bc267fac02c396e4b0e3dade0f45d070eef5ffbcab5bda589f`**。
+- [本地 IPA](../build/device-download/37031320019/LocalImageIQ-iphoneos-unsigned.ipa)、[设备报告](../build/device-download/37031320019/device-build.json)、[交付清单](../build/device-download/37031320019/delivery.json)、[校验文件](../build/device-download/37031320019/SHA256SUMS.txt)、[全量下载记录](../build/device-download/37031320019/release-fetch-04acca70-73a2-4fe4-9dda-13ce2aa4d802.json)，`ipaVerifiedLocally: true`。
+- CRC 结果：Everything is Ok，11 文件夹、30 文件，解压后 **1,563,508,249 字节**。不验证重签后包或手机安装。
+- [UIReview.zip](../build/ui-review/37031320019/UIReview.zip)，asset **606026782**，**4,814,626 字节**，SHA-256 `26f40db4c84b3ca6bf333c72bc9784a5dad34d4b62deb2c23b65070bf75d5cce`，已下载校验。
+- 只提取并实际查看 [1680×758 五图联系图](../build/ui-review/37031320019/timing-contact.jpg)：真实模拟器计时页 1206×2622、两张带水印合成计时页各 393×852、两张纯图标启动页各 393×852。后两张启动图仍与 build 16／17 对应图片字节相同。范围见 [审核记录](../build/ui-review/37031320019/timing-review.json)。
+- 本轮模拟器实际计时总数 **6.403 秒**，分词器 **6.254 秒**、图像模型 **0.072 秒**、文本模型 **0.042 秒**；只有第一张图是实际测量。合成页 **21.935 秒**及其阶段值是测试夹具。**不能据此给用户 iPhone 定位瓶颈或承诺速度**，等待手机截图。
+
+照旧原 Sideloadly 账号／有效 Bundle ID 覆盖安装，不卸载、不清索引，不为测速重新索引。入口为 **设置 → 显示调试工具 → 诊断信息 → 启动耗时**。**PENDING-DEVICE**：手机实际耗时、安装、系统启动交接和真实图库体验待确认。未改变仓库权限、计费、模型缓存身份或第三方权利边界；本地研究原型未暂存。
+
+## Previous delivery: 0.5.4 (build 17) — 首轮 SUCCESS；用户手动管理索引，已交付
 
 [Run 37022941546](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546)
 ／[job 110890327401](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37022941546/job/110890327401)，源码 **`02d5bc72b4d463bf2adca50dbf1d571a93183354`**。

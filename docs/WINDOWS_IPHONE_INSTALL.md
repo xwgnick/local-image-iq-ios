@@ -5,7 +5,15 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前（2026-10-02）：0.5.4（build 17）— 首轮 SUCCESS，手动索引版已交付
+## 当前（2026-10-02）：0.5.5（build 18）— 启动耗时诊断版，首轮 SUCCESS
+
+**[本地已校验 IPA](../build/device-download/37031320019/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开下载页](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37031320019-1)。原始 IPA 1,418,525,487 字节，SHA-256 `88fc52f0a9e957bc267fac02c396e4b0e3dade0f45d070eef5ffbcab5bda589f`；实际完整下载、哈希和全量 CRC 通过。核心 79、App 505（504 通过／1 既有跳过）、UI 11，无失败。设备 arm64 Release／未签名／iOS 17+，模型必需未绕过；本轮[验证账本](BUILD_STATUS.md)。
+
+使用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不因测速重建**。进入首页后：**设置 → 打开“显示调试工具” → 展开“诊断信息” → 启动耗时**。截图总耗时、最慢阶段与列表，一屏不够分两张。记录在启动时自动产生，不用先开调试，普通前台刷新不覆盖。
+
+只有测量和页面变化，仍保留纯图标启动及用户手动索引。计时不含系统进程启动／准备入口前初始化／首页首帧，不是手机点击到显示全程；本次仅有模拟器观察，真实 iPhone 的数值待截图。详见 [LAUNCH_TIMING.md](LAUNCH_TIMING.md)。
+
+## 历史（2026-10-02）：0.5.4（build 17）— 首轮 SUCCESS，手动索引版已交付
 
 - [公开 Release：ci-37022941546-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37022941546-1)（**401925676**），**2026-10-02T15:15:39Z** 发布，**9 项资产、prerelease、非 draft**，无需登录。
 - [本地已校验 IPA](../build/device-download/37022941546/LocalImageIQ-iphoneos-unsigned.ipa)：asset **605869344**，**1,418,481,134 字节**，SHA-256 **`51068e4916314399c0ad7bae3e0db7c33ac652691976cfd51c4ae4a241e3b071`**。已实际完整流式下载并核验长度／哈希，`ipaVerifiedLocally: true`，本机无需再次下载；[设备报告](../build/device-download/37022941546/device-build.json)、[交付清单](../build/device-download/37022941546/delivery.json)、[校验文件](../build/device-download/37022941546/SHA256SUMS.txt)、[下载记录](../build/device-download/37022941546/release-fetch-1bcda8c5-e734-4b0b-9cb8-a815559b795d.json) 齐全。
