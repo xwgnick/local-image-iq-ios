@@ -138,7 +138,7 @@ struct LocalPreviewComparisonSheet: View {
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(.borderedProminent)
-                .foregroundStyle(IQStyle.background)
+                .foregroundStyle(IQStyle.onAccent)
                 .disabled(scenePhase != .active)
                 .accessibilityIdentifier("run-local-previews")
             }

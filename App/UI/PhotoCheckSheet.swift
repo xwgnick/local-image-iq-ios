@@ -122,7 +122,7 @@ struct PhotoCheckSheet: View {
                 .padding(14)
                 .background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14)
-                    .stroke(isQueryFocused ? IQStyle.accent : .white.opacity(0.1), lineWidth: 1))
+                    .stroke(isQueryFocused ? IQStyle.accent : IQStyle.line, lineWidth: 1))
                 .accessibilityLabel("Search that missed this photo")
                 .accessibilityIdentifier("photo-check-query")
 
@@ -132,7 +132,7 @@ struct PhotoCheckSheet: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
-            .foregroundStyle(IQStyle.background)
+            .foregroundStyle(IQStyle.onAccent)
             .disabled(!canCheck)
             .accessibilityIdentifier("run-photo-check")
 

@@ -4,7 +4,7 @@ import UIKit
 import Foundation
 @testable import LocalImageIQ
 
-/// Approved prototype B tokens, not a copy of the production color provider.
+/// B02 black/gold design tokens, independent of the production color provider.
 /// Exercise the actual SwiftUI -> UIKit bridge: a separate UIColor helper would
 /// hide a regression where the Color exposed to views has lost its dynamic traits.
 @MainActor
@@ -12,26 +12,26 @@ final class IQStyleTests: XCTestCase {
     private var palette: [(name: String, color: Color, light: UInt32, dark: UInt32)] {
         [
             ("background", IQStyle.background, 0xF7F8FA, 0x121416),
-            ("surface", IQStyle.surface, 0xFFFFFF, 0x1D2023),
+            ("surface", IQStyle.surface, 0xFFFFFF, 0x202123),
             ("text", IQStyle.text, 0x1C232B, 0xF4F6F8),
             ("secondary", IQStyle.secondary, 0x626E79, 0xA7B1BA),
-            ("line", IQStyle.line, 0xE5E9ED, 0x30373D),
-            ("muted", IQStyle.muted, 0xEFF2F5, 0x252A2F),
-            ("accent", IQStyle.accent, 0x006B63, 0x73D5C5),
-            ("accentSoft", IQStyle.accentSoft, 0xE5F3EF, 0x193B36),
-            ("onAccent", IQStyle.onAccent, 0xFFFFFF, 0x0E2B27),
+            ("line", IQStyle.line, 0xE5E9ED, 0x393A3D),
+            ("muted", IQStyle.muted, 0xEFF2F5, 0x2B2C2E),
+            ("accent", IQStyle.accent, 0x806025, 0xD8B57C),
+            ("accentSoft", IQStyle.accentSoft, 0xF6F0E5, 0x352C20),
+            ("onAccent", IQStyle.onAccent, 0xFFFFFF, 0x201A12),
             ("warning", IQStyle.warning, 0x815000, 0xE9BB75),
             ("viewerBackground", IQStyle.viewerBackground, 0x090B0C, 0x090B0C)
         ]
     }
 
-    func testLightPaletteMatchesPrototypeB() throws {
+    func testLightPaletteMatchesB02Gold() throws {
         for token in palette {
             try assertRGB(UIColor(token.color), appearance: .light, hex: token.light, name: token.name)
         }
     }
 
-    func testDarkPaletteMatchesPrototypeB() throws {
+    func testDarkPaletteMatchesB02BlackGold() throws {
         for token in palette {
             try assertRGB(UIColor(token.color), appearance: .dark, hex: token.dark, name: token.name)
         }
@@ -57,6 +57,24 @@ final class IQStyleTests: XCTestCase {
         try assertTextContrast(appearance: .dark)
     }
 
+    func testGoldActionTextAndFocusIndicatorsRemainReadableInBothAppearances() throws {
+        for appearance in [UIUserInterfaceStyle.light, .dark] {
+            for background in [IQStyle.background, IQStyle.surface, IQStyle.muted, IQStyle.accentSoft] {
+                let ratio = try contrast(UIColor(IQStyle.accent), UIColor(background), appearance: appearance)
+                XCTAssertGreaterThanOrEqual(ratio, 4.5, "Gold is used for small action text, not only large icons.")
+            }
+        }
+    }
+
+    func testWarningTextKeepsSemanticPaletteAndContrast() throws {
+        for appearance in [UIUserInterfaceStyle.light, .dark] {
+            for background in [IQStyle.background, IQStyle.surface] {
+                let ratio = try contrast(UIColor(IQStyle.warning), UIColor(background), appearance: appearance)
+                XCTAssertGreaterThanOrEqual(ratio, 4.5)
+            }
+        }
+    }
+
     func testViewerBackgroundRemainsNearBlackInBothAppearances() throws {
         let color = UIColor(IQStyle.viewerBackground)
         for appearance in [UIUserInterfaceStyle.light, .dark] {
@@ -78,7 +96,7 @@ final class IQStyleTests: XCTestCase {
             XCTFail("The actual IQStyle Color must resolve to RGB", file: file, line: line)
             throw ColorFailure.notRGB
         }
-        XCTAssertEqual(alpha, 1, accuracy: 0.00001, "Prototype tokens are opaque", file: file, line: line)
+        XCTAssertEqual(alpha, 1, accuracy: 0.00001, "Brand tokens are opaque", file: file, line: line)
         return (Double(red), Double(green), Double(blue))
     }
 

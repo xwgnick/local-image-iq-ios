@@ -3,17 +3,20 @@ import SwiftUI
 import UIKit
 
 enum IQStyle {
-    // Scheme B: neutral photo canvas, one teal action color. Resolve at display
-    // time, so sheets and live system appearance changes share the same palette.
+    // B02: charcoal with warm champagne-gold actions. Light appearance uses
+    // a deeper gold for readable controls; dark appearance uses a lighter gold
+    // with charcoal labels on filled buttons. Resolve at display time so sheets
+    // and live system appearance changes share the same palette.
+    // Keep the outer canvas matched to the existing icon-only launch background.
     static let background = adaptive(light: 0xF7F8FA, dark: 0x121416)
-    static let surface = adaptive(light: 0xFFFFFF, dark: 0x1D2023)
+    static let surface = adaptive(light: 0xFFFFFF, dark: 0x202123)
     static let text = adaptive(light: 0x1C232B, dark: 0xF4F6F8)
     static let secondary = adaptive(light: 0x626E79, dark: 0xA7B1BA)
-    static let line = adaptive(light: 0xE5E9ED, dark: 0x30373D)
-    static let muted = adaptive(light: 0xEFF2F5, dark: 0x252A2F)
-    static let accent = adaptive(light: 0x006B63, dark: 0x73D5C5)
-    static let accentSoft = adaptive(light: 0xE5F3EF, dark: 0x193B36)
-    static let onAccent = adaptive(light: 0xFFFFFF, dark: 0x0E2B27)
+    static let line = adaptive(light: 0xE5E9ED, dark: 0x393A3D)
+    static let muted = adaptive(light: 0xEFF2F5, dark: 0x2B2C2E)
+    static let accent = adaptive(light: 0x806025, dark: 0xD8B57C)
+    static let accentSoft = adaptive(light: 0xF6F0E5, dark: 0x352C20)
+    static let onAccent = adaptive(light: 0xFFFFFF, dark: 0x201A12)
     static let warning = adaptive(light: 0x815000, dark: 0xE9BB75)
     static let viewerBackground = Color(uiColor: rgb(0x090B0C))
 

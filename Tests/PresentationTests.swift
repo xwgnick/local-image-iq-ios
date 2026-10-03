@@ -22,7 +22,7 @@ final class PresentationTests: XCTestCase {
         for appearance in [UIUserInterfaceStyle.light, .dark] {
             let layout = PresentationGridLayout()
             try await snapshot(PresentationGridReview(hits: hits, compact: false, layout: layout),
-                               id: "teal-grid-\(appearance == .dark ? "dark" : "light")",
+                               id: "gold-grid-\(appearance == .dark ? "dark" : "light")",
                                size: phone, appearance: appearance)
             // Measure the actual production grid's supplied thumbnail bounds,
             // not an inferred AX tree or a reconstructed layout. This also
@@ -58,8 +58,8 @@ final class PresentationTests: XCTestCase {
         XCTAssertTrue(state.modelsReady)
         XCTAssertEqual(state.summary.indexedCount, 0)
         XCTAssertNil(state.completedQuery)
-        try await snapshot(ContentView(state: state), id: "teal-home-light", size: phone, appearance: .light)
-        try await snapshot(ContentView(state: state), id: "teal-home-dark", size: phone, appearance: .dark)
+        try await snapshot(ContentView(state: state), id: "gold-home-light", size: phone, appearance: .light)
+        try await snapshot(ContentView(state: state), id: "gold-home-dark", size: phone, appearance: .dark)
     }
 
     func testReadyHomeSnapshot() async throws {
@@ -70,8 +70,8 @@ final class PresentationTests: XCTestCase {
         XCTAssertNil(state.completedQuery)
         XCTAssertEqual(state.resultLimit, 3)
         XCTAssertEqual(state.locationWeight, 0.6)
-        try await snapshot(ContentView(state: state), id: "teal-ready-light", size: phone, appearance: .light)
-        try await snapshot(ContentView(state: state), id: "teal-ready-dark", size: phone, appearance: .dark)
+        try await snapshot(ContentView(state: state), id: "gold-ready-light", size: phone, appearance: .light)
+        try await snapshot(ContentView(state: state), id: "gold-ready-dark", size: phone, appearance: .dark)
     }
 
     func testLibraryLightAndDarkSnapshots() async throws {
@@ -85,12 +85,85 @@ final class PresentationTests: XCTestCase {
         XCTAssertFalse(state.allowICloudDownload)
         XCTAssertEqual(state.summary.indexedCount, 0)
         XCTAssertNil(state.completedQuery)
-        try await snapshot(LibrarySheet(state: state), id: "teal-library-light", size: phone, appearance: .light)
-        try await snapshot(LibrarySheet(state: state), id: "teal-library-dark", size: phone, appearance: .dark)
+        try await snapshot(LibrarySheet(state: state), id: "gold-library-light", size: phone, appearance: .light)
+        try await snapshot(LibrarySheet(state: state), id: "gold-library-dark", size: phone, appearance: .dark)
         XCTAssertFalse(state.canRead, "Review must not request Photos permission")
         XCTAssertFalse(state.allowICloudDownload)
         XCTAssertNil(state.activity)
         XCTAssertTrue(state.results.isEmpty)
+    }
+
+    func testGoldSearchEnabledLightAndDarkSnapshots() async throws {
+        let worker = FakePhotoWorkServicing()
+        let state = await readyState(worker: worker, queryTranslator: PresentationTranslationStub())
+        state.query = "TEST FIXTURE sunset by the sea"
+        XCTAssertTrue(state.canSearch)
+        for appearance in [UIUserInterfaceStyle.light, .dark] {
+            try await snapshot(ContentView(state: state),
+                               id: "gold-search-enabled-\(appearance == .dark ? "dark" : "light")",
+                               size: phone, appearance: appearance)
+            XCTAssertTrue(state.canSearch)
+            XCTAssertEqual(state.query, "TEST FIXTURE sunset by the sea")
+            XCTAssertNil(state.activity)
+            XCTAssertNil(state.completedQuery)
+            XCTAssertTrue(state.results.isEmpty)
+        }
+        let request = await worker.lastSearch
+        XCTAssertNil(request, "Rendering an enabled search button must not submit a search")
+    }
+
+    func testGoldLibraryReadyLightAndDarkSnapshots() async throws {
+        let state = await readyState(queryTranslator: PresentationTranslationStub())
+        XCTAssertEqual(state.authorization, .authorized)
+        XCTAssertTrue(state.canIndex)
+        XCTAssertEqual(state.summary.indexedCount, 12)
+        XCTAssertEqual(LibrarySheet(state: state).indexActionTitle, "更新索引")
+        for appearance in [UIUserInterfaceStyle.light, .dark] {
+            try await snapshot(LibrarySheet(state: state),
+                               id: "gold-library-ready-\(appearance == .dark ? "dark" : "light")",
+                               size: phone, appearance: appearance)
+            XCTAssertEqual(state.authorization, .authorized)
+            XCTAssertTrue(state.canIndex)
+            XCTAssertEqual(state.summary.authorizedCount, 12)
+            XCTAssertEqual(state.summary.indexedCount, 12)
+            XCTAssertEqual(state.progress.total, 0)
+            XCTAssertNil(state.activity)
+            XCTAssertNil(state.errorMessage)
+            XCTAssertNil(state.completedQuery)
+            XCTAssertTrue(state.results.isEmpty)
+        }
+    }
+
+    func testGoldSettingsLightAndDarkSnapshots() async throws {
+        let state = await readyState(queryTranslator: PresentationTranslationStub())
+        // Exercise the real bound preferences in memory, then capture both ON.
+        // The production disclosures remain collapsed; no Apple service is created.
+        state.chineseSearchEnabled = false
+        state.debugToolsEnabled = false
+        XCTAssertFalse(state.chineseSearchEnabled)
+        XCTAssertFalse(state.debugToolsEnabled)
+        state.chineseSearchEnabled.toggle()
+        state.debugToolsEnabled.toggle()
+        XCTAssertTrue(state.chineseSearchEnabled)
+        XCTAssertTrue(state.debugToolsEnabled)
+        XCTAssertNil(state.appleTranslationService)
+        for appearance in [UIUserInterfaceStyle.light, .dark] {
+            try await snapshot(SettingsSheet(state: state),
+                               id: "gold-settings-\(appearance == .dark ? "dark" : "light")",
+                               size: phone, appearance: appearance)
+            XCTAssertTrue(state.chineseSearchEnabled)
+            XCTAssertTrue(state.debugToolsEnabled)
+            XCTAssertEqual(state.translationLanguage, .simplified)
+            XCTAssertEqual(state.resultLimit, 3)
+            XCTAssertEqual(state.locationWeight, 0.6)
+            XCTAssertTrue(state.canIndex)
+            XCTAssertEqual(state.summary.indexedCount, 12)
+            XCTAssertNil(state.activity)
+            XCTAssertNil(state.errorMessage)
+            XCTAssertNil(state.translationPreparationIssue)
+            XCTAssertNil(state.completedQuery)
+            XCTAssertTrue(state.results.isEmpty)
+        }
     }
 
     func testActualResultsUseMissingAssetPlaceholdersSnapshot() async throws {
@@ -314,8 +387,9 @@ final class PresentationTests: XCTestCase {
         }
     }
 
-    private func readyState(worker: FakePhotoWorkServicing = FakePhotoWorkServicing()) async -> AppState {
-        let state = AppState(worker: worker, authorizationStatus: { .authorized })
+    private func readyState(worker: FakePhotoWorkServicing = FakePhotoWorkServicing(),
+                            queryTranslator: (any QueryTranslating)? = nil) async -> AppState {
+        let state = AppState(worker: worker, authorizationStatus: { .authorized }, queryTranslator: queryTranslator)
         state.refresh()
         await state.waitUntilIdle()
         XCTAssertTrue(state.modelsReady)
@@ -669,6 +743,24 @@ private enum PresentationFixtures {
                 .font: UIFont.boldSystemFont(ofSize: 22), .foregroundColor: UIColor.white, .paragraphStyle: paragraph
             ])
         }
+    }
+}
+
+/// In-memory only: rendering settings cannot check or download Apple language packs.
+@MainActor
+private final class PresentationTranslationStub: QueryTranslating {
+    let isSupported = false
+
+    func availability(for language: QueryTranslationLanguage) async -> QueryTranslationAvailability { .unsupported }
+
+    func translate(_ text: String, from language: QueryTranslationLanguage) async throws -> String {
+        XCTFail("Presentation must not translate a query")
+        throw QueryTranslationFailure.unsupported
+    }
+
+    func prepare(_ language: QueryTranslationLanguage) async throws {
+        XCTFail("Presentation must not prepare language packs")
+        throw QueryTranslationFailure.unsupported
     }
 }
 
