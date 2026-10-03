@@ -2,7 +2,19 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 当前交付（2026-10-03）：0.5.6 / build 19，并行准备，首轮 SUCCESS
+## 当前交付：0.5.7 / build 20，B02 黑金主题，首轮 SUCCESS
+
+**原生验证、设备构建、发布及本地 IPA 校验已完成；物理 iPhone 验收待用户选择安装后确认。**[CI 37134037707](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37134037707)／[job 111234786439](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37134037707/job/111234786439)，源码 `a7d32dd66077b167f1df95e9186bc8722b2ad923`。沿用个人公开仓库完整 `macos-15` 手动流程，模型／全部计算单元／设备 IPA 三项均开启，**attempt 1 SUCCESS，无 CI 改动或重试**：核心 **79**，App **532＝531 通过／1 既有 SQLite 跳过／0 失败**，UI **11 全通过**；CPU 参考及全部模型对齐门槛保留。
+
+**[本地已校验 IPA](build/device-download/37134037707/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37134037707-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37134037707-1)。原包 **1,418,554,047 字节**，SHA-256 `161d8227129b744490ee40c709e780c6bf4dfc9a674ded89e01343f58f2c14d9`，完整流式下载／哈希与全量 CRC PASS；设备 **arm64 Release、未签名、iOS 17+、SDK 18.5／Xcode 16.4**。9 项资产于 **2026-10-03T16:08:47Z** 发布，prerelease、非 draft／Latest。资产和测试明细集中在 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+
+普通页面继续跟随系统深浅色：深色香槟金、浅色深金；原本固定深色的查看器／诊断页继续固定深色，不强制全 App 深色。父流程实际仅查看 [1008×1548 六图联系图](build/ui-review/37134037707/black-gold-contact.jpg)：已启用搜索的首页、授权状态图库／更新按钮、开关 ON 的设置，各有深浅两张 **393×852 原生注入状态夹具**，不是私人 Photos 或真机证据。金色导航、深色金底黑字按钮和浅色小字深金可见；15 对对比度及原生 `IQStyle` 实际桥接 AA 检查通过，警告／destructive 角色保留，不声称所有相关文字都渲染为红色。
+
+**生产图标／启动资源与源码未改**；与 build 19 的字节比较中，浅色启动 PNG 相同，深色不同仅在右上测试水印背景 `[319,69,386,97]`，来自 `IQStyle.muted` 换色，不是生产图标变化，不能称所有启动截图字节相同。build 19 三项并行准备、全部就绪才进首页、计时语义、FP32／`.all`、20 worker、手动索引及模型／索引／地点缓存身份均保留，照片未作修改。详情见 [docs/BLACK_GOLD_THEME.md](docs/BLACK_GOLD_THEME.md)。
+
+是否现在安装由用户决定；使用**原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**。本轮仅换主题，不要求追加启动测速。安装见 [docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)。**以下 build 19 及更早记录全部为历史，当时的“当前／待验证”及测速／迁移要求不作为本轮操作要求。**
+
+## 历史交付（2026-10-03）：0.5.6 / build 19，并行准备，首轮 SUCCESS
 
 分词器、主图像模型、文本模型改为 **3 个并行准备分支，全部就绪后才进首页**，不把加载移到首次查询。纯图标启动、FP32／`.all`、模型与索引／地点缓存身份、手动索引和 20 个索引 worker 不变，无需重建索引。
 

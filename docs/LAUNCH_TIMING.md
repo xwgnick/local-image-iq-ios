@@ -1,5 +1,7 @@
 # 启动耗时：截图诊断
 
+> **当前交付为 0.5.7 / build 20（黑金主题，首轮 SUCCESS）**，完整结果见 [BUILD_STATUS.md](BUILD_STATUS.md)。build 20 继承 build 19 的三项并行准备、全部就绪门控及计时语义；本轮不要求追加启动测速，真机验收由用户选择安装后确认。以下 build 19／18 发布、测试、数值、截图及当时操作要求全部保留为历史，不是 build 20 的新测量或本轮必做步骤；计时契约仍适用。
+
 ## 当前交付（2026-10-03）：0.5.6 / build 19，首轮 SUCCESS；真机待验
 
 分词器、主图像模型、文本模型改为三个独立并行准备分支，全部成功后才汇总发布。[CI 37047342399](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37047342399)／[job 110971929351](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37047342399/job/110971929351)，实际构建源码 `382452945f80eda35174407890abf5b518e47994`，既有个人公开仓库完整 macos-15 手动流程 **attempt 1 SUCCESS**；`include_models`／`all_compute_units`／`build_device_ipa` 全为 `true`，CPU 参考及全部对齐门槛保留。

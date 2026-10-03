@@ -1,6 +1,47 @@
-# Cloud build status — 2026-10-03
+# Cloud build status — build 20
 
-## Current: 0.5.6 (build 19) — 首轮 SUCCESS；并行准备已交付，真机待验
+## Current: 0.5.7 (build 20) — 黑金主题首轮 SUCCESS；已交付，真机待验
+
+[Run 37134037707](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37134037707)／[job 111234786439](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37134037707/job/111234786439)，实际构建源码 **`a7d32dd66077b167f1df95e9186bc8722b2ad923`**。既有个人公开仓库标准 `macos-15` 完整手动流程，`include_models`／`all_compute_units`／`build_device_ipa` 全为 `true`；**attempt 1 SUCCESS，无 CI 改动、重试或门槛绕过**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。下列为父流程已核验结果，本次仅更新文档，不另执行构建。
+
+### build 20 验证账本
+
+|项目|实际结果|
+|---|---|
+|Swift 核心|79 全通过。|
+|App XCTest|532＝531 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败；187.990 秒，wall 192.724 秒；相比 build 19 新增 5 项。|
+|主题／展示|IQStyleTests 8／0.024 秒；PresentationTests 24／4.297 秒，全通过。15 对对比度检查通过，浅色最低 4.599:1、深色最低 6.291:1；原生 IQStyle 实际 SwiftUI → UIKit 桥接 AA 检查通过。|
+|真实模型对齐|GeneratedModelParityTests 8／114.016 秒，全通过；CPU 参考、真实共享初始化／缓存复用、20 actor 120 次预测／252 项测量及原 23／58 数值门槛全部保留。|
+|启动／并行 helper|StartupPresentationTests 9／1.092 秒；ParallelModelPreparationTests 7／0.019 秒，全通过；build 19 计时与并行覆盖保留。|
+|独立 UI|11 全通过／689.536 秒；导航 6／443.309 秒，键盘 5／246.227 秒。|
+|设备构建|BUILD SUCCEEDED；0.5.7 / 20、arm64 Release、未签名、最低 iOS 17、SDK 18.5、Xcode 16.4。|
+
+子套件已计入 App 532，不重复相加；UI 另计。测试耗时不是手机启动性能，也不扩大 build 19 对真实多等待者取消／重试交错的覆盖结论。
+
+### build 20 资产与实际核验
+
+- [Release ci-37134037707-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37134037707-1)，ID **402586668**，**2026-10-03T16:08:47Z** 发布；**9 项资产、prerelease、非 draft、非 Latest**。
+- IPA asset **608102465**，**1,418,554,047 字节**，SHA-256 **`161d8227129b744490ee40c709e780c6bf4dfc9a674ded89e01343f58f2c14d9`**；已实际完整流式下载并核验长度／哈希，**`ipaVerifiedLocally: true`**，不是只读远端声明。
+- [本地 IPA](../build/device-download/37134037707/LocalImageIQ-iphoneos-unsigned.ipa)、[设备报告](../build/device-download/37134037707/device-build.json)、[交付清单](../build/device-download/37134037707/delivery.json)、[校验文件](../build/device-download/37134037707/SHA256SUMS.txt)、[全量下载记录](../build/device-download/37134037707/release-fetch-055a1b45-0b9b-4ced-bf66-e1fbda52da44.json) 齐全，配套文件已核验。
+- **7-Zip 全量解压／CRC PASS**：11 文件夹、30 文件，解压后 **1,563,616,641 字节**；仅验证原始 IPA，不验证 Sideloadly 重签包或手机安装。
+- [UIReview.zip](../build/ui-review/37134037707/UIReview.zip)，asset **608102341**，**5,702,809 字节**，SHA-256 **`8fd877de895b775472787cbdaa2d2540800a70acd53ab8275c472e9e591fb38a`**，已下载核验。
+- IPA 小型元数据实际核验 **0.5.7 / 20、LaunchScreen**，地点 FNV 仍为 **`raycast-v1-93c9a925e35247f2`**。模型、索引及地点缓存身份未变。
+
+### build 20 有限视觉证据与启动差异
+
+父流程实际**仅查看 [1008×1548 六图联系图](../build/ui-review/37134037707/black-gold-contact.jpg)**：已启用搜索的首页、授权状态图库／更新按钮、开关 ON 的设置，每种深浅各一张，原图均 **393×852**。这是原生注入状态夹具，**不是实际私人 Photos／物理 iPhone 验收**；没有读取或修改私人照片，不声称其他图片已审核。可见金色导航、深色金底黑字按钮、浅色小字深金；普通界面仍自适应系统，原本固定深色的查看器／诊断页仍固定深色。
+
+警告色与系统 destructive 角色保留；**设置页既有 `foregroundStyle` 覆盖仍存在，不能声称所有警告／destructive 文字都渲染为红色**。精确配色与对比度边界见 [BLACK_GOLD_THEME.md](BLACK_GOLD_THEME.md)。
+
+生产 B02 图标、启动资源及启动页源码未改。另做程序化启动截图比较（不是追加人工审图）：浅色 PNG 与 build 19 **字节相同**；深色 PNG **不相同**，唯一像素差异边界为 **`[319,69,386,97]`**，仅右上测试水印背景使用的 `IQStyle.muted` 换色，**不是生产图标变化**。本地审核 helper 起初假设两图都相同而断言失败，随后仅修正本地审核假设；**没有生产源码修复、新构建或 CI 重试**。差异边界已保存在 [审核记录](../build/ui-review/37134037707/black-gold-review.json)，不得概括为“所有启动截图字节相同”。
+
+### build 20 安装与剩余边界
+
+保留 build 19 三项并行准备、全部就绪才进入首页与计时语义；FP32／`.all`、20 个索引 worker、手动索引、模型／索引／地点缓存身份不变，照片未作修改。**原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**。是否现在安装由用户选择；最新 App 仍待物理 iPhone 安装／外观与实际使用验收，原包校验不等于手机通过。**本轮主题改动不要求追加启动测速**，不作真机提速或峰值内存声明。
+
+安装见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)，继承的计时契约见 [LAUNCH_TIMING.md](LAUNCH_TIMING.md)。**以下 build 19 及更早版本的全部记录为历史；其“当前／本轮／待验证”及旧操作要求不代表 build 20。**
+
+## Previous delivery: 0.5.6 (build 19) — 首轮 SUCCESS；并行准备已交付，真机待验
 
 [Run 37047342399](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37047342399)／[job 110971929351](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37047342399/job/110971929351)，实际构建 SHA **`382452945f80eda35174407890abf5b518e47994`**。既有个人公开仓库标准 `macos-15` 完整手动流程，`include_models`／`all_compute_units`／`build_device_ipa` 全为 `true`，CPU 参考及全部对齐门槛保留，**attempt 1 SUCCESS，无重试或绕过**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。
 

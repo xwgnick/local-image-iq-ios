@@ -5,7 +5,20 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前（2026-10-03）：0.5.6（build 19）— 首轮 SUCCESS，可覆盖安装；真机待验
+## 当前：0.5.7（build 20）— 黑金主题首轮 SUCCESS，可选择覆盖安装
+
+**[本地已校验 IPA](../build/device-download/37134037707/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37134037707-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37134037707-1)（**402586668**）。IPA asset **608102465**，**1,418,554,047 字节**，SHA-256 **`161d8227129b744490ee40c709e780c6bf4dfc9a674ded89e01343f58f2c14d9`**；已完整流式下载并核验长度／哈希，7-Zip 全量 CRC PASS，`ipaVerifiedLocally: true`。[下载记录](../build/device-download/37134037707/release-fetch-055a1b45-0b9b-4ced-bf66-e1fbda52da44.json) 与配套报告已核验。本机无需重下；另一台电脑从 Release 下载后核对同一长度／哈希。
+
+[CI 37134037707](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37134037707)／[job 111234786439](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37134037707/job/111234786439)，源码 `a7d32dd66077b167f1df95e9186bc8722b2ad923`，沿用个人公开仓库完整 `macos-15` 手动流程，`include_models`／`all_compute_units`／`build_device_ipa` 均为 `true`，**attempt 1 SUCCESS，无 CI 改动或重试**。核心 **79**、App **532＝531 通过／1 既有 SQLite 跳过／0 失败**、UI **11 全通过**，CPU 参考及全部模型对齐保留。设备 **arm64 Release、未签名、iOS 17+、SDK 18.5／Xcode 16.4**；9 项资产于 **2026-10-03T16:08:47Z** 发布，prerelease、非 draft／Latest。完整账本见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+1. **是否现在安装由用户选择。**安装时仍用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**；沿用下方第 1–5 节签名步骤，不照做历史迁移／清库步骤。
+2. 正常使用即可；普通页面跟随系统深浅色，原本固定深色的查看器／诊断页仍固定深色。需要时可在深浅主题下查看首页、图库和设置，**本轮仅换主题，不要求启动测速、反复重启或追加诊断截图**。
+
+父流程实际仅查看 [1008×1548 六图联系图](../build/ui-review/37134037707/black-gold-contact.jpg)：深浅色首页已启用搜索、授权状态图库／更新按钮、设置开关 ON，均为 **393×852 原生注入状态夹具**，不是私人 Photos 或真机。**build 20 手机安装／外观与实际使用仍待验收**；公开下载、原生通过与原包 CRC 不等于重签包或物理 iPhone 已通过。
+
+生产图标／启动资源与源码未改；浅色启动 PNG 与 build 19 字节相同，深色仅右上测试水印背景 `[319,69,386,97]` 随 `IQStyle.muted` 换色，不是生产图标变化。build 19 并行准备／全部就绪门控及计时、FP32／`.all`、20 worker、手动索引、模型／索引／地点缓存身份均保留，照片未作修改。主题与审核边界见 [BLACK_GOLD_THEME.md](BLACK_GOLD_THEME.md)。**以下 build 19 及更早段落全部为历史，旧测速要求不是本轮安装前提。**
+
+## 历史（2026-10-03）：0.5.6（build 19）— 首轮 SUCCESS，可覆盖安装；真机待验
 
 **[本地已校验 IPA](../build/device-download/37047342399/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37047342399-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37047342399-1)（402078025）。原始 IPA **1,418,554,098 字节**，SHA-256 `adbefa8524b5521c1a00b58419b9f277bd2278f968f8ca98cc639fff7afecc38`；完整流式下载、实际哈希及 7-Zip 26.03 全量 CRC 通过，`ipaVerifiedLocally: true`。[下载记录](../build/device-download/37047342399/release-fetch-99209550-b1dd-46a4-8588-0a49dfef19f8.json) 与配套报告齐全。本机无需重下；另一台电脑从 Release 下载，核对同一长度／哈希。
 
