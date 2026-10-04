@@ -252,7 +252,8 @@ struct ContentView: View {
                 isSearchFocused = false
                 state.selection = AppState.Selection(id: id)
             }) { photo in
-                PhotoThumbnailView(photo: photo, cache: state.thumbnails, networkAllowed: state.allowICloudDownload)
+                PhotoThumbnailView(photo: photo, cache: state.thumbnails, networkAllowed: state.allowICloudDownload,
+                                   showDiagnostics: state.debugToolsEnabled)
             }
         } else if state.completedQuery != nil {
             emptyCard(symbol: "magnifyingglass", title: "暂时没有可显示的照片",

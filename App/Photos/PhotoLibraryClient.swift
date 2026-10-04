@@ -253,6 +253,10 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
     /// Result tiles use current asset pixels independently of the stored embedding
     /// revision. This display-only path never updates or rebuilds the index.
     func thumbnailImage(id: String, targetSize: CGSize, networkAllowed: Bool = false) async throws -> UIImage {
+        try await thumbnailResult(id: id, targetSize: targetSize, networkAllowed: networkAllowed).image
+    }
+
+    func thumbnailResult(id: String, targetSize: CGSize, networkAllowed: Bool = false) async throws -> DisplayThumbnailResult {
         try Task.checkCancellation()
         guard Self.canRead else { throw AppFailure.permission }
         let authorization = Self.authorization
@@ -265,8 +269,12 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
         }
         let revision = PhotoRevision(asset: selectedAsset)
         try validateThumbnail(id: id, revision: revision, authorization: authorization, generation: generation)
-        let image = try await DisplayThumbnailLoader.load(
-            targetSize: pixels, networkAllowed: networkAllowed,
+        // Use the exact target calculation and options of the existing HQ224
+        // comparison, not the grid's cropped aspect ratio or exact resize mode.
+        let quality224 = LocalPreviewComparisonLoader.targetSize(
+            width: selectedAsset.pixelWidth, height: selectedAsset.pixelHeight, shortEdge: 224)
+        let result = try await DisplayThumbnailLoader.loadResult(
+            targetSize: pixels, quality224Target: quality224, networkAllowed: networkAllowed,
             request: { [self, manager] targetSize, contentMode, options, callback in
                 // Recheck between fallback stages as well as across the await.
                 do {
@@ -280,7 +288,7 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
                                             options: options, resultHandler: callback)
             }, cancel: { [manager] in manager.cancelImageRequest($0) })
         try validateThumbnail(id: id, revision: revision, authorization: authorization, generation: generation)
-        return image
+        return result
     }
 
     private func validateThumbnail(id: String, revision: PhotoRevision, authorization: PHAuthorizationStatus,

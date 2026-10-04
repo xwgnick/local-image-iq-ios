@@ -9,6 +9,7 @@ struct PhotoThumbnailView: View {
     let photo: IndexedPhoto
     let cache: PhotoThumbnailCache
     let networkAllowed: Bool
+    var showDiagnostics = false
     @Environment(\.displayScale) private var displayScale
 
     private struct Request: Hashable {
@@ -24,6 +25,7 @@ struct PhotoThumbnailView: View {
     @State private var resolvedRequest: Request?
     @State private var image: UIImage?
     @State private var issue: PhotoPreviewIssue?
+    @State private var diagnostic: CachedThumbnail?
 
     var body: some View {
         // The grid owns the aspect ratio. Constrain scaledToFill to the actual
@@ -56,21 +58,28 @@ struct PhotoThumbnailView: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
+            .overlay(alignment: .bottomLeading) {
+                if showDiagnostics, resolvedRequest == requested, let diagnostic {
+                    ThumbnailDiagnosticOverlay(thumbnail: diagnostic)
+                }
+            }
             .task(id: requested) {
                 guard !Task.isCancelled else { return }
                 image = nil
                 issue = nil
+                diagnostic = nil
                 resolvedRequest = requested
                 // A zero/invalid initial layout remains a placeholder, not a
                 // default-size request that could later mask the real tile.
                 guard let requested else { return }
                 do {
-                    let loaded = try await cache.image(id: requested.id, revision: requested.revision,
+                    let loaded = try await cache.thumbnail(id: requested.id, revision: requested.revision,
                                                        targetSize: requested.targetSize,
                                                        networkAllowed: requested.networkAllowed)
                     try Task.checkCancellation()
                     guard resolvedRequest == requested else { return }
-                    image = loaded
+                    image = loaded.result.image
+                    diagnostic = loaded
                 } catch {
                     guard !Task.isCancelled, !(error is CancellationError), resolvedRequest == requested else { return }
                     issue = PhotoPreviewIssue(error: error)

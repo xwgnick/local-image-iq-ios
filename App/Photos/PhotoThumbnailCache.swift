@@ -8,6 +8,19 @@ protocol PhotoThumbnailProviding: Sendable {
     var changeGeneration: UInt64? { get }
     func currentRevision(id: String) -> PhotoRevision?
     func thumbnailImage(id: String, targetSize: CGSize, networkAllowed: Bool) async throws -> UIImage
+    func thumbnailResult(id: String, targetSize: CGSize, networkAllowed: Bool) async throws -> DisplayThumbnailResult
+}
+
+extension PhotoThumbnailProviding {
+    func thumbnailResult(id: String, targetSize: CGSize, networkAllowed: Bool) async throws -> DisplayThumbnailResult {
+        let image = try await thumbnailImage(id: id, targetSize: targetSize, networkAllowed: networkAllowed)
+        return .unverified(image: image, targetSize: targetSize)
+    }
+}
+
+struct CachedThumbnail: Sendable {
+    let result: DisplayThumbnailResult
+    let cacheHit: Bool
 }
 
 @MainActor
@@ -33,7 +46,11 @@ final class PhotoThumbnailCache {
         }
     }
 
-    private let cache = NSCache<Key, UIImage>()
+    private final class Entry {
+        let result: DisplayThumbnailResult
+        init(_ result: DisplayThumbnailResult) { self.result = result }
+    }
+    private let cache = NSCache<Key, Entry>()
     private var generation = UUID()
     private let library: any PhotoThumbnailProviding
 
@@ -46,6 +63,12 @@ final class PhotoThumbnailCache {
 
     func image(id: String, revision: Double, targetSize: CGSize = CGSize(width: 480, height: 480),
                networkAllowed: Bool) async throws -> UIImage {
+        try await thumbnail(id: id, revision: revision, targetSize: targetSize,
+                    networkAllowed: networkAllowed).result.image
+        }
+
+        func thumbnail(id: String, revision: Double, targetSize: CGSize,
+               networkAllowed: Bool) async throws -> CachedThumbnail {
         try Task.checkCancellation()
         guard let pixels = DisplayThumbnailLoader.targetSize(points: targetSize, displayScale: 1) else {
             throw AppFailure.photo("Invalid thumbnail size.")
@@ -65,11 +88,16 @@ final class PhotoThumbnailCache {
                                networkAllowed: networkAllowed, libraryGeneration: libraryGeneration))
         let cached = cache.object(forKey: key)
         try validate(id: id, revision: current, libraryGeneration: libraryGeneration, token: token)
-        if let cached { return cached }
-        let image = try await library.thumbnailImage(id: id, targetSize: pixels, networkAllowed: networkAllowed)
+        if let cached { return CachedThumbnail(result: cached.result, cacheHit: true) }
+        let result = try await library.thumbnailResult(id: id, targetSize: pixels, networkAllowed: networkAllowed)
         try validate(id: id, revision: current, libraryGeneration: libraryGeneration, token: token)
-        cache.setObject(image, forKey: key, cost: Self.decodedCost(image))
-        return image
+        // Display usable lower-resolution pixels, but do not cache them as if a
+        // complete HQ target was satisfied. A later view request may upgrade them.
+        // There is no background retry/polling or implicit network opt-in.
+        if result.isReusable {
+            cache.setObject(Entry(result), forKey: key, cost: Self.decodedCost(result.image))
+        }
+        return CachedThumbnail(result: result, cacheHit: false)
     }
 
     private func validate(id: String, revision: PhotoRevision, libraryGeneration: UInt64?, token: UUID) throws {
