@@ -1,5 +1,7 @@
 # 启动真实步骤进度
 
+> **当前交付补注（2026-10-04）：0.5.9 / build 22 已在第三次整体验证成功并完成发布／本地 IPA 校验；新 run attempt 1 不等于首轮成功。build 22 原样继承本页九步启动条，无启动逻辑、品牌或资源变更。新版上下文首次启动可能按既有规则显示条，不要求卸载、清索引或重建。当前结果见 [BUILD_STATUS.md](BUILD_STATUS.md)，本轮功能见 [HQ_RESULT_PAGING.md](HQ_RESULT_PAGING.md)。以下 build 21 的实现与验证历史保持不变，不作为 build 22 新增启动测试或真机证据。**
+
 状态：2026-10-04，**0.5.8 / build 21 已完成原生验证、设备构建、发布与本地 IPA 校验，真机验收待确认**。[CI 37198392990](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37198392990)／[job 111424868574](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37198392990/job/111424868574)，构建源码 `687d410d15ab15c5d1ec5da33e448138f76ac1cf`；新 run 为 attempt 1，但这是**第二次整体验证 SUCCESS，不是首轮成功**。
 
 首轮 `37197915357` 因展示测试写入只读 `accessibilityReduceMotion` 的 key path 而编译失败；只修正一处测试，改用支持的父级 transaction／animation 输入，**不是真实系统 Reduce Motion 开关测试**。两次间生产 App 源码未改、无 CI 门槛绕过。完整失败账本、测试和 [Release](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37198392990-1)／IPA 身份见 [BUILD_STATUS.md](BUILD_STATUS.md)，本次文档收尾不另执行构建。

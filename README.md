@@ -2,7 +2,19 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 当前交付：0.5.8 / build 21，真实步骤进度，第二次整体验证 SUCCESS
+## 当前交付：0.5.9 / build 22，结果网格 HQ 与显示分页，第三次整体验证 SUCCESS
+
+**原生验证、设备构建、发布及本地 IPA 校验完成；真机验收待确认。**[CI 37208795156](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156)／[job 111455534540](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156/job/111455534540)，最终构建源码 `2c05008a74f3ec4df170de1b2fc1fb79a0bcec84`。**新 run attempt 1，但本功能第三次整体验证，不是首轮成功**：首次测试编译失败，第二次发现诊断取消误清图库分页，第三次修正生产取消作用域并加强既有断言；没有删除测试、放宽容差／超时或绕过门槛。核心 **79**、App **662＝661 通过／1 既有 SQLite 跳过／0 失败**、UI **11 全通过**。完整失败历史及子套件见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+
+**[本地已校验 IPA](build/device-download/37208795156/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37208795156-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37208795156-1)。原包 **1,418,628,098 字节**，SHA-256 `6244de326a29fe3daf22146dc4591f4d061a5565a21d051149e4a7f698dd9f28`，完整流式哈希及 7-Zip 26.03 全量 CRC PASS；**arm64 Release、未签名、iOS 17+、SDK 18.5／Xcode 16.4**。9 项资产于 **2026-10-04T14:50:02Z** 发布，prerelease、非 draft／Latest。
+
+- 默认先显示 **12 张**，滚动到可见底部继续追加；设置“**每批显示**”可选 **3／12**，不再限制总结果数。查询按需翻译、编码及全局排序各一次，后续只公开同一排序的前缀；**仍用 `Int.max` 保留全部候选 ID／向量在 RAM，不是有界内存分页、服务端分页或数据库游标**。排序不读取照片像素，逐页只检查新公开 ID 的 revision，并复核授权／generation。
+- 结果网格按实际尺寸 × 屏幕 scale 请求本地 HQ，默认网络关闭，资源缺失才回退 Fast；明确开启网络时为本地 HQ → 联网 HQ → 本地 Fast。普通错误不回退，不请求原图；Photos 仍可能返回可读小图，**不保证所有照片变清晰**。全屏旧 Fast 加载路径未改，不能称全屏 HQ 升级。完整契约见 [docs/HQ_RESULT_PAGING.md](docs/HQ_RESULT_PAGING.md)。
+- 父流程实际**只查看 [1010×758 三图联系图](build/ui-review/37208795156/result-paging-contact.jpg)**：追加到 24 项后的滚动视口及深浅两张黑金设置，原图均 393×852、测试夹具。首图是无访问权限占位符；底部“已索引 37 张”不是已显示 24 张计数，24 项来自测试状态断言，截图视口无 24 计数器。这不是 Photos HQ 清晰度或真机手势证据；手机本地 HQ 覆盖、延迟及 RSS 均未测。
+
+**原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**，已有有效索引直接沿用。索引 HQ224、20 worker、手动索引、模型 FP32／`.all`、schema／缓存身份、品牌与九步启动条逻辑不变；新版上下文首次启动可能显示条，见 [docs/STARTUP_STEP_PROGRESS.md](docs/STARTUP_STEP_PROGRESS.md)。安装见 [docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)。**以下 build 21 及更早记录均为历史，旧包与当时操作要求不代表 build 22。**
+
+## 历史交付：0.5.8 / build 21，真实步骤进度，第二次整体验证 SUCCESS
 
 **原生验证、设备构建、发布及本地 IPA 校验完成；真机验收待确认。**[CI 37198392990](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37198392990)，构建源码 `687d410d15ab15c5d1ec5da33e448138f76ac1cf`。这是新 run 的 **attempt 1，但本功能第二次整体验证**，不是首轮成功：首轮测试编译失败后仅修正一处展示测试，两次运行间生产 App 源码未改，未绕过 CI 门槛。完整个人公开仓库 `macos-15` 流程、模型／全部计算单元／设备 IPA 均开启；核心 **79**、App **592＝591 通过／1 既有 SQLite 跳过／0 失败**、UI **11 全通过**。失败账本及子套件集中见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
 

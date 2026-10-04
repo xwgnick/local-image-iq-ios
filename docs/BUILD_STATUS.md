@@ -1,6 +1,70 @@
-# Cloud build status — build 21
+# Cloud build status — build 22
 
-## Current: 0.5.8 (build 21) — 第二次整体验证 SUCCESS；已交付，真机待验
+## Current: 0.5.9 (build 22) — 第三次整体验证 SUCCESS；已交付，真机待验
+
+[Run 37208795156](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156)／[job 111455534540](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156/job/111455534540)，实际最终构建源码 **`2c05008a74f3ec4df170de1b2fc1fb79a0bcec84`**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。新 run 的 **attempt 1 是本功能第三次整体验证**，不能写成首轮成功。下列记录依据父流程已完成的验证与交付；本次仅更新指定文档，不执行命令、CI、Git 或网络操作。
+
+### build 22 三次验证账本
+
+|整体验证|run／job／完整源码 SHA|实际结果与修正|
+|---|---|---|
+|第一次|[37206371854／111448298055](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37206371854/job/111448298055)；`a54648dcb5d1edf30ac0dedd2ba246adbaa33dfa`|FAILED：`DisplayThumbnailLoaderTests` 中嵌套 `[[Reply]]` 类型推断导致测试编译失败；随后修正测试类型表达。|
+|第二次|[37206758430／111449431771](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37206758430/job/111449431771)；`9a49844e968810aa43a558fef6333878b840bb4a`|FAILED：两项既有 `PhotoCheckPresentationTests` 出现多条断言失败；生产 `AppState.cancel()` 在取消无关诊断时误清底层图库分页，不是测试容差问题。|
+|第三次|[37208795156／111455534540](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156/job/111455534540)；`2c05008a74f3ec4df170de1b2fc1fb79a0bcec84`|SUCCESS：生产取消逻辑只在 idle／search 情况清除分页，无关诊断／翻译取消保留图库；加强既有测试，快照包含分页 session 与候选总数。|
+
+第三次包含**生产修复**，不能沿用 build 21“两轮间生产不变”的描述。两项旧测试保留并修复回归，既有图库查询／结果／选择断言继续保留，同时核验分页 session／候选数量；**没有删除测试、放宽数值容差、延长超时或绕过原有门槛**。相关文件：[../Tests/DisplayThumbnailLoaderTests.swift](../Tests/DisplayThumbnailLoaderTests.swift)、[../Tests/PhotoCheckPresentationTests.swift](../Tests/PhotoCheckPresentationTests.swift)、[../App/State/AppState.swift](../App/State/AppState.swift)。
+
+### build 22 实际验证结果
+
+|项目|实际结果／范围|
+|---|---|
+|Swift 核心|79 全通过。|
+|App XCTest|662＝661 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败；237.412 秒，wall 244.696 秒；比 build 21 新增 70 项。|
+|`DisplayThumbnailLoaderTests`|33 全通过／2.250 秒；尺寸、HQ／Fast 路径、错误／缺失、回调与取消契约。|
+|`PhotoThumbnailCacheTests`|15 全通过／0.035 秒；双 revision、尺寸／网络／generation 与迟到请求失效。|
+|`ResultPaginationTests`|18 全通过／0.571 秒；稳定前缀、分页校验、会话失效与一次查询处理。|
+|`ResultPaginationPresentationTests`|3 全通过／0.705 秒；真实 `ContentView`／`UIScrollView`，37 个合成候选按 12→24→36→37 追加，初始离屏边界不追加，并覆盖小横向视口。不是 XCUI 物理手势或 Photos HQ 质量测试。|
+|`PhotoIndexWorkerTests`|30 全通过／1.277 秒；包含 1 项新增的真实 worker 25 结果分页校验，核验数据库未改变与零照片像素请求。|
+|`PhotoCheckPresentationTests`|20 全通过／1.434 秒；包含第二次失败的两项既有测试，以及加强后的分页 session／候选数量保留断言。|
+|`GeneratedModelParityTests`|8 全通过／150.700 秒；CPU、`.all`、真实 20 actor 及既有数值门槛保留；20 actor 120 次预测／252 项测量和原 23／58 门槛未改。|
+|独立 UI|11 全通过／757.953 秒；导航 6／525.587 秒、键盘 5／232.366 秒。实际将“每批显示”从 12 改到 3 并核验保留；无真实 Photos 授权，不据此宣称真实图库分页／HQ E2E。|
+|设备构建|BUILD SUCCEEDED；0.5.9 / 22、arm64 Release、未签名、最低 iOS 17、SDK 18.5、Xcode 16.4。|
+
+新增 **33＋15＋18＋3＋1＝70** 项已包含在 App 662 内；worker 30 和照片诊断展示 20 是各套件总数，不能再作为新增相加；UI 另计。原有真实模型、App、UI 门槛未以模拟测试替代；上述耗时不是手机搜索／HQ 请求延迟。
+
+### build 22 资产与本地核验
+
+|资产／核验|实际身份与结果|
+|---|---|
+|公开 Release|[ci-37208795156-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37208795156-1)，ID **403064885**；**2026-10-04T14:50:02Z** 发布；9 项资产，prerelease、非 draft、非 Latest。|
+|原始 IPA|asset **610020605**；**1,418,628,098 字节**；SHA-256 **`6244de326a29fe3daf22146dc4591f4d061a5565a21d051149e4a7f698dd9f28`**。已完整流式下载并核验实际长度／哈希，`ipaVerifiedLocally: true`，不是仅核对远端声明。|
+|归档完整性|**7-Zip 26.03 全量解压／CRC PASS**；11 文件夹、30 文件，解压后 **1,563,942,417 字节**。不验证 Sideloadly 重签包或手机安装。|
+|UI ZIP|[../build/ui-review/37208795156/UIReview.zip](../build/ui-review/37208795156/UIReview.zip)，asset **610020492**；**5,851,186 字节**；SHA-256 **`46edd9ef2232bfd4b087c739903d5d6e0086922c2b1743cee18b5019c0544318`**，已下载核验。|
+|小型 IPA 元数据|实际核验 **0.5.9 / 22、LaunchScreen** 及原地点 FNV **`raycast-v1-93c9a925e35247f2`**；模型、schema、索引／地点缓存身份不变。|
+
+本地交付文件：[IPA](../build/device-download/37208795156/LocalImageIQ-iphoneos-unsigned.ipa)、[设备报告](../build/device-download/37208795156/device-build.json)、[交付清单](../build/device-download/37208795156/delivery.json)、[校验文件](../build/device-download/37208795156/SHA256SUMS.txt)、[完整下载记录](../build/device-download/37208795156/release-fetch-95efc8a3-b875-4ebc-a17d-70005eb0295d.json)。
+
+### build 22 仅三张原生夹具的视觉证据
+
+父流程实际**仅查看 [1010×758 三图联系图](../build/ui-review/37208795156/result-paging-contact.jpg)**，三个原图各 **393×852**，范围见 [审核记录](../build/ui-review/37208795156/result-paging-review.json)：
+
+1. 真实 `ContentView` 追加至 **24 项后的滚动视口**，合成候选经未授权缩略图路径显示无访问权限占位符，有 TEST 水印。**24 是测试状态断言，不是截图视口内的计数器**；底部“已索引 37 张”属于保存的索引统计，不能当成已显示 24 张的视觉证据，更不能说截图同时看见 24 张照片。
+2. 黑金深色设置，“每批显示”选中 **12**。
+3. 黑金浅色设置，“每批显示”选中 **12**。
+
+没有查看或授权真实 Photos；没有其他图片审核、HQ 清晰度、物理手势／旋转或手机性能结论。3 项原生滚动展示测试、11 项 XCUI 回归、三图人工复核是不同证据，不互相替代。
+
+### build 22 行为、兼容性与未测项
+
+- 默认每批 **12**，可选 **3**；一次查询解析／按需翻译／编码，worker 以 `Int.max` 做一次完整全局排序。**全部候选 ID、图像及地点向量仍在 RAM**，不是有界内存分页、服务端分页或数据库游标；排名无照片像素请求。保留 worker 三次全局授权快照，首屏只验证前 12 项 revision，续页只验证新公开项，同时复核授权／generation。
+- 仅可见底部边界触发追加；忙碌时拒绝追加，恢复 idle 后重新检查已记录的可见边界，仍受 session／已显示数量守卫。取消无关诊断保留分页，查询／设置／图库等真正失效仍清空会话。详见 [HQ_RESULT_PAGING.md](HQ_RESULT_PAGING.md)。
+- 结果 tile 请求实际几何 × scale 向上取整像素，例如 393 pt、双列、3× 为 **521×651 px**；`.current`／`.aspectFill`／HQ `.exact`。默认离线 HQ → 缺失才 Fast；明确联网为本地 HQ → 缺失才联网 HQ → 缺失才 Fast；普通错误不回退，不请求原图。缓存包括当前与已存 revision、尺寸、网络、generation；旧索引向量仍可匹配当前显示像素。Photos 可返回可读低分辨率，不保证清晰度；全屏旧 Fast helper 未改。
+- 索引 HQ224、20 worker、手动索引、模型 FP32／`.all`、schema／缓存身份、品牌及九步启动条逻辑不变；新版上下文首次启动可能按既有规则显示条。**原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**，已有有效索引复用。见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)、[STARTUP_STEP_PROGRESS.md](STARTUP_STEP_PROGRESS.md)。
+- **PENDING-DEVICE**：手机安装、实际 HQ 清晰度／本地覆盖率、首屏／后续加载延迟、滚动体验及峰值／稳态 RSS 未测。显示分页不证明全库检索更快或内存有界，也不改写旧全屏／启动的真机证据缺口。
+
+以下 build 21 及更早账本保留为历史，原有失败与成功记录不改写。
+
+## Previous delivery: 0.5.8 (build 21) — 第二次整体验证 SUCCESS；已交付，真机待验
 
 [Run 37198392990](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37198392990)／[job 111424868574](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37198392990/job/111424868574)，实际构建源码 **`687d410d15ab15c5d1ec5da33e448138f76ac1cf`**。个人公开仓库标准 `macos-15` 完整手动流程，`include_models`／`all_compute_units`／`build_device_ipa` 均为 `true`。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。以下记录已完成的验证与交付，本次文档更新不另运行测试、构建或发布。
 

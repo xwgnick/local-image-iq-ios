@@ -5,7 +5,21 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.5.8（build 21）— 真实步骤进度已交付，可覆盖安装
+## 当前：0.5.9（build 22）— 结果网格 HQ／显示分页已交付，可覆盖安装
+
+**[本地已校验 IPA](../build/device-download/37208795156/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37208795156-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37208795156-1)。原包 **1,418,628,098 字节**，SHA-256 **`6244de326a29fe3daf22146dc4591f4d061a5565a21d051149e4a7f698dd9f28`**；完整流式哈希及 7-Zip 26.03 全量 CRC PASS，本机无需重下。另一台电脑从该公开 Release 下载并核对同一长度／哈希；9 项资产于 **2026-10-04T14:50:02Z** 发布，prerelease、非 draft／Latest。
+
+[CI 37208795156](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156)／[job 111455534540](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156/job/111455534540)，最终源码 `2c05008a74f3ec4df170de1b2fc1fb79a0bcec84`：**新 run attempt 1，本功能第三次整体验证 SUCCESS，不是首轮成功**。首次测试编译失败，第二次暴露诊断取消误清图库分页，第三次生产修复并加强既有测试；未删除测试、放宽容差／超时或绕过门槛。核心 **79**、App **662（661 通过／1 既有 SQLite 跳过／0 失败）**、UI **11 全通过**；设备 **arm64 Release、未签名、iOS 17+、SDK 18.5／Xcode 16.4**。完整账本见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+1. 用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**。沿用下方第 1–5 节签名步骤；已有有效索引直接复用，不执行历史迁移／清库操作。
+2. 正常搜索，默认先显示 **12 张**，滑到当前底部继续追加；设置“**每批显示**”可选 **3／12**，改变后下次显式搜索生效，不是总结果数限制。取消无关照片诊断不再清掉底层图库分页。
+3. 照片网络默认仍关闭：结果网格先请求本地 HQ，资源缺失才回退 Fast；**不要求打开 iCloud 下载、不请求原图、不保证所有照片更清晰**。全屏旧加载路径未升级。模型、HQ224 索引、20 worker、手动索引与 schema／缓存身份不变。
+
+品牌及九步启动条逻辑沿用 build 21；新版上下文首次打开可能按旧规则显示细条，不是新增加载步骤或必须重建索引，见 [STARTUP_STEP_PROGRESS.md](STARTUP_STEP_PROGRESS.md)。无需反复重启或额外测速。
+
+**build 22 手机安装、HQ 本地覆盖／清晰度、延迟与 RSS 仍待真机验收。**父流程只看过 [三张原生夹具联系图](../build/ui-review/37208795156/result-paging-contact.jpg)：滚动后的占位符网格及深浅设置“每批显示 12”。追加 24 项来自测试断言，首图底部 37 是已存索引数，视口无 24 计数器；无真实 Photos 授权，不是 HQ 视觉证据。**显示分页仍将全部候选向量／ID 留在 RAM，不是有界内存或数据库分页**；详情见 [HQ_RESULT_PAGING.md](HQ_RESULT_PAGING.md)。以下 build 21 及更早段落仅保留历史，不替代当前包或操作要求。
+
+## 历史：0.5.8（build 21）— 真实步骤进度已交付，可覆盖安装
 
 **[本地已校验 IPA](../build/device-download/37198392990/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37198392990-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37198392990-1)。原包 **1,418,591,485 字节**，SHA-256 **`fd2d7053183dafb4d4e2d254a8be3b7a61f0a7ff6614f29d7301db8c07a3f6eb`**；已完整流式下载／哈希及 7-Zip 26.03 全量 CRC 校验，本机无需重下。另一台电脑从该 Release 下载并核对同一长度／哈希。
 

@@ -1,6 +1,6 @@
 # 高质量结果缩略图与滚动分页
 
-**2026-10-04｜0.5.9 / build 22：代码已实现，待 CI 验证，未宣称通过或交付。** 版本见 [项目配置](../project.yml#L19-L20)。最新已验证交付仍为 **0.5.8 / build 21**；本次只新增本文，不更新 [../README.md](../README.md) 或既有交付账本，不执行终端、CI、Git 或网络操作。
+**2026-10-04｜0.5.9 / build 22：第三次整体验证 SUCCESS，原生测试、设备构建、发布及本地 IPA 校验完成；真机仍待验收。**[CI 37208795156](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156)／[job 111455534540](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156/job/111455534540)，最终源码 **`2c05008a74f3ec4df170de1b2fc1fb79a0bcec84`**；这是新 run 的 **attempt 1，不是本功能首轮成功**。版本见 [项目配置](../project.yml)，完整历史见 [BUILD_STATUS.md](BUILD_STATUS.md)。本文记录父流程已经完成的证据；本次只更新指定文档，不执行命令、CI、Git 或网络操作。
 
 ## 1. 用户行为
 
@@ -27,7 +27,7 @@
 
 本路径不调用原始数据接口，也不请求 `PHImageManagerMaximumSize`。但开启网络不等于能保证 Photos 只下载目标大小的缩略图字节；系统底层取用何种资源不由该尺寸参数保证。
 
-源码：[../App/Photos/DisplayThumbnailLoader.swift](../App/Photos/DisplayThumbnailLoader.swift)、[../App/UI/PhotoViews.swift](../App/UI/PhotoViews.swift)、[缩略图客户端入口与校验](../App/Photos/PhotoLibraryClient.swift#L253-L296)。
+源码：[../App/Photos/DisplayThumbnailLoader.swift](../App/Photos/DisplayThumbnailLoader.swift)、[../App/UI/PhotoViews.swift](../App/UI/PhotoViews.swift)、[../App/Photos/PhotoLibraryClient.swift](../App/Photos/PhotoLibraryClient.swift)。
 
 ## 3. 缓存与明确不变的路径
 
@@ -38,44 +38,81 @@
 - **全屏旧 `displayImage` 未改变**：仍是离线 Fast／联网 HQ、`.aspectFit` 与 `.fast` resize；全屏当前页仍请求 `PHImageManagerMaximumSize`。不要把本轮网格 HQ 改善描述为全屏也已升级。
 - **旧索引 HQ224 输入策略、模型及缓存身份未改变**；显示 HQ 不是索引 HQ224 的替代。本轮不要求清索引或重建，手动索引策略仍保留。
 
-源码：[../App/Photos/PhotoThumbnailCache.swift](../App/Photos/PhotoThumbnailCache.swift)、[旧全屏加载入口](../App/Photos/PhotoLibraryClient.swift#L298-L338)、[../App/UI/PhotoGallery.swift](../App/UI/PhotoGallery.swift)、[../App/Photos/IndexingImage.swift](../App/Photos/IndexingImage.swift)。
+源码：[../App/Photos/PhotoThumbnailCache.swift](../App/Photos/PhotoThumbnailCache.swift)、[../App/Photos/PhotoLibraryClient.swift](../App/Photos/PhotoLibraryClient.swift)、[../App/UI/PhotoGallery.swift](../App/UI/PhotoGallery.swift)、[../App/Photos/IndexingImage.swift](../App/Photos/IndexingImage.swift)。
 
 ## 4. 全局排一次，按需显示，不是数据库分页
 
 `AppState.search()` 只解析／按需翻译查询一次，只调用一次 worker，传入 **`limit: Int.max`**。worker 对当前可访问且索引身份有效的完整候选集编码查询、计算全局地点中心与精确分数，再统一排序一次；沿用既有分数公式和 UTF-8 asset ID 同分排序，没有按页重新去均值、重新打分、截断或增加筛选阈值。
 
-`ResultPages.response` 持有**完整 `[SearchHit]`**，其中 `IndexedPhoto` 仍携带图像向量和可能存在的地点向量；`results` 只是逐渐增长的可见前缀。**这是显示分页，不是有界内存分页，也不是数据库游标／分批读取。** 排序和页校验不请求照片像素；tile 按 SwiftUI 布局需求加载，不全图库预加载像素。懒布局可能预创建邻近 tile，不承诺只有屏幕内 tile 才会发图像请求。
+`ResultPages.response` 持有**完整 `[SearchHit]`**，其中 `IndexedPhoto` 仍携带图像向量和可能存在的地点向量；全部候选 ID／向量仍保留在 RAM，`results` 只是逐渐增长的可见前缀。**这是显示分页，不是有界内存分页，也不是服务端分页、数据库游标／分批读取。** 排序和页校验不请求照片像素；tile 按 SwiftUI 布局需求加载，不全图库预加载像素。懒布局可能预创建邻近 tile，不承诺只有屏幕内 tile 才会发图像请求。
 
 分页由列表末尾 1 pt 的 `ResultPageBoundary` 发送命名滚动坐标系下的几何 preference；仅当 `minY < viewportHeight && maxY > 0`，即边界与可见视口相交时请求下一批，**不是 LazyVGrid cell 的 `onAppear`**。事件携带会话 UUID 与当时已显示数量；`loadMoreResults` 核对前台、非忙碌、同会话、数量精确匹配及尚有余项，拒绝重复、旧会话和错误边界事件。全部显示后移除边界。
 
-源码：[搜索与追加](../App/State/AppState.swift#L344-L380)、[../App/UI/ResultPageBoundary.swift](../App/UI/ResultPageBoundary.swift)、[滚动视口与查询定位](../App/UI/ContentView.swift#L14-L47)、[可见边界判断](../App/UI/ContentView.swift#L288-L291)、[../Packages/ImageIQCore/Sources/ImageIQCore/VectorSearch.swift](../Packages/ImageIQCore/Sources/ImageIQCore/VectorSearch.swift)。
+`ContentView` 保存最近的边界几何；忙碌期间拒绝追加，**`isBusy` 从忙碌变回 idle 时重新检查该边界是否仍与视口相交**，再调用同一分页入口，仍受前台、session／已显示数量守卫。这样初次结果发布或无关诊断结束后，即使几何 preference 没有再次变化，也不会漏掉可见边界；不靠离屏 `onAppear`、定时器或重新查询补页。
+
+源码：[../App/State/AppState.swift](../App/State/AppState.swift)、[../App/UI/ResultPageBoundary.swift](../App/UI/ResultPageBoundary.swift)、[../App/UI/ContentView.swift](../App/UI/ContentView.swift)、[../Packages/ImageIQCore/Sources/ImageIQCore/VectorSearch.swift](../Packages/ImageIQCore/Sources/ImageIQCore/VectorSearch.swift)。
 
 ## 5. 发布前校验与会话失效
 
 1. **初次 worker：**捕获授权状态和图库 generation，完整枚举当前授权照片；在解码向量、地点去均值及打分前过滤不可访问 ID。保留打分前、打分后两次完整快照复核，加上最初快照，共三次完整枚举。搜索只读，不删除或重写旧索引。
 2. **首屏与续页：**跨 actor 后在 MainActor 同步调用 `SearchResponse.validatePageAccess`；全局检查授权状态与图库 generation，但 revision 查询只针对**本次将公开的 ID**。首屏验证前 12 个，后续只验证新增 12 个／最后余项；空首屏也做全局校验。不是每一页重查完整结果的所有 revision。
 3. PhotoKit 通知到达时先同步增加 `changeGeneration`，再排 MainActor 回调；所以即使界面通知尚未处理，已收到的变化也能使页校验失败。页校验前后复查授权／generation，失败则清空整个结果会话与缩略图缓存并要求重新搜索，不保留混合新旧页。
-4. 新查询、查询编辑、地点权重／每批数量／中文搜索开关变化、取消、后台、刷新、图库变化，以及手动索引或清索引都会清除 continuation、结果、选择与已完成查询信息。旧异步任务仍受取消和 operation token 检查；返回前台刷新不会复活旧页。
+4. 新查询、图库查询编辑、地点权重／每批数量／中文搜索开关变化、后台、刷新、图库变化，以及手动索引或清索引都会清除 continuation、结果、选择与已完成查询信息。**不能把所有取消都当成图库失效**：`AppState.cancel()` 仅在已有分页且 activity 为 idle／search 时清除分页；取消无关照片诊断或翻译准备保留底层图库的查询、结果、选择、分页 session 与候选总数。诊断关闭／诊断页查询编辑仍拒绝迟到报告，不等于编辑图库查询。旧异步任务继续受取消和 operation token 检查；返回前台刷新不会复活旧页。第二次验证发现的正是该取消作用域回归，第三次已修正并通过既有测试。
 
 这些是应用层失效检查，**不是 Photos／OS 原子快照或绝对零竞态保证**：系统变化尚未发出通知，或发生在最后检查之后，仍有不可原子锁住的窗口。未公开 ID 的 revision 不逐页全量轮询；不能宣称所有系统变化瞬间都已被应用观察到。
 
-源码：[响应验证接口](../App/State/PhotoIndexWorker.swift#L49-L66)、[worker 全局搜索与分页验证](../App/State/PhotoIndexWorker.swift#L467-L537)、[会话清除与首屏发布](../App/State/AppState.swift#L479-L570)、[Photos 同步通知 generation](../App/Photos/PhotoLibraryClient.swift#L130-L136)。
+源码：[../App/State/PhotoIndexWorker.swift](../App/State/PhotoIndexWorker.swift)、[../App/State/AppState.swift](../App/State/AppState.swift)、[../App/Photos/PhotoLibraryClient.swift](../App/Photos/PhotoLibraryClient.swift)。
 
-## 6. 测试账本与剩余风险
+## 6. 三次整体验证与实际通过账本
 
-下列是**已写入源码的新增 XCTest 方法数，不是已通过数**：
+|整体验证|run／job／完整源码 SHA|实际结果|
+|---|---|---|
+|第一次|[37206371854／111448298055](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37206371854/job/111448298055)；`a54648dcb5d1edf30ac0dedd2ba246adbaa33dfa`|FAILED：`DisplayThumbnailLoaderTests` 的嵌套 `[[Reply]]` 类型推断导致测试编译失败。|
+|第二次|[37206758430／111449431771](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37206758430/job/111449431771)；`9a49844e968810aa43a558fef6333878b840bb4a`|FAILED：两项既有 `PhotoCheckPresentationTests` 多条断言失败；`AppState.cancel()` 在诊断取消时误清图库分页。|
+|第三次|[37208795156／111455534540](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156/job/111455534540)；`2c05008a74f3ec4df170de1b2fc1fb79a0bcec84`|SUCCESS：生产修复限定 idle／search 清页，无关诊断取消保留分页；加强既有图库快照断言，包含 session／候选总数。新 run attempt 1 是第三次整体验证。|
 
-|套件|新增|主要覆盖|
-|---|---:|---|
-|[../Tests/DisplayThumbnailLoaderTests.swift](../Tests/DisplayThumbnailLoaderTests.swift)|33|几何／scale、HQ/Fast 顺序、可读低分辨率、3164、联网临时回调、错误优先级、重复回调与取消竞态。|
-|[../Tests/PhotoThumbnailCacheTests.swift](../Tests/PhotoThumbnailCacheTests.swift)|15|双 revision、尺寸／网络／generation 键、编辑后当前像素、清空、权限与迟到结果。|
-|[../Tests/ResultPaginationTests.swift](../Tests/ResultPaginationTests.swift)|18|37 项按 12→24→36→37 稳定前缀、分数 bit pattern、负分、全局中心、去重、失效、首屏／续页 ID 校验、3 张选项、一次翻译／编码。|
-|[../Tests/ResultPaginationPresentationTests.swift](../Tests/ResultPaginationPresentationTests.swift)|3|真实 ContentView／滚动容器的离屏边界不追加、滚动触发追加至耗尽、横向小视口不重置。|
-|[新增 worker 校验测试](../Tests/PhotoIndexWorkerTests.swift#L727-L745)|1|25 项全局结果分批验证、新 ID 越界／后续编辑拒绝、数据库未写与零像素请求。|
-|合计|**70**|均计入 App XCTest，不另算到独立 UI 套件。|
+没有删除旧测试、放宽数值容差、延长超时或绕过 CI 门槛。第二次是生产回归，不能写成只有测试修正；既有两项诊断取消测试现已通过，并比以前多检查分页身份与候选数量。
 
-以 build 21 的 App **592** 项为基线，本轮预计 **592 + 70 = 662**；最终执行、通过、失败与跳过数量必须以 CI 原生报告为准。既有默认值断言已改为 12，并保留精确顺序、分数、向量、权重等断言，不能通过删除测试或放宽容差迁就分页。3 项原生展示测试使用合成搜索结果、真实未授权缩略图路径，**不是真实 Photos HQ 清晰度、物理旋转或 XCUI 手势证明**；尚未取得本轮原生运行／截图验收证据。
+|测试套件|实际通过数／秒|本轮新增|主要覆盖／证据边界|
+|---|---|---:|---|
+|[../Tests/DisplayThumbnailLoaderTests.swift](../Tests/DisplayThumbnailLoaderTests.swift)|33／2.250|33|几何／scale、HQ/Fast 顺序、可读低分辨率、3164、联网临时回调、错误优先级、重复回调与取消竞态。|
+|[../Tests/PhotoThumbnailCacheTests.swift](../Tests/PhotoThumbnailCacheTests.swift)|15／0.035|15|双 revision、尺寸／网络／generation 键、编辑后当前像素、清空、权限与迟到结果。|
+|[../Tests/ResultPaginationTests.swift](../Tests/ResultPaginationTests.swift)|18／0.571|18|37 项按 12→24→36→37 稳定前缀、分数 bit pattern、负分、全局中心、去重、失效、首屏／续页 ID 校验、3 张选项、一次翻译／编码。|
+|[../Tests/ResultPaginationPresentationTests.swift](../Tests/ResultPaginationPresentationTests.swift)|3／0.705|3|真实 `ContentView`／`UIScrollView`，37 项按 12→24→36→37 追加、初始离屏边界不追加、小横向视口不重置。合成结果／未授权缩略图路径，不是 XCUI 物理手势、实际旋转或 Photos HQ 质量证明。|
+|[../Tests/PhotoIndexWorkerTests.swift](../Tests/PhotoIndexWorkerTests.swift)|30／1.277|1|新增 25 项全局结果的真实 worker 分页校验、新 ID 越界／后续编辑拒绝、数据库未写与零像素请求；30 是整套总数。|
+|[../Tests/PhotoCheckPresentationTests.swift](../Tests/PhotoCheckPresentationTests.swift)|20／1.434|0|修复第二次失败的两项既有测试对应的生产回归；图库快照增加 session／候选总数断言，保留原查询／结果／选择检查。|
+|[../Tests/GeneratedModelParityTests.swift](../Tests/GeneratedModelParityTests.swift)|8／150.700|0|CPU、`.all`、真实 20 actor；20 actor 120 次预测／252 项测量和原 23／58 数值门槛全部保留。|
+|新增合计|**70 项全通过**|**70**|33＋15＋18＋3＋1，已计入 App 总数，不与整套方法数重复相加。|
 
-静态检查、资源检查、完整真实模型数值对齐、全部 App 测试及既有独立 UI 回归门槛保持，不以新增模拟测试替代或跳过；完整验证流程见 [../.github/workflows/ios.yml](../.github/workflows/ios.yml)。本次仅写文档，未执行这些门槛。
+|整体门槛|实际结果|
+|---|---|
+|Swift 核心|79 全通过。|
+|App XCTest|**662＝661 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败**；**237.412 秒，wall 244.696 秒**。比 build 21 的 592 新增 70 项。|
+|独立 UI|**11 全通过／757.953 秒**；导航 **6／525.587 秒**、键盘 **5／232.366 秒**。真实设置交互从 **12 改为 3** 并核验保留；未授权真实 Photos，不证明真机图库或 HQ 清晰度。|
+|设备构建|BUILD SUCCEEDED；**0.5.9 / 22、arm64 Release、未签名、最低 iOS 17、SDK 18.5、Xcode 16.4**。|
 
-**未测风险：**首次仍读取完整候选向量并全局排序，排序复杂度 **O(N log N)**；会话失效前保留完整结果及其向量，随显示增加也保留更多 tile／图像相关状态。手机首屏耗时、滚动性能、HQ 本地覆盖率、峰值／稳态 RSS 均未测。分页减少初次展示与像素加载需求，不证明全量检索更快或内存有界；不为掩盖未测容量增加任意 ceiling、超时或静默降级政策。
+静态／资源检查、完整真实模型数值对齐、全部 App 及独立 UI 回归门槛保留，不以新增模拟测试替代。完整流程见 [../.github/workflows/ios.yml](../.github/workflows/ios.yml)；本次文档更新不重新执行该流程。App 子套件已计入 662，UI 另计，测试耗时不是手机性能。
+
+## 7. 已交付资产与有限视觉复核
+
+|资产／核验|实际记录|
+|---|---|
+|公开 Release|[ci-37208795156-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37208795156-1)，ID **403064885**，**2026-10-04T14:50:02Z** 发布；**9 项资产、prerelease、非 draft、非 Latest**。|
+|本地原始 IPA|[../build/device-download/37208795156/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37208795156/LocalImageIQ-iphoneos-unsigned.ipa)，asset **610020605**，**1,418,628,098 字节**；SHA-256 **`6244de326a29fe3daf22146dc4591f4d061a5565a21d051149e4a7f698dd9f28`**。完整流式长度／哈希 PASS，`ipaVerifiedLocally: true`。|
+|归档完整性|**7-Zip 26.03 全量解压／CRC PASS**；11 文件夹、30 文件，解压后 **1,563,942,417 字节**。不验证重签后的包或手机安装。|
+|UI ZIP|[../build/ui-review/37208795156/UIReview.zip](../build/ui-review/37208795156/UIReview.zip)，asset **610020492**，**5,851,186 字节**；SHA-256 **`46edd9ef2232bfd4b087c739903d5d6e0086922c2b1743cee18b5019c0544318`**，已下载核验。|
+|小型 IPA 元数据|实际核验 **0.5.9 / 22、LaunchScreen**，原地点 FNV **`raycast-v1-93c9a925e35247f2`** 保持不变。|
+
+配套文件：[设备报告](../build/device-download/37208795156/device-build.json)、[交付清单](../build/device-download/37208795156/delivery.json)、[校验文件](../build/device-download/37208795156/SHA256SUMS.txt)、[全量下载记录](../build/device-download/37208795156/release-fetch-95efc8a3-b875-4ebc-a17d-70005eb0295d.json)。
+
+父流程实际**只查看 [1010×758 三图联系图](../build/ui-review/37208795156/result-paging-contact.jpg)**，三个原图均 **393×852**，见 [审核记录](../build/ui-review/37208795156/result-paging-review.json)：
+
+- 第一张为真实 `ContentView` 追加 **24 项之后的滚动视口**，内容是无访问权限占位符及 TEST 水印，非真实照片。**24 项由测试状态断言确认，截图视口内没有 24 计数器，也不是同时可见 24 张照片**；底部“已索引 37 张”是已存索引统计，不能把 37 当作已显示数量或 24 项的视觉证明。
+- 另两张是黑金深色／浅色设置夹具，均显示“**每批显示 12**”；UI 自动测试改成 3 的交互证据与这两张静态图分别记录，不能混作同一截图。
+- 未读取／授权真实 Photos，没有其他图片审核、HQ 清晰度、物理 iPhone 手势或性能证明。原生 `UIScrollView` 测试不等于 XCUI 真实图库滚动验收。
+
+## 8. 安装、不变项与剩余风险
+
+**原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**；已有当前策略有效索引复用，安装见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。本轮不变项包括索引 HQ224／Fast 策略、20 个索引 worker、手动索引、模型 FP32／`.all`、SQLite schema 与模型／索引／地点缓存身份、品牌和九步启动条逻辑。新版上下文首次启动可能按原规则显示条，见 [STARTUP_STEP_PROGRESS.md](STARTUP_STEP_PROGRESS.md)，不是新增模型步骤或索引迁移。
+
+**仍待真机验收：**安装、实际 Photos HQ 清晰度及本地覆盖率、首屏／后续加载延迟、滚动性能与峰值／稳态 RSS 均未测。首次仍读取完整候选向量并全局排序，排序复杂度 **O(N log N)**；会话失效前保留完整 ID／向量，随显示增加也保留更多 tile／图像相关状态。分页减少初次展示与像素加载需求，不证明全量检索更快或内存有界；不为掩盖未测容量增加任意 ceiling、超时或静默降级政策。全屏旧 helper 未改，本轮不能宣称全屏 HQ 升级或任何目标像素尺寸的可用性保证。
