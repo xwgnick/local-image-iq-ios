@@ -289,7 +289,10 @@ final class DisplayThumbnailLoaderTests: XCTestCase {
         let first = try syntheticImage()
         let later = try syntheticImage(width: 521, height: 651)
         for path in stagePaths {
-            let script = ThumbnailRequestScript(stages: path.prefix + [[.init(image: first)] + lateReplies(image: later)])
+            let replies: [ThumbnailRequestScript.Reply] = [ThumbnailRequestScript.Reply(image: first)]
+                + lateReplies(image: later)
+            let stages: [[ThumbnailRequestScript.Reply]] = path.prefix + [replies]
+            let script = ThumbnailRequestScript(stages: stages)
             let result = try await load(script, networkAllowed: path.networkAllowed)
             XCTAssertTrue(result === first)
             assertPlans(script, path: path)
