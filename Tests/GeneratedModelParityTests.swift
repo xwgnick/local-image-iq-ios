@@ -133,8 +133,11 @@ final class GeneratedModelParityTests: XCTestCase {
             let preparations = try await withThrowingTaskGroup(of: (ModelManifest, LaunchTimingReport).self) { group in
                 for _ in 0..<3 {
                     group.addTask {
-                        let timing = LaunchTimingRecorder(kind: .cold)
+                        let steps = StartupProgressRecorder()
+                        let timing = LaunchTimingRecorder(kind: .cold, startupProgress: steps)
                         let manifest = try await encoders.prepare(timing: timing)
+                        XCTAssertEqual(steps.snapshot.completed, StartupStep.modelSteps,
+                                       "Each real concurrent caller must receive all five verified model requirements, never unrelated startup steps.")
                         return (manifest, try XCTUnwrap(timing.finish(.ready)))
                     }
                 }
@@ -164,9 +167,11 @@ final class GeneratedModelParityTests: XCTestCase {
             })
             XCTAssertEqual(preparation.rows.reduce(0) { $0 + $1.seconds }, preparation.totalSeconds,
                            accuracy: 0.000001, "Overlapping child durations must never inflate the total.")
-            let reused = LaunchTimingRecorder(kind: .retry)
+            let reusedSteps = StartupProgressRecorder()
+            let reused = LaunchTimingRecorder(kind: .retry, startupProgress: reusedSteps)
             let reusedManifest = try await encoders.prepare(timing: reused)
             XCTAssertEqual(reusedManifest.modelVersion, manifest.modelVersion)
+            XCTAssertEqual(reusedSteps.snapshot.completed, StartupStep.modelSteps)
             let reusedReport = try XCTUnwrap(reused.finish(.ready))
             XCTAssertEqual(reusedReport.rows.map(\.stage), [.entry, .cachedModels],
                            "Already-loaded models must not be reported as newly loaded.")

@@ -34,6 +34,9 @@ actor CoreMLEncoders: PhotoEncoding {
     private let bundle: Bundle
     private var loaded: Loaded?
     private var loadingTask: Task<Void, Error>?
+    /// Shared load progress outlives any one launch attempt. Each waiting attempt
+    /// subscribes with replay; freezing one UI report cannot lose later completions.
+    private var loadingProgress: StartupProgressRecorder?
 
     private struct ModelResources: Sendable {
         let manifest: ModelManifest
@@ -132,21 +135,36 @@ actor CoreMLEncoders: PhotoEncoding {
         try Task.checkCancellation()
         if let loaded {
             timing?.mark(.cachedModels)
+            timing?.startupProgress?.complete(StartupStep.modelSteps)
             return loaded
         }
         let task: Task<Void, Error>
+        let sharedProgress: StartupProgressRecorder
         if let loadingTask {
             timing?.mark(.sharedModels)
             task = loadingTask
+            guard let loadingProgress else {
+                throw AppFailure.modelContract("Shared model progress was not initialized.")
+            }
+            sharedProgress = loadingProgress
         } else {
             // Installed before the first suspension: actor reentrancy cannot start a
             // second load. One cancelled caller does not cancel other callers' setup.
-            task = Task { try await self.loadBundledModels(timing: timing) }
+            sharedProgress = StartupProgressRecorder()
+            loadingProgress = sharedProgress
+            task = Task { try await self.loadBundledModels(timing: timing, startupProgress: sharedProgress) }
             loadingTask = task
         }
+        let observer = timing?.startupProgress.map { destination in
+            sharedProgress.observe { snapshot in
+                destination.complete(snapshot.completed.intersection(StartupStep.modelSteps))
+            }
+        }
+        defer { if let observer { sharedProgress.removeObserver(observer) } }
         try await task.value
         try Task.checkCancellation()
         guard let loaded else { throw AppFailure.modelContract("Model initialization did not complete.") }
+        timing?.startupProgress?.complete(StartupStep.modelSteps)
         return loaded
     }
 
@@ -178,15 +196,21 @@ actor CoreMLEncoders: PhotoEncoding {
         }
     }
 
-    private func loadBundledModels(timing: LaunchTimingRecorder?) async throws {
+    private func loadBundledModels(timing: LaunchTimingRecorder?, startupProgress: StartupProgressRecorder) async throws {
         // Only the initializer clears its task. Waiters must not clear a newer retry.
-        defer { loadingTask = nil }
+        defer {
+            _ = startupProgress.freeze()
+            loadingProgress = nil
+            loadingTask = nil
+        }
         do {
             timing?.mark(.resources)
             let resources = try modelResources()
             let manifest = resources.manifest
+            startupProgress.complete(.resources)
             let parts = try await ParallelModelPreparation.load(
                 timing: timing,
+                startupProgress: startupProgress,
                 tokenizer: { try await SigLIPTokenizer.load(directory: resources.tokenizerDirectory) },
                 image: {
                     let image = CoreMLImageEncoder(modelURL: resources.imageURL, manifest: manifest)
@@ -203,6 +227,7 @@ actor CoreMLEncoders: PhotoEncoding {
             // succeed. A failed group cannot leave a partially ready coordinator.
             loaded = Loaded(manifest: manifest, imageURL: resources.imageURL, image: parts.image,
                             text: parts.text, tokenizer: parts.tokenizer)
+            startupProgress.complete(.assembly)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as AppFailure {

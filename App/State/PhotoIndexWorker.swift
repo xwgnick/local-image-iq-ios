@@ -180,6 +180,7 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         }
         timing?.mark(.places)
         let metadata = geography()
+        timing?.startupProgress?.complete(.places)
         let manifest: ModelManifest
         do {
             try Task.checkCancellation()
@@ -208,6 +209,7 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         timing?.mark(.counts)
         let counts = try await reader().storedCounts(modelVersion: cacheVersion, geographyVersion: metadata.version)
         try Task.checkCancellation()
+        timing?.startupProgress?.complete(.counts)
         timing?.mark(.publish)
         return LibrarySummary(indexedCount: counts.indexed,
                               locatedCount: counts.located, modelVersion: cacheVersion,

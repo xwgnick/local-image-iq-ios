@@ -8,16 +8,21 @@ final class ParallelModelPreparationTests: XCTestCase {
     func testAllThreeBranchesStartBeforeAnyReleaseAndRecordParallelWallAndComponents() async throws {
         let clock = PMPreparationClock()
         let timing = LaunchTimingRecorder(kind: .cold, now: { clock.now() })
+        let progress = StartupProgressRecorder()
         clock.set(101)
-        let run = start(timing: timing)
+        let run = start(timing: timing, startupProgress: progress)
         guard await expect([run.probe.signals.allStarted]) else { return }
         assertAllStartedAndHeld(await run.probe.snapshot())
+        XCTAssertEqual(progress.snapshot.completed, [])
 
         clock.set(109)
         await run.probe.releaseAll()
         guard await expect([run.probe.signals.returned]) else { return }
         assertSuccess(await run.task.value)
         assertDrained(await run.probe.snapshot(), cancelled: [])
+        XCTAssertEqual(progress.snapshot.completed, [.tokenizer, .imageModel, .textModel])
+        XCTAssertEqual(progress.snapshot.fraction, 3.0 / 9.0,
+                       "This helper cannot invent resources, assembly, counts or owner readiness.")
 
         clock.set(111)
         let report = try XCTUnwrap(timing.finish(.ready))
@@ -30,27 +35,47 @@ final class ParallelModelPreparationTests: XCTestCase {
         XCTAssertEqual(report.slowest?.stage, .parallelModels)
         XCTAssertEqual(report.slowest?.seconds, 8)
         XCTAssertNil(timing.finish(.ready))
+        progress.complete([.tokenizer, .imageModel, .textModel])
+        XCTAssertEqual(progress.snapshot.completed, [.tokenizer, .imageModel, .textModel])
+        XCTAssertEqual(progress.snapshot.fraction, 3.0 / 9.0, "Duplicate completions must not add steps.")
     }
 
     func testSuccessRequiresEveryPossibleLastBranchBeforeReturningHeterogeneousValues() async throws {
         for last in PMPreparationBranch.allCases {
             let timing = LaunchTimingRecorder(kind: .retry, now: { 0 })
-            let run = start(timing: timing)
+            let progress = StartupProgressRecorder()
+            let run = start(timing: timing, startupProgress: progress)
             guard await expect([run.probe.signals.allStarted]) else { return }
             assertAllStartedAndHeld(await run.probe.snapshot())
+            XCTAssertEqual(progress.snapshot.completed, [])
 
             let firstTwo = PMPreparationBranch.allCases.filter { $0 != last }
-            for branch in firstTwo { await run.probe.release(branch) }
-            guard await expect(firstTwo.map { run.probe.signals.exited($0) }) else { return }
+            for (index, branch) in firstTwo.enumerated() {
+                let completed = Set(firstTwo.prefix(index + 1).map(\.startupStep))
+                let advanced = expectation(description: "Released branch reported successful completion")
+                advanced.assertForOverFulfill = true
+                let observer = progress.observe { snapshot in
+                    if snapshot.completed == completed { advanced.fulfill() }
+                }
+                defer { progress.removeObserver(observer) }
+                await run.probe.release(branch)
+                // exit() runs inside the injected operation, BEFORE measured()
+                // publishes success. Wait for the actual progress event as well.
+                guard await expect([run.probe.signals.exited(branch), advanced]) else { return }
+                XCTAssertEqual(progress.snapshot.completed, completed)
+                XCTAssertEqual(progress.snapshot.fraction, Double(index + 1) / 9.0)
+            }
             let held = await run.probe.snapshot()
             XCTAssertEqual(held.exited, Set(firstTwo))
             XCTAssertFalse(held.released.contains(last))
             XCTAssertNil(held.exitedAtReturn, "Two successful branches are not all-required readiness.")
+            XCTAssertFalse(progress.snapshot.completed.contains(last.startupStep))
 
             await run.probe.release(last)
             guard await expect([run.probe.signals.returned]) else { return }
             assertSuccess(await run.task.value)
             assertDrained(await run.probe.snapshot(), cancelled: [])
+            XCTAssertEqual(progress.snapshot.completed, [.tokenizer, .imageModel, .textModel])
             let report = try XCTUnwrap(timing.finish(.ready))
             assertReport(report, outcome: .ready, wall: [0, 0, 0], offsets: [0, 0, 0],
                          components: [0, 0, 0], statuses: [.completed, .completed, .completed])
@@ -63,11 +88,14 @@ final class ParallelModelPreparationTests: XCTestCase {
         for last in [PMPreparationBranch.image, .text] {
             let clock = PMPreparationClock()
             let timing = LaunchTimingRecorder(kind: .retry, now: { clock.now() })
+            let progress = StartupProgressRecorder()
             let original = PMPreparationFailure()
             clock.set(101)
-            let run = start(timing: timing, tokenizerFailure: original, cooperativeImage: true)
+            let run = start(timing: timing, startupProgress: progress,
+                            tokenizerFailure: original, cooperativeImage: true)
             guard await expect([run.probe.signals.allStarted]) else { return }
             assertAllStartedAndHeld(await run.probe.snapshot())
+            XCTAssertEqual(progress.snapshot.completed, [])
 
             clock.set(104)
             await run.probe.release(.tokenizer)
@@ -77,6 +105,7 @@ final class ParallelModelPreparationTests: XCTestCase {
             XCTAssertEqual(cancelling.exited, [.tokenizer])
             XCTAssertEqual(cancelling.released, [.tokenizer])
             XCTAssertNil(cancelling.exitedAtReturn)
+            XCTAssertEqual(progress.snapshot.completed, [], "A thrown branch is not a completed requirement.")
 
             clock.set(110)
             let first: PMPreparationBranch = last == .image ? .text : .image
@@ -92,6 +121,8 @@ final class ParallelModelPreparationTests: XCTestCase {
             assertFailure(await run.task.value, identicalTo: original)
             let finished = await run.probe.snapshot()
             assertDrained(finished, cancelled: [.image, .text])
+            XCTAssertEqual(progress.snapshot.completed, [],
+                           "Neither a failed branch nor cancelled siblings may advance progress.")
             assertBefore(.exited(.tokenizer, false), .imageCancelled, in: finished)
             assertBefore(.imageCancelled, .exited(.image, true), in: finished)
 
@@ -106,10 +137,12 @@ final class ParallelModelPreparationTests: XCTestCase {
     func testExternalCancellationDrainsNoncooperativeBranchesAndCooperativeCleanup() async throws {
         let clock = PMPreparationClock()
         let timing = LaunchTimingRecorder(kind: .foreground, now: { clock.now() })
+        let progress = StartupProgressRecorder()
         clock.set(101)
-        let run = start(timing: timing, cooperativeImage: true)
+        let run = start(timing: timing, startupProgress: progress, cooperativeImage: true)
         guard await expect([run.probe.signals.allStarted]) else { return }
         assertAllStartedAndHeld(await run.probe.snapshot())
+        XCTAssertEqual(progress.snapshot.completed, [])
 
         clock.set(104)
         run.task.cancel()
@@ -131,6 +164,8 @@ final class ParallelModelPreparationTests: XCTestCase {
         guard await expect([run.probe.signals.returned]) else { return }
         assertCancellation(await run.task.value)
         assertDrained(await run.probe.snapshot(), cancelled: Set(PMPreparationBranch.allCases))
+        XCTAssertEqual(progress.snapshot.completed, [],
+                       "Even a noncooperative late normal return must fail the post-work cancellation check.")
 
         clock.set(112)
         let report = try XCTUnwrap(timing.finish(.interrupted))
@@ -144,12 +179,14 @@ final class ParallelModelPreparationTests: XCTestCase {
             let clock = PMPreparationClock()
             let timing: LaunchTimingRecorder? = recordsTiming
                 ? LaunchTimingRecorder(kind: .cold, now: { clock.now() }) : nil
+            let progress = StartupProgressRecorder()
             clock.set(101)
             // Self-cancel inside the owned task, before load(), avoiding a race
             // between scheduling the task and cancelling it from the test.
-            let run = start(timing: timing, cancelledBeforeEntry: true)
+            let run = start(timing: timing, startupProgress: progress, cancelledBeforeEntry: true)
             guard await expect([run.probe.signals.returned]) else { return }
             assertCancellation(await run.task.value)
+            XCTAssertEqual(progress.snapshot.completed, [])
             let state = await run.probe.snapshot()
             XCTAssertTrue(state.started.isEmpty)
             XCTAssertTrue(state.released.isEmpty)
@@ -170,10 +207,14 @@ final class ParallelModelPreparationTests: XCTestCase {
 
     func testFreezingCancelledOldAttemptLeavesSharedLikeTaskRunningAndIgnoresLateCallbacks() async throws {
         let clock = PMPreparationClock()
-        let timing = LaunchTimingRecorder(kind: .cold, now: { clock.now() })
+        let oldProgress = StartupProgressRecorder()
+        let sharedProgress = StartupProgressRecorder()
+        let timing = LaunchTimingRecorder(kind: .cold, now: { clock.now() }, startupProgress: oldProgress)
+        let oldObserver = sharedProgress.observe { oldProgress.complete($0.completed) }
+        defer { sharedProgress.removeObserver(oldObserver) }
         clock.set(101)
-        let run = start(timing: timing)
-        // Synthetic owned backing task + old waiter, not CoreMLEncoders.loadTask
+        let run = start(timing: timing, startupProgress: sharedProgress)
+        // Synthetic owned backing task + old waiter, not CoreMLEncoders.loadingTask
         // or a proof of the production multi-waiter cancellation policy.
         let oldWaiter = Task { () -> Result<PMPreparationValues, Error> in
             let result = await run.task.value
@@ -191,25 +232,53 @@ final class ParallelModelPreparationTests: XCTestCase {
         }
         guard await expect([run.probe.signals.allStarted]) else { return }
         assertAllStartedAndHeld(await run.probe.snapshot())
+        XCTAssertEqual(sharedProgress.snapshot.completed, [])
 
         oldWaiter.cancel()
         clock.set(105)
         let frozen = try XCTUnwrap(timing.finish(.interrupted))
+        let frozenProgress = oldProgress.freeze()
         let readsAtFreeze = clock.readCount
         XCTAssertFalse(run.task.isCancelled)
         clock.set(200)
+        let advanced = expectation(description: "Shared branches publish after old timing and display freeze")
+        advanced.assertForOverFulfill = true
+        let progressObserver = sharedProgress.observe { snapshot in
+            if snapshot.completed == [.imageModel, .textModel] { advanced.fulfill() }
+        }
+        defer { sharedProgress.removeObserver(progressObserver) }
         for branch in [PMPreparationBranch.image, .text] { await run.probe.release(branch) }
-        guard await expect([run.probe.signals.exited(.image), run.probe.signals.exited(.text)]) else { return }
+        guard await expect([run.probe.signals.exited(.image), run.probe.signals.exited(.text), advanced]) else { return }
         let stillRunning = await run.probe.snapshot()
         XCTAssertEqual(stillRunning.exited, [.image, .text])
         XCTAssertNil(stillRunning.exitedAtReturn)
         XCTAssertFalse(run.task.isCancelled)
+        XCTAssertEqual(sharedProgress.snapshot.completed, [.imageModel, .textModel])
+        XCTAssertEqual(oldProgress.snapshot, frozenProgress)
+        XCTAssertEqual(frozenProgress.completed, [])
+
+        let laterProgress = StartupProgressRecorder()
+        let laterObserver = sharedProgress.observe { laterProgress.complete($0.completed) }
+        defer { sharedProgress.removeObserver(laterObserver) }
+        XCTAssertEqual(laterProgress.snapshot.completed, [.imageModel, .textModel],
+                       "A later waiter replays actual completed work before the last branch returns.")
+        sharedProgress.complete(.imageModel)
+        XCTAssertEqual(laterProgress.snapshot.fraction, 2.0 / 9.0)
 
         await run.probe.release(.tokenizer)
         guard await expect([run.probe.signals.returned]) else { return }
         assertSuccess(await run.task.value)
         assertCancellation(await oldWaiter.value)
         assertDrained(await run.probe.snapshot(), cancelled: [])
+        XCTAssertEqual(sharedProgress.snapshot.completed, [.tokenizer, .imageModel, .textModel])
+        XCTAssertEqual(laterProgress.snapshot, sharedProgress.snapshot)
+        XCTAssertEqual(oldProgress.snapshot, frozenProgress)
+        // The backing producer ends its own channel only after actual work.
+        // Ending it must not freeze a launch owner's independent requirements.
+        let sharedFrozen = sharedProgress.freeze()
+        laterProgress.complete(.entry)
+        XCTAssertEqual(laterProgress.snapshot.completed, [.entry, .tokenizer, .imageModel, .textModel])
+        XCTAssertEqual(sharedProgress.snapshot, sharedFrozen)
         // Real measured() end callbacks and the helper's deferred assembly mark
         // have now happened, but must not even consult the old recorder's clock.
         XCTAssertEqual(clock.readCount, readsAtFreeze)
@@ -229,9 +298,11 @@ final class ParallelModelPreparationTests: XCTestCase {
     }
 
     func testNilTimingStillStartsAllBranchesAndWaitsForTheLastResult() async {
-        let run = start(timing: nil)
+        let progress = StartupProgressRecorder()
+        let run = start(timing: nil, startupProgress: progress)
         guard await expect([run.probe.signals.allStarted]) else { return }
         assertAllStartedAndHeld(await run.probe.snapshot())
+        XCTAssertEqual(progress.snapshot.completed, [])
         await run.probe.release(.text)
         await run.probe.release(.image)
         guard await expect([run.probe.signals.exited(.text), run.probe.signals.exited(.image)]) else { return }
@@ -242,9 +313,12 @@ final class ParallelModelPreparationTests: XCTestCase {
         guard await expect([run.probe.signals.returned]) else { return }
         assertSuccess(await run.task.value)
         assertDrained(await run.probe.snapshot(), cancelled: [])
+        XCTAssertEqual(progress.snapshot.completed, [.tokenizer, .imageModel, .textModel],
+                       "Step completion must not depend on a timing recorder or component token.")
     }
 
-    private func start(timing: LaunchTimingRecorder?, tokenizerFailure: PMPreparationFailure? = nil,
+    private func start(timing: LaunchTimingRecorder?, startupProgress: StartupProgressRecorder? = nil,
+                       tokenizerFailure: PMPreparationFailure? = nil,
                        cooperativeImage: Bool = false, cancelledBeforeEntry: Bool = false) -> PMPreparationRun {
         let probe = PMPreparationProbe()
         let cancellation = PMPreparationCancellation()
@@ -254,13 +328,22 @@ final class ParallelModelPreparationTests: XCTestCase {
             do {
                 let values: PMPreparationValues = try await ParallelModelPreparation.load(
                     timing: timing,
+                    startupProgress: startupProgress,
                     tokenizer: {
+                        defer {
+                            XCTAssertFalse(startupProgress?.snapshot.completed.contains(.tokenizer) ?? false,
+                                           "Tokenizer must not be complete before its work returns successfully.")
+                        }
                         await probe.arriveAndWait(.tokenizer)
                         await probe.exit(.tokenizer, cancelled: Task.isCancelled)
                         if let tokenizerFailure { throw tokenizerFailure }
                         return "TEST-tokenizer"
                     },
                     image: {
+                        defer {
+                            XCTAssertFalse(startupProgress?.snapshot.completed.contains(.imageModel) ?? false,
+                                           "Image must not be complete before its work returns successfully.")
+                        }
                         if cooperativeImage {
                             await probe.arrive(.image)
                             let wasCancelled = await cancellation.wait()
@@ -275,6 +358,10 @@ final class ParallelModelPreparationTests: XCTestCase {
                         return 42
                     },
                     text: {
+                        defer {
+                            XCTAssertFalse(startupProgress?.snapshot.completed.contains(.textModel) ?? false,
+                                           "Text must not be complete before its work returns successfully.")
+                        }
                         // Intentionally ignores cancellation while the gate is
                         // closed, then returns normally. measured() must reject
                         // this late value and mark the component interrupted.
@@ -392,6 +479,14 @@ private typealias PMPreparationValues = (tokenizer: String, image: Int, text: Bo
 
 private enum PMPreparationBranch: CaseIterable, Hashable, Sendable {
     case tokenizer, image, text
+
+    var startupStep: StartupStep {
+        switch self {
+        case .tokenizer: return .tokenizer
+        case .image: return .imageModel
+        case .text: return .textModel
+        }
+    }
 }
 
 private enum PMPreparationEvent: Equatable, Sendable {

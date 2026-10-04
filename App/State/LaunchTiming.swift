@@ -84,6 +84,8 @@ struct LaunchTimingReport: Identifiable, Sendable {
 /// Marks partition wall time rather than adding overlapping parent/child spans.
 /// A cancelled attempt freezes immediately; late shared-model callbacks are ignored.
 final class LaunchTimingRecorder: @unchecked Sendable {
+    /// Independent completed-step events; timing boundaries never imply success.
+    let startupProgress: StartupProgressRecorder?
     private struct ActiveComponent {
         let id: UUID
         let stage: LaunchTimingStage
@@ -104,9 +106,11 @@ final class LaunchTimingRecorder: @unchecked Sendable {
     private var completedComponents: [UUID: LaunchTimingComponent] = [:]
     private var finished = false
 
-    init(kind: LaunchTimingKind, now: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime }) {
+    init(kind: LaunchTimingKind, now: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
+         startupProgress: StartupProgressRecorder? = nil) {
         self.kind = kind
         self.now = now
+        self.startupProgress = startupProgress
         let instant = now()
         began = instant
         last = instant

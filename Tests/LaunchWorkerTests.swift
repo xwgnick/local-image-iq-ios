@@ -12,7 +12,8 @@ final class LaunchWorkerTests: XCTestCase {
 
     func testStagesBracketWarmupWithoutEnumerationOrReconciliation() async throws {
         let clock = LaunchTimingTestClock(100)
-        let timing = LaunchTimingRecorder(kind: .cold, now: { clock.now() })
+        let steps = StartupProgressRecorder()
+        let timing = LaunchTimingRecorder(kind: .cold, now: { clock.now() }, startupProgress: steps)
         let context = try context([row("TEST-kept"), row("TEST-deleted")], timingClock: clock)
         context.library.replace([PhotoRevision(id: "TEST-kept", modificationTime: 123)])
         let version = version
@@ -31,6 +32,8 @@ final class LaunchWorkerTests: XCTestCase {
         clock.advance(by: 0.25)
         let report = try XCTUnwrap(timing.finish(.ready))
 
+        XCTAssertEqual(steps.snapshot.completed, [.places, .counts],
+                   "The real worker marks its own completed work only; a legacy fake cannot invent model or owner readiness steps.")
         XCTAssertEqual(context.events.values, ["checking", "metadata", "preparing", "prepare-start", "prepare-end", "returned"])
         XCTAssertEqual(report.id, timing.id)
         XCTAssertEqual(report.kind, .cold)
@@ -100,13 +103,15 @@ final class LaunchWorkerTests: XCTestCase {
             let context = try context([row("TEST-kept"), row("TEST-deleted")],
                                       outcome: .failure(failure), hold: hold)
             context.library.replace([PhotoRevision(id: "TEST-kept", modificationTime: 123)])
-            let timing = LaunchTimingRecorder(kind: .cold)
+            let steps = StartupProgressRecorder()
+            let timing = LaunchTimingRecorder(kind: .cold, startupProgress: steps)
             let task = start(context, hold: hold, timing: timing)
             await fulfillment(of: [hold.started], timeout: 3)
             context.library.replace([], readable: false)
             await hold.release.open()
             let summary = try await task.value
             let report = try XCTUnwrap(timing.finish(.failed))
+            XCTAssertEqual(steps.snapshot.completed, [.places], "A model failure cannot complete counts or ready.")
             XCTAssertEqual(report.outcome, .failed)
             XCTAssertEqual(report.rows.map(\.stage), [.entry, .places, .models],
                            "Failed preparation must not claim it reached counts or publication.")

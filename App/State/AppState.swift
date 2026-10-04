@@ -14,6 +14,20 @@ final class AppState: ObservableObject {
     private var launchWasRequested = false
     @Published private(set) var launchTimings: [LaunchTimingReport] = []
     private var launchTiming: LaunchTimingRecorder?
+    @Published private(set) var startupProgress = StartupProgressSnapshot(completed: [])
+    @Published private(set) var startupProgressVisible = false
+    private var startupObserver: UUID?
+    private var startupVisibilityTask: Task<Void, Never>?
+    private var startupAttemptContext: StartupContext?
+    private let startupHistory: (any StartupHistoryStoring)?
+    private let startupContext: () -> StartupContext?
+    private let startupVisibilityDelay: @Sendable (Double) async throws -> Void
+
+    var startupProgressFraction: Double? {
+        guard startupProgressVisible, isForeground,
+              launchPhase == .checkingLibrary || launchPhase == .preparingSearch else { return nil }
+        return startupProgress.fraction
+    }
 
     /// Session-only presentation preference: each app launch starts in user mode.
     /// Hiding tools must never reset search settings or cancel normal work.
@@ -79,9 +93,17 @@ final class AppState: ObservableObject {
 
     init(library: PhotoLibraryClient = PhotoLibraryClient(), worker: (any PhotoWorkServicing)? = nil,
          authorizationStatus: @escaping () -> PHAuthorizationStatus = { PhotoLibraryClient.authorization },
-         queryTranslator: (any QueryTranslating)? = nil, translationPreferences: UserDefaults? = nil) {
+         queryTranslator: (any QueryTranslating)? = nil, translationPreferences: UserDefaults? = nil,
+         startupHistory: (any StartupHistoryStoring)? = nil,
+         startupContext: @escaping () -> StartupContext? = { nil },
+         startupVisibilityDelay: @escaping @Sendable (Double) async throws -> Void = { seconds in
+             try await Task.sleep(for: .seconds(seconds))
+         }) {
         self.library = library
         self.worker = worker ?? PhotoIndexWorker(library: library)
+        self.startupHistory = startupHistory
+        self.startupContext = startupContext
+        self.startupVisibilityDelay = startupVisibilityDelay
         if let queryTranslator {
             self.queryTranslator = queryTranslator
             appleTranslationService = nil
@@ -102,7 +124,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    deinit { operationTask?.cancel() }
+    deinit {
+        operationTask?.cancel()
+        startupVisibilityTask?.cancel()
+    }
 
     var isBusy: Bool { activity != nil }
     var translationSupported: Bool { queryTranslator.isSupported }
@@ -137,14 +162,35 @@ final class AppState: ObservableObject {
 
     private func beginLaunch(kind: LaunchTimingKind) {
         finishLaunchTiming(launchTiming, outcome: .interrupted)
-        let timing = LaunchTimingRecorder(kind: kind)
+        let steps = StartupProgressRecorder()
+        let timing = LaunchTimingRecorder(kind: kind, startupProgress: steps)
         launchTiming = timing
+        startupProgress = steps.snapshot
+        startupAttemptContext = startupContext()
+        startupProgressVisible = StartupDisplayPolicy.predictsSlow(context: startupAttemptContext, history: startupHistory)
+        let attempt = timing.id
+        startupObserver = steps.observe { [weak self] snapshot in
+            Task { @MainActor [weak self] in self?.accept(startupSnapshot: snapshot, attempt: attempt) }
+        }
         launchWasRequested = true
         launchIssue = nil
         launchPhase = .checkingLibrary
         authorization = authorizationStatus()
         library.synchronizeObservation()
         invalidateDisplayedPhotos()
+        steps.complete(.entry)
+        startupProgress = steps.snapshot
+        if !startupProgressVisible {
+            let delay = startupVisibilityDelay
+            let attempt = timing.id
+            startupVisibilityTask = Task { @MainActor [weak self] in
+                do { try await delay(StartupDisplayPolicy.fallbackDelaySeconds) }
+                catch { return }
+                guard !Task.isCancelled, let self, self.launchTiming?.id == attempt,
+                      self.isForeground, self.activity == .starting else { return }
+                self.startupProgressVisible = true
+            }
+        }
         schedule(.starting, timing: timing) { [weak self, worker] token in
             timing.mark(.worker)
             let summary = try await worker.prepareForLaunch(timing: timing) { [weak self] stage in
@@ -156,7 +202,33 @@ final class AppState: ObservableObject {
     }
 
     private func finishLaunchTiming(_ timing: LaunchTimingRecorder?, outcome: LaunchTimingOutcome) {
-        if let report = timing?.finish(outcome) { launchTimings.append(report) }
+        guard let timing, let report = timing.finish(outcome) else { return }
+        launchTimings.append(report)
+        // Only this attempt owns its display task and success-history write.
+        guard launchTiming?.id == timing.id else { return }
+        startupVisibilityTask?.cancel()
+        startupVisibilityTask = nil
+        if let steps = timing.startupProgress {
+            if outcome == .ready { steps.complete(.ready) }
+            if let startupObserver { steps.removeObserver(startupObserver) }
+            startupProgress = steps.freeze()
+        }
+        startupObserver = nil
+        startupProgressVisible = false
+        if outcome == .ready, startupProgress.completed == Set(StartupStep.allCases),
+           let context = startupAttemptContext {
+            startupHistory?.recordSuccessfulPreparation(for: context)
+        }
+        startupAttemptContext = nil
+    }
+
+    private func accept(startupSnapshot: StartupProgressSnapshot, attempt: UUID) {
+        guard launchTiming?.id == attempt, isForeground, activity == .starting,
+              launchPhase == .checkingLibrary || launchPhase == .preparingSearch else { return }
+        // Concurrent branches can enqueue notifications in a different order.
+        // Completion sets only grow, never replace a newer snapshot with an older one.
+        let combined = StartupProgressSnapshot(completed: startupProgress.completed.union(startupSnapshot.completed))
+        if combined != startupProgress { startupProgress = combined }
     }
 
     private func accept(launchStage: LaunchStage, token: UUID) {

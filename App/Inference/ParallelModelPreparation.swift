@@ -12,6 +12,7 @@ enum ParallelModelPreparation {
 
     static func load<Tokenizer: Sendable, Image: Sendable, Text: Sendable>(
         timing: LaunchTimingRecorder?,
+        startupProgress: StartupProgressRecorder? = nil,
         tokenizer: @escaping @Sendable () async throws -> Tokenizer,
         image: @escaping @Sendable () async throws -> Image,
         text: @escaping @Sendable () async throws -> Text
@@ -22,9 +23,18 @@ enum ParallelModelPreparation {
         // the parent stage must include that drain, not just the first error.
         defer { timing?.mark(.modelAssembly) }
         return try await withThrowingTaskGroup(of: Part<Tokenizer, Image, Text>.self) { group in
-            group.addTask { .tokenizer(try await measured(.tokenizer, timing: timing, operation: tokenizer)) }
-            group.addTask { .image(try await measured(.imageModel, timing: timing, operation: image)) }
-            group.addTask { .text(try await measured(.textModel, timing: timing, operation: text)) }
+            group.addTask {
+                .tokenizer(try await measured(.tokenizer, step: .tokenizer, timing: timing,
+                                             startupProgress: startupProgress, operation: tokenizer))
+            }
+            group.addTask {
+                .image(try await measured(.imageModel, step: .imageModel, timing: timing,
+                                         startupProgress: startupProgress, operation: image))
+            }
+            group.addTask {
+                .text(try await measured(.textModel, step: .textModel, timing: timing,
+                                        startupProgress: startupProgress, operation: text))
+            }
             var loadedTokenizer: Tokenizer?
             var loadedImage: Image?
             var loadedText: Text?
@@ -44,7 +54,8 @@ enum ParallelModelPreparation {
     }
 
     private static func measured<Value: Sendable>(
-        _ stage: LaunchTimingStage, timing: LaunchTimingRecorder?,
+        _ stage: LaunchTimingStage, step: StartupStep, timing: LaunchTimingRecorder?,
+        startupProgress: StartupProgressRecorder?,
         operation: @Sendable () async throws -> Value
     ) async throws -> Value {
         // A child cancelled before execution must not invent a load interval.
@@ -54,6 +65,7 @@ enum ParallelModelPreparation {
             let value = try await operation()
             try Task.checkCancellation()
             timing?.endComponent(span, outcome: .completed)
+            startupProgress?.complete(step)
             return value
         } catch is CancellationError {
             timing?.endComponent(span, outcome: .interrupted)

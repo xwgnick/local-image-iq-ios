@@ -49,6 +49,21 @@ def swift_source(path: Path) -> str:
 
 
 class BrandingTests(unittest.TestCase):
+    def swift_block(self, source: str, declaration: str) -> str:
+        """Read one current brace-delimited block, ignoring braces in strings."""
+        match = re.search(declaration + r"\s*\{", source)
+        self.assertIsNotNone(match, declaration)
+        assert match is not None
+        depth = 1
+        for token in re.finditer(r'"(?:\\.|[^"\\])*"|[{}]', source[match.end():]):
+            if token[0] == "{":
+                depth += 1
+            elif token[0] == "}":
+                depth -= 1
+            if depth == 0:
+                return source[match.end():match.end() + token.start()]
+        self.fail(f"Unclosed Swift block: {declaration}")
+
     def png_info(self, path: Path):
         """Read IHDR and walk chunk boundaries so tRNS means a real PNG chunk."""
         self.assertTrue(path.is_file(), f"Missing generated asset: {path}")
@@ -300,6 +315,69 @@ class BrandingTests(unittest.TestCase):
         )
         self.assertNotRegex(visible, r"\b(?:Text|Label|TextField|SecureField|TextEditor|ProgressView|Gauge)\s*(?:\(|\{)")
         self.assertNotRegex(source, r"\b(?:systemName|systemImage)\s*:")
+        self.assertNotRegex(source, r"\b(?:Circle|Ellipse|RoundedRectangle|Path|Canvas|GeometryReader|TimelineView|KeyframeAnimator|PhaseAnimator)\b")
+        self.assertNotRegex(source, r"\.(?:animation|transition|contentTransition|repeatForever|symbolEffect)\s*\(")
+        self.assertNotRegex(source, r"\b(?:withAnimation|withTransaction)\s*(?:\(|\{)")
+        self.assertNotRegex(source, r"@(?:State|StateObject)|\.(?:task|onAppear|onChange|onReceive)\s*(?:\(|\{)")
+
+        # The ONLY visible-progress exception is the approved deterministic
+        # capsule. Do not exempt a whole file/component from the guards above.
+        bar = self.swift_block(source, r"struct\s+StartupStepProgressBar\s*:\s*View")
+        body = self.swift_block(bar, r"var\s+body\s*:\s*some\s+View")
+        expected_body = '''
+            ZStack(alignment: .leading) {
+                Capsule().fill(IQStyle.line)
+                if fillWidth > 0 {
+                    Capsule().fill(IQStyle.accent)
+                        .frame(width: fillWidth)
+                }
+            }
+            .frame(width: StartupAppearance.progressWidth, height: StartupAppearance.progressHeight)
+            .clipShape(Capsule())
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("启动准备进度")
+            .accessibilityValue(accessibilityProgress)
+            .accessibilityIdentifier("startup-step-progress")
+            .transaction { transaction in
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        '''
+        self.assertEqual(re.sub(r"\s+", "", body), re.sub(r"\s+", "", expected_body))
+        outside_bar = source.replace(bar, "", 1)
+        self.assertNotRegex(outside_bar, r"\bCapsule\s*\(")
+        without_hit_target = re.sub(r"\.contentShape\(Rectangle\(\)\)", "", outside_bar)
+        self.assertNotRegex(without_hit_target, r"\bRectangle\s*\(")
+        self.assertNotRegex(source, r"\b(?:VStack|HStack|Spacer)\s*\(|\.(?:padding|position)\s*\(")
+        for name, value in (("progressWidth", 144), ("progressHeight", 3), ("progressGap", 28)):
+            self.assertRegex(source, rf"\bstatic\s+let\s+{name}\s*:\s*CGFloat\s*=\s*{value}\b")
+        self.assertRegex(bar, r"guard\s+let\s+fraction,\s*fraction\.isFinite\s+else\s*\{\s*return\s+nil\s*\}")
+        self.assertRegex(bar, r"return\s+min\(max\(fraction,\s*0\),\s*1\)")
+        self.assertRegex(bar, r"StartupAppearance\.progressWidth\s*\*\s*CGFloat\(Self\.sanitizedFraction\(fraction\)\s*\?\?\s*0\)")
+
+        content = self.swift_block(source, r"struct\s+StartupContent\s*:\s*View")
+        self.assertRegex(content, r"onOpenHome:\s*@escaping\s*\(\)\s*->\s*Void,\s*progressFraction:\s*Double\?\s*=\s*nil\s*\)")
+        gate = self.swift_block(content, r"var\s+visibleProgressFraction\s*:\s*Double\?")
+        self.assertRegex(gate, r"\A\s*guard\s+phase\s*==\s*\.checkingLibrary\s*\|\|\s*phase\s*==\s*\.preparingSearch\s+else\s*\{\s*return\s+nil\s*\}\s*return\s+StartupStepProgressBar\.sanitizedFraction\(progressFraction\)\s*\Z")
+        self.assertRegex(source, r"progressFraction:\s*state\.startupProgressFraction\s*\)")
+        self.assertEqual(len(re.findall(r"\bStartupStepProgressBar\s*\(", source)), 1)
+        self.assertEqual(len(re.findall(r"\.offset\s*\(", source)), 1)
+        self.assertRegex(content, r"\.frame\(maxWidth:\s*\.infinity,\s*maxHeight:\s*\.infinity\)\s*\.overlay\(alignment:\s*\.center\)\s*\{\s*if\s+let\s+fraction\s*=\s*visibleProgressFraction\s*\{\s*StartupStepProgressBar\(fraction:\s*fraction\)\s*\.offset\(y:\s*StartupAppearance\.iconSize\s*/\s*2\s*\+\s*StartupAppearance\.progressGap\s*\+\s*StartupAppearance\.progressHeight\s*/\s*2\)\s*\}\s*\}\s*\.ignoresSafeArea\(\)")
+        self.assertRegex(content, r"\.transaction\s*\{\s*transaction\s+in\s+transaction\.animation\s*=\s*nil\s+transaction\.disablesAnimations\s*=\s*true\s*\}")
+
+        # Original exclusive long-press/tap and all three VoiceOver actions stay
+        # on the failure icon. The new bar must introduce no recovery action.
+        self.assertRegex(content, r"if\s+canRecover\s*\{\s*logo\s*\.contentShape\(Rectangle\(\)\)\s*\.gesture\(LongPressGesture\(minimumDuration:\s*1\)\.exclusively\(before:\s*TapGesture\(\)\)\s*\.onEnded\(handleRecoveryGesture\)\)")
+        self.assertRegex(content, r"var\s+canRecover:\s*Bool\s*\{\s*phase\s*==\s*\.failed\s*\}")
+        for action in ("retryIfFailed", "openHomeIfFailed"):
+            self.assertRegex(content, rf"func\s+{action}\(\)\s*\{{\s*guard\s+canRecover\s+else\s*\{{\s*return\s*\}}")
+        self.assertIn('.accessibilityAction { retryIfFailed() }', content)
+        self.assertIn('.accessibilityAction(named: Text("重试")) { retryIfFailed() }', content)
+        self.assertIn('.accessibilityAction(named: Text("先进入应用")) { openHomeIfFailed() }', content)
+        self.assertEqual(len(re.findall(r"\.accessibilityAction\b", source)), 3)
+        self.assertEqual(len(re.findall(r"\.gesture\s*\(", source)), 1)
+        self.assertNotRegex(source, r"\.(?:onTapGesture|onLongPressGesture|simultaneousGesture|highPriorityGesture)\s*(?:\(|\{)")
 
     def test_root_keeps_ready_gate_real_start_task_and_status_bar_rule(self):
         source = swift_source(ROOT / "App" / "LocalImageIQApp.swift")
@@ -319,6 +397,9 @@ class BrandingTests(unittest.TestCase):
         for relative in ("App/UI/StartupView.swift", "App/LocalImageIQApp.swift"):
             with self.subTest(file=relative):
                 self.assertNotRegex(swift_source(ROOT / relative), delay)
+        startup = swift_source(ROOT / "App" / "UI" / "StartupView.swift")
+        self.assertNotRegex(startup, r"\b(?:Timer|CADisplayLink|TimelineView|Date|ContinuousClock|SuspendingClock|DispatchQueue|Task|Thread)\b")
+        self.assertNotRegex(startup, r"\b(?:timeIntervalSince|systemUptime|elapsed|deadline)\w*\b")
 
 
 if __name__ == "__main__":
