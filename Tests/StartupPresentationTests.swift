@@ -203,15 +203,23 @@ final class StartupPresentationTests: XCTestCase {
         }
     }
 
-    func testProgressPixelsAreIdenticalWithReduceMotionOnAndOff() throws {
+    func testProgressPixelsAreIdenticalWithInheritedAnimationEnabledAndDisabled() throws {
+        // accessibilityReduceMotion is read-only in SwiftUI. Do not force-cast
+        // its key path or pretend to change the system accessibility setting.
+        // Exercise the supported transaction input; the component disables all
+        // inherited animation. This is not a device Reduce Motion toggle test.
         for scheme in [ColorScheme.light, .dark] {
             for fraction in [0.0, 0.375, 0.75, 1] {
                 let content = startup(phase: .preparingSearch, fraction: fraction)
-                let ordinary = try nativePixels(content.environment(\.accessibilityReduceMotion, false),
-                                                size: phone, scheme: scheme)
-                let reduced = try nativePixels(content.environment(\.accessibilityReduceMotion, true),
-                                               size: phone, scheme: scheme)
-                XCTAssertEqual(ordinary.rgba, reduced.rgba)
+                let animatedParent = try nativePixels(content.transaction {
+                    $0.animation = .linear(duration: 1)
+                    $0.disablesAnimations = false
+                }, size: phone, scheme: scheme)
+                let staticParent = try nativePixels(content.transaction {
+                    $0.animation = nil
+                    $0.disablesAnimations = true
+                }, size: phone, scheme: scheme)
+                XCTAssertEqual(animatedParent.rgba, staticParent.rgba)
             }
         }
     }
