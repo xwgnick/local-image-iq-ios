@@ -44,6 +44,15 @@ final class AppState: ObservableObject {
     @Published private(set) var authorization = PhotoLibraryClient.authorization
     @Published private(set) var summary = LibrarySummary()
     @Published private(set) var results: [SearchHit] = []
+    private struct ResultPages {
+        let id = UUID()
+        let response: SearchResponse
+        let pageSize: Int
+    }
+    private var resultPages: ResultPages?
+    var resultSessionID: UUID? { resultPages?.id }
+    var totalResultCount: Int { resultPages?.response.hits.count ?? results.count }
+    var hasMoreResults: Bool { results.count < totalResultCount }
     @Published private(set) var completedQuery: String?
     @Published private(set) var completedSearchQuery: SearchQueryResolution?
     @Published private(set) var translationAvailability: QueryTranslationAvailability = .unchecked
@@ -73,7 +82,8 @@ final class AppState: ObservableObject {
     @Published private(set) var actionHint: String?
     @Published var query = "" { didSet { if oldValue != query { searchSettingsChanged() } } }
     @Published var locationWeight: Double = 0.6 { didSet { if oldValue != locationWeight { searchSettingsChanged() } } }
-    @Published var resultLimit = 3 { didSet { if oldValue != resultLimit { searchSettingsChanged() } } }
+    /// Page size, not a global Top-K cutoff. Existing preference changes still invalidate a search.
+    @Published var resultLimit = 12 { didSet { if oldValue != resultLimit { searchSettingsChanged() } } }
     @Published var allowICloudDownload = false
     @Published var selection: Selection?
 
@@ -333,15 +343,39 @@ final class AppState: ObservableObject {
 
     func search(useOriginal: Bool = false) {
         guard canSearch else { return }
-        let text = query, limit = resultLimit, weight = Float(locationWeight)
+        let text = query, weight = Float(locationWeight)
         let translate = chineseSearchEnabled && !useOriginal
         invalidateDisplayedPhotos()
         schedule(.searching) { [worker, queryTranslator] _ in
             let resolved = try await Self.resolve(text, translate: translate, using: queryTranslator)
             try Task.checkCancellation()
-            let response = try await worker.search(text: resolved.effective, limit: limit, locationWeight: weight)
+            // Rank the complete accessible snapshot once. Subsequent pages only
+            // expose a prefix; they never rerun translation, encoding or centering.
+            let response = try await worker.search(text: resolved.effective, limit: Int.max, locationWeight: weight)
             try Task.checkCancellation()
             return .search(response, resolved)
+        }
+    }
+
+    /// Idempotent for a particular visible-page boundary. Old scroll callbacks
+    /// cannot append to a newer search, even when its visible count is identical.
+    func loadMoreResults(sessionID: UUID, after visibleCount: Int) {
+        guard isForeground, !isBusy, let pages = resultPages, pages.id == sessionID,
+              completedQuery != nil, results.count == visibleCount, hasMoreResults else { return }
+        do {
+            authorization = authorizationStatus()
+            guard canRead else { throw AppFailure.permission }
+            let remaining = pages.response.hits.count - visibleCount
+            let end = visibleCount + min(pages.pageSize, remaining)
+            let page = Array(pages.response.hits[visibleCount..<end])
+            try pages.response.validatePageAccess(page.map(\.id))
+            results.append(contentsOf: page)
+        } catch {
+            invalidateDisplayedPhotos()
+            thumbnails.clear()
+            errorMessage = "照片访问权限或图库内容已更改，请重新搜索。"
+            actionHint = "Check Photos access and search again. Your saved index is unchanged."
+            status = "Search pages invalidated after an access change."
         }
     }
 
@@ -444,6 +478,9 @@ final class AppState: ObservableObject {
 
     func cancel() {
         operationTask?.cancel()
+        // A completed result session has no task to cancel; still discard its
+        // cached continuation so an old scroll event cannot append another page.
+        if resultPages != nil { invalidateDisplayedPhotos() }
         status = "Cancelling… completed index records are kept."
     }
 
@@ -463,6 +500,7 @@ final class AppState: ObservableObject {
 
     private func invalidateDisplayedPhotos() {
         dismissPhotoCheck()
+        resultPages = nil
         results = []; selection = nil; completedQuery = nil; completedSearchQuery = nil
     }
 
@@ -516,9 +554,15 @@ final class AppState: ObservableObject {
                 case .search(let response, let query):
                     self.authorization = self.authorizationStatus()
                     guard self.canRead else { throw AppFailure.permission }
-                    try response.validateAccess()
+                    let pageSize = max(1, self.resultLimit)
+                    let firstPage = Array(response.hits.prefix(pageSize))
+                    // Worker already validated the complete scoring snapshot.
+                    // On MainActor recheck its generation and only exposed IDs,
+                    // not thousands of offscreen assets before showing page one.
+                    try response.validatePageAccess(firstPage.map(\.id))
                     self.summary = response.summary
-                    self.results = response.hits
+                    self.resultPages = ResultPages(response: response, pageSize: pageSize)
+                    self.results = firstPage
                     self.completedSearchQuery = query
                     self.completedQuery = query.original
                     self.status = "\(response.hits.count) results · exact local scores, not probabilities."

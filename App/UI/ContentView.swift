@@ -7,11 +7,13 @@ struct ContentView: View {
     @State private var showLibrary = false
     @State private var showSettings = false
     @State private var compactGrid = false
+    @State private var visiblePageBoundary: ResultPageBoundaryValue?
     @FocusState private var isSearchFocused: Bool
     private var showingResults: Bool { state.completedQuery != nil || state.activity == .searching }
 
     var body: some View {
         NavigationStack {
+            GeometryReader { viewport in
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
@@ -20,16 +22,28 @@ struct ContentView: View {
                         translationSummary
                         if !showingResults && !isSearchFocused { suggestions }
                         searchContent
+                        if state.hasMoreResults, let session = state.resultSessionID {
+                            ResultPageBoundary(sessionID: session, visibleCount: state.results.count)
+                        }
                     }
                     .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 24)
                     .frame(maxWidth: 800).frame(maxWidth: .infinity)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .coordinateSpace(name: ResultPageBoundary.coordinateSpace)
+                .onPreferenceChange(ResultPageBoundaryPreference.self) { boundary in
+                    visiblePageBoundary = boundary
+                    requestVisiblePage(boundary, viewportHeight: viewport.size.height)
+                }
+                .onChange(of: state.isBusy) { _, busy in
+                    if !busy { requestVisiblePage(visiblePageBoundary, viewportHeight: viewport.size.height) }
+                }
                 .accessibilityIdentifier("library-scroll")
                 .onChange(of: state.completedQuery) { _, query in
                     guard query != nil else { return }
                     withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("search-anchor", anchor: .top) }
                 }
+            }
             }
             .background(IQStyle.background)
             .foregroundStyle(IQStyle.text)
@@ -224,7 +238,7 @@ struct ContentView: View {
         } else if !state.results.isEmpty {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(state.results.count) 张候选照片").font(.headline)
+                    Text("已显示 \(state.results.count) 张候选照片").font(.headline)
                     Text("最相近的在前").font(.caption).foregroundStyle(IQStyle.secondary)
                 }
                 Spacer()
@@ -270,4 +284,9 @@ struct ContentView: View {
     }
 
     private func submitSearch() { isSearchFocused = false; state.search() }
+
+    private func requestVisiblePage(_ boundary: ResultPageBoundaryValue?, viewportHeight: CGFloat) {
+        guard let boundary, boundary.frame.minY < viewportHeight, boundary.frame.maxY > 0 else { return }
+        state.loadMoreResults(sessionID: boundary.sessionID, after: boundary.visibleCount)
+    }
 }

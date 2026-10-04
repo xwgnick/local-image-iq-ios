@@ -98,9 +98,9 @@ struct SettingsSheet: View {
 
     private var searchSection: some View {
         Section {
-            Picker("结果数量", selection: $state.resultLimit) {
-                Text("前3张").tag(3).accessibilityIdentifier("result-limit-3")
-                Text("前12张").tag(12).accessibilityIdentifier("result-limit-12")
+            Picker("每批显示", selection: $state.resultLimit) {
+                Text("3张").tag(3).accessibilityIdentifier("result-limit-3")
+                Text("12张").tag(12).accessibilityIdentifier("result-limit-12")
             }
             .pickerStyle(.menu)
             .accessibilityIdentifier("result-limit")
@@ -160,7 +160,7 @@ struct SettingsSheet: View {
         } header: {
             Text("搜索")
         } footer: {
-            Text("修改后清空当前结果，下次搜索时生效。")
+            Text("默认每批显示12张，滑到列表底部继续显示下一批。修改后清空当前结果，下次搜索时生效。")
         }
         .listRowBackground(IQStyle.surface)
     }

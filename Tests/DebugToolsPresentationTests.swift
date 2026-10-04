@@ -133,7 +133,7 @@ final class DebugToolsPresentationTests: XCTestCase {
         XCTAssertTrue(c.state.modelsReady)
         XCTAssertFalse(c.state.canRead)
         XCTAssertTrue(c.state.chineseSearchEnabled)
-        XCTAssertEqual(c.state.resultLimit, 3)
+        XCTAssertEqual(c.state.resultLimit, 12)
         XCTAssertEqual(c.state.locationWeight, 0.6)
         XCTAssertFalse(c.state.allowICloudDownload)
         c.baseline = DebugPresentationSnapshot(c.state)

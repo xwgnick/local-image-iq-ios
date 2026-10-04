@@ -93,9 +93,10 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["设置"].exists)
         let picker = app.descendants(matching: .any).matching(identifier: "result-limit").firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        // Production uses a menu Picker with 前3张 / 前12张, not a segmented
+        // Production uses a page-size menu Picker with 3张 / 12张, not a segmented
         // control. Check its stable identifier; do not guess private menu nodes.
-        expectResultLimit("前3张", picker: picker)
+        XCTAssertTrue(picker.label.contains("每批显示"))
+        expectResultLimit("12张", picker: picker)
         let form = try sheetForm()
         // debug-advanced identifies the Text label ONLY, not its parent button.
         let advanced = app.buttons["高级设置"]
@@ -103,10 +104,10 @@ final class PresentationNavigationTests: XCTestCase {
         for element in settingsDebugElements { expectAbsent(element) }
         attach("settings-live")
         picker.tap()
-        let topTwelve = app.buttons["前12张"]
-        expectHittable(topTwelve)
-        topTwelve.tap()
-        expectResultLimit("前12张", picker: picker)
+        let pageOfThree = app.buttons["3张"]
+        expectHittable(pageOfThree)
+        pageOfThree.tap()
+        expectResultLimit("3张", picker: picker)
 
         assertSettingsDebugOff(in: form)
         setDebugTools(true, in: form)
@@ -126,7 +127,17 @@ final class PresentationNavigationTests: XCTestCase {
         setDebugTools(false, in: form)
         assertSettingsDebugOff(in: form)
         scrollTo(picker, in: form, swipeUp: false)
-        expectResultLimit("前12张", picker: picker)
+        expectResultLimit("3张", picker: picker)
+        done.tap()
+        expectAbsent(done)
+        expectHittable(field)
+        XCTAssertEqual(field.value as? String, preservedQuery)
+        assertHomeControls()
+
+        // Returning to Settings must retain the chosen page size in this session.
+        app.buttons["open-settings"].tap()
+        expectHittable(done)
+        expectResultLimit("3张", picker: picker)
         done.tap()
         expectAbsent(done)
         expectHittable(field)

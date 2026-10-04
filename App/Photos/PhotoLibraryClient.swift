@@ -86,7 +86,7 @@ final class PhotoRequestGate<Value>: @unchecked Sendable {
 
 /// Only the change callback is mutable, protected by callbackLock. PhotoKit's
 /// thread-safe manager is shared, while PHAsset instances stay within each call.
-final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLibraryIndexing, @unchecked Sendable {
+final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLibraryIndexing, PhotoThumbnailProviding, @unchecked Sendable {
     private let manager = PHImageManager.default()
     private let callbackLock = NSLock()
     private var changeHandler: (@Sendable () -> Void)?
@@ -248,6 +248,51 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
                 gate.setRequestID(request)
             }
         }, onCancel: { gate.cancel() })
+    }
+
+    /// Result tiles use current asset pixels independently of the stored embedding
+    /// revision. This display-only path never updates or rebuilds the index.
+    func thumbnailImage(id: String, targetSize: CGSize, networkAllowed: Bool = false) async throws -> UIImage {
+        try Task.checkCancellation()
+        guard Self.canRead else { throw AppFailure.permission }
+        let authorization = Self.authorization
+        let generation = changeGeneration
+        guard let selectedAsset = asset(id: id) else {
+            throw AppFailure.photo("This photo is no longer accessible.")
+        }
+        guard let pixels = DisplayThumbnailLoader.targetSize(points: targetSize, displayScale: 1) else {
+            throw AppFailure.photo("Invalid thumbnail size.")
+        }
+        let revision = PhotoRevision(asset: selectedAsset)
+        try validateThumbnail(id: id, revision: revision, authorization: authorization, generation: generation)
+        let image = try await DisplayThumbnailLoader.load(
+            targetSize: pixels, networkAllowed: networkAllowed,
+            request: { [self, manager] targetSize, contentMode, options, callback in
+                // Recheck between fallback stages as well as across the await.
+                do {
+                    try validateThumbnail(id: id, revision: revision,
+                                          authorization: authorization, generation: generation)
+                } catch {
+                    callback(nil, [PHImageErrorKey: error])
+                    return PHInvalidImageRequestID
+                }
+                return manager.requestImage(for: selectedAsset, targetSize: targetSize, contentMode: contentMode,
+                                            options: options, resultHandler: callback)
+            }, cancel: { [manager] in manager.cancelImageRequest($0) })
+        try validateThumbnail(id: id, revision: revision, authorization: authorization, generation: generation)
+        return image
+    }
+
+    private func validateThumbnail(id: String, revision: PhotoRevision, authorization: PHAuthorizationStatus,
+                                   generation: UInt64?) throws {
+        try Task.checkCancellation()
+        guard Self.canRead else { throw AppFailure.permission }
+        guard Self.authorization == authorization, changeGeneration == generation,
+              revision.id == id, currentRevision(id: id) == revision else { throw CancellationError() }
+        // Metadata reads can race a permission change or PhotoKit notification.
+        guard Self.canRead else { throw AppFailure.permission }
+        guard Self.authorization == authorization, changeGeneration == generation else { throw CancellationError() }
+        try Task.checkCancellation()
     }
 
     func displayImage(id: String, targetSize: CGSize, networkAllowed: Bool = false) async throws -> UIImage {

@@ -9,34 +9,39 @@ struct PhotoThumbnailView: View {
     let photo: IndexedPhoto
     let cache: PhotoThumbnailCache
     let networkAllowed: Bool
+    @Environment(\.displayScale) private var displayScale
 
     private struct Request: Hashable {
         let id: String
         let revision: Double
         let networkAllowed: Bool
+        let pixelWidth: CGFloat
+        let pixelHeight: CGFloat
+
+        var targetSize: CGSize { CGSize(width: pixelWidth, height: pixelHeight) }
     }
 
     @State private var resolvedRequest: Request?
     @State private var image: UIImage?
     @State private var issue: PhotoPreviewIssue?
 
-    private var request: Request {
-        Request(id: photo.id, revision: photo.modificationTime, networkAllowed: networkAllowed)
-    }
-
     var body: some View {
         // The grid owns the aspect ratio. Constrain scaledToFill to the actual
         // proposal, not the image's intrinsic size or an independent square.
         GeometryReader { geometry in
+            let requested = DisplayThumbnailLoader.targetSize(points: geometry.size, displayScale: displayScale).map {
+                Request(id: photo.id, revision: photo.modificationTime, networkAllowed: networkAllowed,
+                        pixelWidth: $0.width, pixelHeight: $0.height)
+            }
             ZStack {
                 IQStyle.muted
-                if resolvedRequest == request, let image {
+                if resolvedRequest == requested, let image {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .clipped()
-                } else if resolvedRequest == request, let issue {
+                } else if resolvedRequest == requested, let issue {
                     VStack(spacing: 6) {
                         Image(systemName: issue.symbol).font(.title3)
                         Text(issue.localizedCaption).font(.caption2).lineLimit(1)
@@ -51,25 +56,28 @@ struct PhotoThumbnailView: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
-        }
-        .clipped()
-        .task(id: request) {
-            let requested = request
-            guard !Task.isCancelled else { return }
-            resolvedRequest = requested
-            image = nil
-            issue = nil
-            do {
-                let loaded = try await cache.image(id: requested.id, revision: requested.revision,
-                                                   networkAllowed: requested.networkAllowed)
-                try Task.checkCancellation()
-                guard resolvedRequest == requested else { return }
-                image = loaded
-            } catch {
-                guard !Task.isCancelled, resolvedRequest == requested else { return }
-                issue = PhotoPreviewIssue(error: error)
+            .task(id: requested) {
+                guard !Task.isCancelled else { return }
+                image = nil
+                issue = nil
+                resolvedRequest = requested
+                // A zero/invalid initial layout remains a placeholder, not a
+                // default-size request that could later mask the real tile.
+                guard let requested else { return }
+                do {
+                    let loaded = try await cache.image(id: requested.id, revision: requested.revision,
+                                                       targetSize: requested.targetSize,
+                                                       networkAllowed: requested.networkAllowed)
+                    try Task.checkCancellation()
+                    guard resolvedRequest == requested else { return }
+                    image = loaded
+                } catch {
+                    guard !Task.isCancelled, !(error is CancellationError), resolvedRequest == requested else { return }
+                    issue = PhotoPreviewIssue(error: error)
+                }
             }
         }
+        .clipped()
     }
 }
 

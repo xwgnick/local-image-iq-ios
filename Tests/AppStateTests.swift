@@ -10,7 +10,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(state.allowICloudDownload)
         XCTAssertFalse(state.debugToolsEnabled)
         XCTAssertEqual(state.locationWeight, 0.6)
-        XCTAssertEqual(state.resultLimit, 3)
+        XCTAssertEqual(state.resultLimit, 12, "The default is a display page size, not a global search cutoff")
         XCTAssertTrue(state.results.isEmpty)
         XCTAssertEqual(state.authorization, .notDetermined)
     }

@@ -23,7 +23,7 @@ final class PhotoCheckPresentationTests: XCTestCase {
         XCTAssertEqual(PhotoCheckFixtures.hits.count, 512)
         XCTAssertTrue(PhotoCheckFixtures.hits.allSatisfy { $0.photo.imageEmbedding.count == 768 })
         for hit in PhotoCheckFixtures.hits { try EmbeddingValidation.validateUnit(hit.photo.imageEmbedding) }
-        XCTAssertEqual(state.resultLimit, 3)
+        XCTAssertEqual(state.resultLimit, 12)
         XCTAssertEqual(state.locationWeight, 0.6)
         XCTAssertFalse(state.allowICloudDownload)
 
@@ -82,7 +82,7 @@ final class PhotoCheckPresentationTests: XCTestCase {
             XCTAssertEqual(request.locationWeight.bitPattern, Float(weight).bitPattern)
             XCTAssertEqual(request.locationWeight.bitPattern, search.locationWeight.bitPattern)
             XCTAssertEqual(report.locationWeight.bitPattern, request.locationWeight.bitPattern)
-            XCTAssertEqual(search.limit, 3)
+            XCTAssertEqual(search.limit, Int.max)
             assertGallery(state, matches: before)
         }
     }
@@ -129,8 +129,9 @@ final class PhotoCheckPresentationTests: XCTestCase {
             let state = await searchedState(worker: worker)
             let cancelled = expectation(description: "Search setting edit cancels the check")
             await startHeldCheck(state, worker: worker, cancelled: cancelled)
+            XCTAssertEqual(state.resultLimit, 12)
             if changeWeight { state.locationWeight = 0.25 }
-            else { state.resultLimit = 12 }
+            else { state.resultLimit = 3 }
             assertNoGallery(state)
             await fulfillment(of: [cancelled], timeout: 3)
             await worker.release(.check)
@@ -138,7 +139,7 @@ final class PhotoCheckPresentationTests: XCTestCase {
 
             XCTAssertEqual(state.query, PhotoCheckFixtures.galleryQuery)
             XCTAssertEqual(state.locationWeight, changeWeight ? 0.25 : 0.6)
-            XCTAssertEqual(state.resultLimit, changeWeight ? 3 : 12)
+            XCTAssertEqual(state.resultLimit, changeWeight ? 12 : 3)
             XCTAssertFalse(state.allowICloudDownload)
             assertNoGallery(state)
             assertNoCheckResultOrError(state)
@@ -405,6 +406,9 @@ final class PhotoCheckPresentationTests: XCTestCase {
         XCTAssertEqual(state.completedQuery, PhotoCheckFixtures.galleryQuery)
         XCTAssertEqual(state.results.count, state.resultLimit)
         XCTAssertEqual(state.results.map(\.id), Array(PhotoCheckFixtures.hits.prefix(state.resultLimit)).map(\.id))
+        XCTAssertEqual(state.totalResultCount, PhotoCheckFixtures.hits.count,
+                       "The initial page must not discard the rest of the worker's ranking")
+        XCTAssertTrue(state.hasMoreResults)
         state.selection = state.results.first.map { AppState.Selection(id: $0.id) }
         XCTAssertNotNil(state.selection)
     }
@@ -799,7 +803,8 @@ private actor PhotoCheckTestWorker: PhotoWorkServicing {
         begin(.search)
         defer { finish(.search) }
         observed.searchRequests.append(SearchRequest(text: text, limit: limit, locationWeight: locationWeight))
-        // All 512 candidates exist, but the gallery still honors the requested top K.
+        // Honor the worker request: AppState must ask for all 512 candidates
+        // with Int.max, then expose only its initial display-page prefix.
         return SearchResponse(summary: PhotoCheckFixtures.summary, hits: Array(PhotoCheckFixtures.hits.prefix(limit)))
     }
 

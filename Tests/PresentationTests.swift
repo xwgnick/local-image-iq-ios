@@ -68,7 +68,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertTrue(state.canIndex)
         XCTAssertFalse(state.canSearch, "An empty query must not enable search")
         XCTAssertNil(state.completedQuery)
-        XCTAssertEqual(state.resultLimit, 3)
+        XCTAssertEqual(state.resultLimit, 12)
         XCTAssertEqual(state.locationWeight, 0.6)
         try await snapshot(ContentView(state: state), id: "gold-ready-light", size: phone, appearance: .light)
         try await snapshot(ContentView(state: state), id: "gold-ready-dark", size: phone, appearance: .dark)
@@ -154,7 +154,7 @@ final class PresentationTests: XCTestCase {
             XCTAssertTrue(state.chineseSearchEnabled)
             XCTAssertTrue(state.debugToolsEnabled)
             XCTAssertEqual(state.translationLanguage, .simplified)
-            XCTAssertEqual(state.resultLimit, 3)
+            XCTAssertEqual(state.resultLimit, 12)
             XCTAssertEqual(state.locationWeight, 0.6)
             XCTAssertTrue(state.canIndex)
             XCTAssertEqual(state.summary.indexedCount, 12)
@@ -185,7 +185,9 @@ final class PresentationTests: XCTestCase {
                                                   networkAllowed: false)
             XCTFail("A synthetic ID must never resolve to a user's photo")
         } catch {
-            XCTAssertEqual(PhotoPreviewIssue(error: error).caption, "Unavailable")
+            XCTAssertEqual(PhotoPreviewIssue(error: error).caption,
+                           PhotoLibraryClient.canRead ? "Unavailable" : "No access",
+                           "The display cache now checks access before requesting a missing synthetic asset.")
         }
         try await snapshot(ContentView(state: state), id: "results-missing-assets", size: phone)
     }
@@ -304,7 +306,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertNil(state.errorMessage)
         let request = await worker.lastSearch
         XCTAssertEqual(request?.text, query)
-        XCTAssertEqual(request?.limit, 3)
+        XCTAssertEqual(request?.limit, Int.max, "AppState requests the full ranking, even for a three-hit fixture")
         XCTAssertEqual(request?.locationWeight, Float(0.6))
     }
 
@@ -381,7 +383,9 @@ final class PresentationTests: XCTestCase {
 
         @MainActor func change(_ state: AppState) {
             switch self {
-            case .resultCount: state.resultLimit = 12
+            case .resultCount:
+                XCTAssertEqual(state.resultLimit, 12)
+                state.resultLimit = 3
             case .locationWeight: state.locationWeight = 0.25
             }
         }

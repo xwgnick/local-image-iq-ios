@@ -724,6 +724,26 @@ final class PhotoIndexWorkerTests: XCTestCase {
         XCTAssertNil(oldPlace, "Only the explicit manual index may remove the obsolete label.")
     }
 
+    func testRankedPageValidatorChecksNewIDsAndRejectsLaterEditsWithoutWrites() async throws {
+        let records = (0..<25).map { WorkerTestRecord(String(format: "page-%02d", $0), .cloudOnly) }
+        let context = try makeWorker(records)
+        for index in 0..<25 {
+            try await seed(context, id: String(format: "page-%02d", index), model: cacheVersion, imageAxis: 0)
+        }
+        await context.store.close()
+        let before = try diskSnapshot(context.directory)
+        let response = try await context.worker.search(text: "query", limit: Int.max, locationWeight: 0.6)
+        XCTAssertEqual(response.hits.count, 25)
+        try response.validatePageAccess(Array(response.hits.prefix(12)).map(\.id))
+        try response.validatePageAccess(Array(response.hits[12..<24]).map(\.id))
+        try response.validatePageAccess([response.hits[24].id])
+        XCTAssertThrowsError(try response.validatePageAccess(["not-in-ranked-snapshot"]))
+        context.library.replace(Array(records.dropLast()) + [WorkerTestRecord("page-24", .cloudOnly, revision: 124)])
+        XCTAssertThrowsError(try response.validatePageAccess([response.hits[24].id]))
+        XCTAssertEqual(try diskSnapshot(context.directory), before)
+        XCTAssertTrue(context.library.requests.isEmpty, "Ranking and page validation never request image pixels.")
+    }
+
     func testSearchMasksStaleGeographyWithoutRewritingCachedPlace() async throws {
         let context = try makeWorker([WorkerTestRecord("current", .cloudOnly), WorkerTestRecord("stale", .cloudOnly)])
         try await seed(context, id: "current", model: cacheVersion, label: "Current Place", imageAxis: 0)

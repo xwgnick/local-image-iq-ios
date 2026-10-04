@@ -51,12 +51,17 @@ struct SearchResponse: Sendable {
     let hits: [SearchHit]
     /// Synchronous check at MainActor publication, after the worker's actor hop.
     let validateAccess: @Sendable () throws -> Void
+    /// A page uses the same ranked snapshot, but checks the newly exposed IDs.
+    /// PhotoKit's synchronous generation rejects any intervening library change.
+    let validatePageAccess: @Sendable ([String]) throws -> Void
 
     init(summary: LibrarySummary, hits: [SearchHit],
-         validateAccess: @escaping @Sendable () throws -> Void = {}) {
+         validateAccess: @escaping @Sendable () throws -> Void = {},
+         validatePageAccess: (@Sendable ([String]) throws -> Void)? = nil) {
         self.summary = summary
         self.hits = hits
         self.validateAccess = validateAccess
+        self.validatePageAccess = validatePageAccess ?? { _ in try validateAccess() }
     }
 }
 
@@ -496,20 +501,28 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         // Also catch edits/access changes whose PhotoKit observer callback has not
         // yet reached MainActor. Never publish scores centered on a stale library.
         try validateSearchAccess(snapshot, authorization: authorization)
-                let library = self.library
-                let returnedIDs = Set(hits.map(\.id))
-                let returnedRevisions = snapshot.filter { returnedIDs.contains($0.id) }
-                return SearchResponse(summary: LibrarySummary(authorizedCount: snapshot.count, authorizedCountKnown: true,
+        let library = self.library
+        let returnedIDs = Set(hits.map(\.id))
+        let returnedRevisions = Dictionary(snapshot.filter { returnedIDs.contains($0.id) }
+            .map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        let validatePage: @Sendable ([String]) throws -> Void = { ids in
+            guard library.canReadImages else { throw AppFailure.permission }
+            guard library.authorizationStatusRawValue == authorization,
+                  library.changeGeneration == generation,
+                  ids.allSatisfy({ id in
+                      guard let expected = returnedRevisions[id] else { return false }
+                      return library.currentRevision(id: id) == expected
+                  }),
+                  library.canReadImages, library.authorizationStatusRawValue == authorization,
+                  library.changeGeneration == generation else {
+                throw AppFailure.photo("Photo access changed before results could be displayed. Search again.")
+            }
+        }
+        return SearchResponse(summary: LibrarySummary(authorizedCount: snapshot.count, authorizedCountKnown: true,
                                                        indexedCount: counts.indexed, locatedCount: counts.located,
                                                        modelVersion: cacheVersion, placesDescription: metadata.coverageDescription),
-                                                            hits: hits, validateAccess: {
-                        guard library.canReadImages else { throw AppFailure.permission }
-                        guard library.authorizationStatusRawValue == authorization,
-                                    library.changeGeneration == generation,
-                                    returnedRevisions.allSatisfy({ library.currentRevision(id: $0.id) == $0 }) else {
-                                throw AppFailure.photo("Photo access changed before results could be displayed. Search again.")
-                        }
-                })
+                              hits: hits, validateAccess: { try validatePage(Array(returnedIDs)) },
+                              validatePageAccess: validatePage)
     }
 
     private func validateSearchAccess(_ snapshot: [PhotoRevision], authorization: Int?) throws {

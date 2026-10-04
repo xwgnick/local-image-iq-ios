@@ -125,7 +125,7 @@ final class IndexPlacesPresentationTests: XCTestCase {
             XCTAssertEqual(state.progress.placeChecked, 0)
             XCTAssertEqual(state.progress.gpsCount, 0, "Zero without observations remains unknown")
             XCTAssertEqual(state.locationWeight, 0.6)
-            XCTAssertEqual(state.resultLimit, 3)
+            XCTAssertEqual(state.resultLimit, 12)
             XCTAssertFalse(state.allowICloudDownload)
             if !entry.canIndex {
                 state.index()

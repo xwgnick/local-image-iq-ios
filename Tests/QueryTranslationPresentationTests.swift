@@ -169,7 +169,7 @@ final class QueryTranslationPresentationTests: XCTestCase {
         XCTAssertEqual(translator.translationRequests, translations, file: file, line: line)
         XCTAssertEqual(translator.prepareRequests, preparations, file: file, line: line)
         XCTAssertEqual(worker.searchRequests.map(\.text), searches, file: file, line: line)
-        XCTAssertEqual(worker.searchRequests.map(\.limit), searches.map { _ in 3 }, file: file, line: line)
+        XCTAssertEqual(worker.searchRequests.map(\.limit), searches.map { _ in Int.max }, file: file, line: line)
         XCTAssertEqual(worker.searchRequests.map { $0.weight.bitPattern },
                        searches.map { _ in Float(0.6).bitPattern }, file: file, line: line)
         XCTAssertEqual(worker.refreshCount, 1, "Rendering/translation must not refresh again", file: file, line: line)

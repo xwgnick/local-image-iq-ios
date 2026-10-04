@@ -503,7 +503,7 @@ final class LaunchStateTests: XCTestCase {
         let original = "  TEST Original MiXeD Query  "
         state.query = original
         state.locationWeight = 0.85
-        state.resultLimit = 12
+        state.resultLimit = 3 // Preserve a nondefault page size across launch.
         state.allowICloudDownload = true
         state.chineseSearchEnabled = false
         state.translationLanguage = .traditional
@@ -514,7 +514,7 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertEqual(state.summary.modelVersion, summary.modelVersion)
         XCTAssertEqual(state.summary.locatedCount, 1)
         XCTAssertEqual(state.locationWeight, 0.85)
-        XCTAssertEqual(state.resultLimit, 12)
+        XCTAssertEqual(state.resultLimit, 3)
         XCTAssertTrue(state.allowICloudDownload)
         XCTAssertFalse(state.chineseSearchEnabled)
         XCTAssertEqual(state.translationLanguage, .traditional)
@@ -523,7 +523,7 @@ final class LaunchStateTests: XCTestCase {
         await state.waitUntilIdle()
         let request = await worker.searchRequests.last
         XCTAssertEqual(request?.text, original)
-        XCTAssertEqual(request?.limit, 12)
+        XCTAssertEqual(request?.limit, Int.max)
         XCTAssertEqual(request?.locationWeight, Float(0.85))
         XCTAssertEqual(state.completedQuery, original)
         XCTAssertEqual(state.completedSearchQuery?.effective, original)
@@ -535,7 +535,7 @@ final class LaunchStateTests: XCTestCase {
         let state = makeState(worker)
         XCTAssertEqual(state.launchPhase, .pending)
         XCTAssertEqual(state.locationWeight, 0.6)
-        XCTAssertEqual(state.resultLimit, 3)
+        XCTAssertEqual(state.resultLimit, 12)
         XCTAssertFalse(state.allowICloudDownload)
         XCTAssertFalse(state.debugToolsEnabled)
         XCTAssertTrue(state.query.isEmpty)
@@ -569,10 +569,10 @@ final class LaunchStateTests: XCTestCase {
         let request = await worker.searchRequests.last
         XCTAssertEqual(network, [false])
         XCTAssertEqual(request?.text, "TEST query")
-        XCTAssertEqual(request?.limit, 3)
+        XCTAssertEqual(request?.limit, Int.max)
         XCTAssertEqual(request?.locationWeight, Float(0.6))
         XCTAssertEqual(state.locationWeight, 0.6)
-        XCTAssertEqual(state.resultLimit, 3)
+        XCTAssertEqual(state.resultLimit, 12)
         XCTAssertFalse(state.allowICloudDownload)
         await assertCalls(worker, launches: 1, indexes: 1, searches: 1)
     }

@@ -117,7 +117,8 @@ final class QueryTranslationStateTests: XCTestCase {
         await drain(context)
 
         assertResolution(context, original: original, effective: effective, translated: true)
-        assertLastSearch(context, text: effective, limit: 12, weight: 0.37)
+        XCTAssertEqual(context.state.resultLimit, 12, "The page size must not become the worker's ranking limit")
+        assertLastSearch(context, text: effective, weight: 0.37)
         let expected = context.worker.response
         XCTAssertEqual(context.state.results.map(\.id), expected.hits.map(\.id))
         XCTAssertEqual(context.state.results.map { $0.score.bitPattern }, expected.hits.map { $0.score.bitPattern })
@@ -684,14 +685,14 @@ final class QueryTranslationStateTests: XCTestCase {
     }
 
     private func assertLastSearch(_ context: QueryTranslationTestContext, text: String,
-                                  limit: Int = 3, weight: Double = 0.6,
+                                  weight: Double = 0.6,
                                   file: StaticString = #filePath, line: UInt = #line) {
         guard let request = context.worker.searchRequests.last else {
             XCTFail("The worker must receive exactly the resolved search text", file: file, line: line)
             return
         }
         XCTAssertEqual(Array(request.text.utf8), Array(text.utf8), file: file, line: line)
-        XCTAssertEqual(request.limit, limit, file: file, line: line)
+        XCTAssertEqual(request.limit, Int.max, file: file, line: line)
         XCTAssertEqual(request.weight.bitPattern, Float(weight).bitPattern, file: file, line: line)
         XCTAssertEqual(context.state.results.map(\.id), context.worker.response.hits.map(\.id), file: file, line: line)
         XCTAssertEqual(context.state.results.map { $0.score.bitPattern },
@@ -786,7 +787,9 @@ final class QueryTranslationStateTests: XCTestCase {
         case .background:
             context.state.enterBackground()
             context.state.refresh() // Still backgrounded: must not schedule worker work.
-        case .limit: context.state.resultLimit = 12
+        case .limit:
+            XCTAssertEqual(context.state.resultLimit, 12)
+            context.state.resultLimit = 3
         }
         // Cancellation is intentionally not an early continuation resume.
         XCTAssertEqual(context.translator.activeCalls, 1)
@@ -805,7 +808,7 @@ final class QueryTranslationStateTests: XCTestCase {
         assertTranslationCounts(context, availability: 1, translation: phase == .translation ? 1 : 0, preparation: 0)
         XCTAssertEqual(context.state.query, change == .query ? "另一个查询" : "小狗和白色的笔")
         XCTAssertEqual(context.state.locationWeight, change == .weight ? 0.25 : 0.6)
-        XCTAssertEqual(context.state.resultLimit, change == .limit ? 12 : 3)
+        XCTAssertEqual(context.state.resultLimit, change == .limit ? 3 : 12)
         XCTAssertEqual(context.state.chineseSearchEnabled, change != .toggle)
         assertNoIndexWork(context)
     }
