@@ -47,3 +47,7 @@ SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 原生测试、合成截图及原始 IPA 校验**不替代真机安装、实际照片画质、覆盖率、延迟、RSS／发热和系统行为验证**。本次只检查小型 IPA 版本／LaunchScreen 元数据，没有再次全量比较模型权重。
 
 项目未设置项目级许可证；第三方模型、地点数据及代码许可分别保留，`redistributionApproved: false` 与人工再分发审查不变。公开可下载不等于法律审核完成，当前未提交商店。公开范围见 [docs/PUBLIC_REPOSITORY.md](docs/PUBLIC_REPOSITORY.md)。
+
+## 历史文档
+
+[README_HISTORY_THROUGH_BUILD22.md](README_HISTORY_THROUGH_BUILD22.md) 完整保留提交 `2075334` 的 README 原文（截至 build 22），包括历次交付、失败与修正记录。归档位于仓库根目录，原相对链接保持不变；其中“当前／本轮”等仅指当时版本，现行状态以上文为准。
