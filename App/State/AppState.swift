@@ -478,9 +478,9 @@ final class AppState: ObservableObject {
 
     func cancel() {
         operationTask?.cancel()
-        // A completed result session has no task to cancel; still discard its
-        // cached continuation so an old scroll event cannot append another page.
-        if resultPages != nil { invalidateDisplayedPhotos() }
+        // Search cancellation revokes its continuation. Cancelling an unrelated
+        // diagnostic/translation task must preserve the gallery underneath it.
+        if resultPages != nil, activity == nil || activity == .searching { invalidateDisplayedPhotos() }
         status = "Cancelling… completed index records are kept."
     }
 

@@ -439,6 +439,8 @@ final class PhotoCheckPresentationTests: XCTestCase {
         let worker = PhotoCheckTestWorker(outcome: outcome)
         let state = await searchedState(worker: worker)
         let before = GallerySnapshot(state)
+        let pageSession = state.resultSessionID
+        let candidateCount = state.totalResultCount
         let cancelled = expectation(description: "Check cancellation reached the suspended worker")
         await startHeldCheck(state, worker: worker, cancelled: cancelled)
         switch stop {
@@ -456,6 +458,8 @@ final class PhotoCheckPresentationTests: XCTestCase {
         }
         await fulfillment(of: [cancelled], timeout: 3)
         assertGallery(state, matches: before)
+        XCTAssertEqual(state.resultSessionID, pageSession, "Cancelling a photo diagnostic must retain the search continuation.")
+        XCTAssertEqual(state.totalResultCount, candidateCount)
         assertNoCheckResultOrError(state)
         let suspended = await worker.observations()
         XCTAssertEqual(suspended.finishedChecks, 0)
@@ -465,6 +469,8 @@ final class PhotoCheckPresentationTests: XCTestCase {
         await state.waitUntilIdle()
 
         assertGallery(state, matches: before)
+        XCTAssertEqual(state.resultSessionID, pageSession)
+        XCTAssertEqual(state.totalResultCount, candidateCount)
         assertNoCheckResultOrError(state)
         XCTAssertFalse(state.isBusy)
         let observed = await worker.observations()
