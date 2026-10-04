@@ -5,7 +5,30 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.5.9（build 22）— 结果网格 HQ／显示分页已交付，可覆盖安装
+## 当前：0.5.10（build 23）— HQ224 网格显示与实际来源诊断，已交付
+
+本地已校验包：[../build/device-download/37226908383/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37226908383/LocalImageIQ-iphoneos-unsigned.ipa)；另一台电脑使用 [公开 Release ci-37226908383-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37226908383-1)。Release **403175811**，9 项资产、已发布 prerelease，发布时间 **2026-10-04T19:35:19Z**。
+
+原始 IPA asset **610499393**，**1,418,651,398 字节**，SHA-256 **`8cfc2402bdd807d9a71e9e2d6f6b9be7bffc905e8a48a0a125344197303132ad`**。已完整流式核验长度／哈希，配套文件核验及 **7-Zip 26.03 全量 CRC PASS**；本机无需重下。记录见 [../build/device-download/37226908383/release-fetch-6c0ed0e5-4ff1-4614-959e-3c6e14043ce8.json](../build/device-download/37226908383/release-fetch-6c0ed0e5-4ff1-4614-959e-3c6e14043ce8.json)。原包校验不验证 Sideloadly 重签后的包或手机。
+
+[CI 37226908383](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37226908383)／[job 111508328530](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37226908383/job/111508328530)，最终源码 **`2075334aebd5c90abf0ee70b459e5645fe878d3b`**，第三次完整原生验证 SUCCESS；新 run attempt 1，不是整体首轮成功。核心 **79**、App **713（712 通过／1 既有 SQLite 跳过／0 失败）**、UI **11 全通过**。设备为 **arm64 Release、未签名、最低 iOS 17、SDK 18.5／Xcode 16.4**；详细测试与三轮历史仅见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+### 安装后只在同一结果网格取证
+
+1. 用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**；签名沿用下方第 1–5 节，已有有效索引和就绪语言包直接复用。
+2. 打开 **设置 → 显示调试工具**，保持原 iCloud 网络设置，然后**返回同一搜索结果网格**。不要求打开联网或下载原图。
+3. 截几张模糊格子及其页脚，保留**实际选中来源、请求尺寸、原始返回像素、降质是／否／未知、缓存命中及尝试路线**即可；不要求逐张截完整批次。
+4. **不要改去“本地预览对比”页取证**：它会另发请求，可能预热系统缓存，不能证明网格原来用了什么。全屏旧 Fast 路径未变，也不是本轮网格的验收页面。
+
+默认调试 **OFF**，普通网格外观保持原样；单独开关页脚不额外请求图片。大号辅助功能字体可能使诊断页脚受 tile 边界裁切，这是已知限制，不声称所有布局都完美。小图仍允许显示，低清回退不长期占用 HQ 缓存；**没有定时重试／自动实时升级**，只有下一次真实图片请求时重新评估。
+
+本版补齐大尺寸 HQ 不足时的同契约 HQ224 候选，不保证所有图片变清晰。父流程已查看的两张原生图是**合成诊断布局／占位图，不是用户 Photos**；**实际手机画质尚未确认**。选择与缓存规则见 [HQ224_DISPLAY_VERIFICATION.md](HQ224_DISPLAY_VERIFICATION.md)。
+
+首批 **12／续批 12** 的显示分页、手动索引、索引 HQ224／Fast、20 worker、模型 FP32／`.all`、schema／缓存身份与九步启动条不变。新版上下文首次启动可能按既有规则显示细条，无需为升级清库、重新索引或反复测速。显示分页仍保留全体候选 ID／向量在 RAM，不是有界内存分页，见 [HQ_RESULT_PAGING.md](HQ_RESULT_PAGING.md)。
+
+以下所有版本段落为历史；其中旧包、旧显示策略和迁移要求不替代页首 build 23 及下方现行第 1–5 节。
+
+## 历史：0.5.9（build 22）— 结果网格 HQ／显示分页交付记录
 
 **[本地已校验 IPA](../build/device-download/37208795156/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37208795156-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37208795156-1)。原包 **1,418,628,098 字节**，SHA-256 **`6244de326a29fe3daf22146dc4591f4d061a5565a21d051149e4a7f698dd9f28`**；完整流式哈希及 7-Zip 26.03 全量 CRC PASS，本机无需重下。另一台电脑从该公开 Release 下载并核对同一长度／哈希；9 项资产于 **2026-10-04T14:50:02Z** 发布，prerelease、非 draft／Latest。
 
@@ -826,8 +849,8 @@ Library 区分扫描时有 GPS／找到标签／无 GPS／无可用包／包外�
 设备运行比构建 SDK 更新的 iOS，不代表应用一定不能运行；最终仍需测试实际
 安装、系统授权、内存和推理行为，不声称云端模拟器替代了 iOS 26.6.1 真机验证。
 
-**当前升级目标 0.5.4 / build 17 已完成交付、本地哈希及 CRC 校验，可执行下方签名／安装步骤**。
-使用页首 CI 37022941546 对应的新包和哈希，不用历史 build 16 及更早包或失败 draft 代替。
+**当前升级目标 0.5.10 / build 23 已完成交付、本地哈希及 CRC 校验，可执行下方签名／安装步骤**。
+使用页首 CI 37226908383 对应的新包和哈希，不用 build 22 及更早包或失败 draft 代替。
 先前失败与修复过程见 [BUILD_STATUS.md](BUILD_STATUS.md)，不再是等待安装的阻塞。
 
 ## 1. 安装工具（由你操作）
@@ -855,13 +878,13 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 3. 等 Sideloadly 中的设备列表显示你的 iPhone。没有识别时先排查驱动／线缆，
    不反复提交 Apple 登录。
 
-## 3. 签名安装已交付的 build 17
+## 3. 签名安装已交付的 build 23
 
 1. 使用已完整下载并校验的
-  [../build/device-download/37022941546/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37022941546/LocalImageIQ-iphoneos-unsigned.ipa)，
-  Release／设备报告为 **0.5.4 / build 17**。另一台电脑从
-  [ci-37022941546-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37022941546-1)
-  下载，并按页首 **1,418,481,134 字节／SHA-256** 核验后再拖进 Sideloadly。
+  [../build/device-download/37226908383/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37226908383/LocalImageIQ-iphoneos-unsigned.ipa)，
+  Release／设备报告为 **0.5.10 / build 23**。另一台电脑从
+  [ci-37226908383-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37226908383-1)
+  下载，并按页首 **1,418,651,398 字节／SHA-256** 核验后再拖进 Sideloadly。
   公开 Release 单独提供 IPA，无需 GitHub 登录或解压外层 Actions ZIP；**不解压或修改 IPA 的 Payload**。
 2. 选择已连接的 iPhone，使用原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，
    不卸载、不清索引；Apple Account 必须是本人有权使用的账号。
@@ -870,7 +893,7 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 4. 不启用 dylib 注入、插件或其它改包功能。首次签名可能需要调整开发用 Bundle ID；
    保持之后重签所用账号／标识一致，不随意删除旧 App 以免丢失其本地索引。
 
-历史 **0.5.3 / build 16、0.5.2 / build 15** 及更早包身份与下载入口保留在本页历史章节，不是本次新包，
+历史 **0.5.9 / build 22** 及更早包身份与下载入口保留在本页历史章节，不是本次新包，
 不要求回退或重装旧版。
 
 ## 4. 手机上完成信任
@@ -881,21 +904,21 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
   要求重启和确认。菜单暂时不出现时，先完成一次配对／开发签名安装再检查。
 - 若遇到账户或设备管理政策禁止开发者模式，停止并确认政策，不绕过设备管理。
 
-## 5. 覆盖安装 build 17 后：沿用已有索引，需要新内容时才手动更新
+## 5. 覆盖安装 build 23 后：保留索引，在原网格查看诊断
 
-**build 17 原生测试、设备构建、发布与本地校验均已完成，用户侧签名／安装及真机运行尚未确认**。
-用户已确认 build 12 安装成功，此前短暂错误原因未知，不归因于空间；不是 build 17 安装证明。
+**build 23 原生测试、设备构建、发布与本地校验均已完成，实际手机画质尚未确认**。
+以前版本的安装成功或本轮原包 CRC 通过，不是 build 23 重签包／真机运行证明。
 已有 build 10+ 当前策略有效索引／就绪语言包时，覆盖安装后直接正常搜索／看图，
 **不卸载、不 Clear index、不因升级重建图像或地点，不必 Index / resume**。
-模型、索引／地点缓存身份和 SQLite schema 1 不变。实际 IPA 中地点运行时版本仍为
-`raycast-v1-93c9a925e35247f2`，完整几何哈希未变；更新的是小 manifest 的运行时元数据，
-不是使旧索引失效的迁移。完整字节数／哈希见 [MANUAL_INDEX_STARTUP.md](MANUAL_INDEX_STARTUP.md)。
-不要求重新下载语言包、测试“身份证”或其他指定查询、
-断网验证、诊断或截图；这些都不是升级或正常使用的前置任务。尚缺语言包且需要中文增强时，
+模型、索引／地点缓存身份和 SQLite schema 不变；本次是显示路径修正，不是索引迁移，
+也没有再次全量比较模型权重。不要求重新下载语言包、测试旧版指定查询或做清库测速。
+此次画质交接只需按页首步骤，在**同一搜索结果网格**查看并截图少量模糊格子的实际元数据，
+不要求去独立对比页或重新索引。尚缺语言包且需要中文增强时，
 可自行在设置中准备；已有语言包无需重做，原文搜索仍可使用。照片联网默认 OFF，
 仅按需要显式允许，不因升级改变。
 
-冷启动只显示 B02 静态图标，无阶段文字、进度条或转圈；完成主图像／文本模型及分词器准备后进入首页。
+系统 Launch Screen 仍只有 B02 静态图标；App 内准备沿用九步真实进度，慢风险／等待场景可显示细条，
+不是始终无条。主图像／文本模型及分词器仍全部就绪后才进入首页，详见 [STARTUP_STEP_PROGRESS.md](STARTUP_STEP_PROGRESS.md)。
 **启动／自动刷新不枚举全库、不清理索引或解析完整地点几何**，只读保存统计，不是重新索引。
 仅失败时轻点图标重试、长按约一秒带错误先进入；正常准备不可跳过。
 准备未完成的前后台切换会取消、排空后重新准备，已就绪则仅轻量刷新、不重放启动页。
@@ -912,7 +935,9 @@ Sideloadly 自己的 [隐私声明](https://sideloadly.io/privacy) 声称 Apple 
 调试工具仅在需要时从**设置最底部的调试工具开关**打开；**每次启动默认 OFF**，
 仅当前会话有效。关闭会隐藏诊断界面、清理临时报告／问题并取消活动预览，
 **保留先前调整的权重**，不取消索引／搜索／语言包准备，不重置查询／结果／模型／缓存。
-更早模型／输入策略尚未迁移的情况才参考历史迁移；不因本次手动索引／启动路径更新重做历史流程。
+页脚开关不会额外加载网格图片；大号辅助功能字体下页脚可能裁切。关闭调试后普通网格保持原样，
+已显示低清不会因开关调试自动升级，只有后续真实请求时再尝试可用来源。
+更早模型／输入策略尚未迁移的情况才参考历史迁移；不因本次显示路径更新重做历史流程。
 
 ## 隐私与模型许可不因本次更新而放宽
 

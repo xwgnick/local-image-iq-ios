@@ -1,6 +1,83 @@
-# Cloud build status — build 22
+# Cloud build status — build 23
 
-## Current: 0.5.9 (build 22) — 第三次整体验证 SUCCESS；已交付，真机待验
+## Current: 0.5.10 (build 23) — 第三次整体验证 SUCCESS；已交付，真机画质待验
+
+[Run 37226908383](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37226908383)／[job 111508328530](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37226908383/job/111508328530)，最终构建源码 **`2075334aebd5c90abf0ee70b459e5645fe878d3b`**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。该新 run 的 **attempt 1 是本功能第三次完整原生验证，不是整体首轮成功**。
+
+沿用原有完整 `macos-15` 流程，`include_models`／`all_compute_units`／`build_device_ipa` 三项均为 `true`；真实模型 CPU／`.all`／20 actor、全部 App 与 UI 门槛保留。**三次 CI 之间生产 App 文件完全不变，修正仅在新增测试的捕获／比较方法；工作流未改，没有新增缓存、跳过测试或更换 runner 规格的授权或实施。**本节依据已完成的父流程记录补写，本次文档编辑不执行命令、Git、CI 或网络操作。
+
+### build 23 三次验证账本
+
+|整体验证|run／job／完整源码 SHA|实际结果与修正|
+|---|---|---|
+|第一次|[37221787387／111493426045](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37221787387/job/111493426045)；功能源码 `9cea0c81ff0f885bd5529ab2ffb115cccf90a5bf`|FAILED：仅 3 项新增原生宿主诊断像素测试等待严格像素条件超时；显示加载器 57、缓存 27、独立 UI 11 均通过。不是生产图片请求超时或旧门槛回归。|
+|第二次|[37224479658／111501185851](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37224479658/job/111501185851)；`30e372ccd1417b9ec38ddfa0dad85c7a4aeb9ba8`|FAILED：同 3 项测试。测试已捕获真实 frame、原始 RGBA 与差异图；证据将差异定位到 1× 降采样过滤后的边缘／字形，而不是合成图片纯色内部。|
+|第三次|[37226908383／111508328530](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37226908383/job/111508328530)；`2075334aebd5c90abf0ee70b459e5645fe878d3b`|SUCCESS：测试改为按宿主原生 backing scale 捕获，并按 scale 换算实际 frame 后裁剪；继续严格零容差比较，全部通过。|
+
+没有通过延长等待、放宽像素容差、删除断言或跳过原有测试凑通过；第一、第二次是新增测试方法的问题，不能写成两轮生产修复，也不能说第三次才启用真实组件。修正的是截屏采样／坐标契约，生产文件在这三次 CI 中保持相同。
+
+### build 23 失败证据：只读取得，未发布失败 draft
+
+第二次失败证据位于 **draft Release 403163743**；UI ZIP asset **610441267**，**5,993,067 字节**，SHA-256 **`ffe31a4d7a08debdb2c505edce2853703dbf20cf87c4658bb5dc9f28d975f580`**。已通过针对该 draft／asset 的精确 **GET-only** 路径下载并核验至 [../build/ui-review/37224479658/UIReview.zip](../build/ui-review/37224479658/UIReview.zip)。
+
+起初普通发布报告 helper 查找已发布 prerelease 失败，原因是该失败证据仍为 draft；这不表示没有证据，也不是一次新的 Release 发布失败。随后仅用本地精确 GET helper 获取既有证据，**未发布、修改或删除该 draft，也没有为取证新建／发布 Release**。
+
+父流程实际查看 [../build/ui-review/37224479658/mismatch-contact.jpg](../build/ui-review/37224479658/mismatch-contact.jpg)（**810×610**），由 **3 项合成失败测试的裁剪对照**合成。真实 frame／raw RGBA／diff 共同支持上述 1× 采样边缘／字形差异定位；不是用户照片画质比较。没有把获取 ZIP 或读取报告冒充人工审图。
+
+### build 23 最终验证结果
+
+|项目|实际结果／范围|
+|---|---|
+|Swift 核心|79 全通过。|
+|App XCTest|**713＝712 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败**；**277.024 秒，wall 294.291 秒**；比 build 22 新增 **51 项**。|
+|`DisplayThumbnailLoaderTests`|57 全通过／7.972 秒；HQ224 同契约候选、选择顺序、方向覆盖、网络许可、错误与取消。|
+|`PhotoThumbnailCacheTests`|27 全通过／0.175 秒；可缓存质量条件、图片／元数据一致、缓存命中与失效。|
+|`ThumbnailDiagnosticPresentationTests`|15 全通过／3.228 秒；其中 3 项使用注入 provider 的真实 `PhotoThumbnailView`，实际渲染合成纯色像素；覆盖页脚开关且不额外加载、几何变化及拒绝迟到旧结果，原生 scale／裁剪后的像素比较严格零容差。|
+|`GeneratedModelParityTests`|8 全通过／170.302 秒；既有 CPU、`.all`、真实 20 actor 门槛全部保留，20 actor 120 次预测／252 项测量及原 23／58 检查未改。|
+|独立 UI|11 全通过／712.848 秒；导航 6／465.030 秒、键盘 5／247.818 秒。|
+|设备构建|BUILD SUCCEEDED；**0.5.10 / 23、arm64 Release、未签名、最低 iOS 17、SDK 18.5、Xcode 16.4**。|
+
+新增为加载器 **24**＋缓存 **12**＋诊断展示 **15＝51**，已包含在 App 713 中；子套件不能重复相加，UI 另计。注入 provider／原生宿主像素测试不是用户 Photos 端到端画质验证，测试秒数也不是手机性能。
+
+### build 23 资产与本地全量核验
+
+|资产／核验|实际身份与结果|
+|---|---|
+|公开 Release|[ci-37226908383-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37226908383-1)，ID **403175811**；**2026-10-04T19:35:19Z** 发布；**9 项资产，prerelease、非 draft**。|
+|原始 IPA|asset **610499393**；**1,418,651,398 字节**；SHA-256 **`8cfc2402bdd807d9a71e9e2d6f6b9be7bffc905e8a48a0a125344197303132ad`**。已实际完整流式下载并核验长度／哈希，不是只读远端声明。|
+|归档完整性|**7-Zip 26.03 全量解压／CRC PASS**；11 文件夹、30 文件，解压后 **1,564,021,658 字节**。不验证 Sideloadly 重签包或手机安装。|
+|UI ZIP|asset **610499123**；**5,914,623 字节**；SHA-256 **`322788d9797438f7c53d2d5f27dfcefe36336da9de2c6cd7e9bb886f149fb3cc`**；[../build/ui-review/37226908383/UIReview.zip](../build/ui-review/37226908383/UIReview.zip) 已下载核验。|
+|小型 IPA 元数据|已核对 **0.5.10 / 23、LaunchScreen**；**本轮没有再次全量比较模型权重**，不把小元数据检查或归档 CRC 当成跨版本权重字节一致证明。|
+
+本地已校验交付文件：
+
+- [../build/device-download/37226908383/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37226908383/LocalImageIQ-iphoneos-unsigned.ipa)
+- [../build/device-download/37226908383/device-build.json](../build/device-download/37226908383/device-build.json)
+- [../build/device-download/37226908383/delivery.json](../build/device-download/37226908383/delivery.json)
+- [../build/device-download/37226908383/SHA256SUMS.txt](../build/device-download/37226908383/SHA256SUMS.txt)
+- [../build/device-download/37226908383/release-fetch-6c0ed0e5-4ff1-4614-959e-3c6e14043ce8.json](../build/device-download/37226908383/release-fetch-6c0ed0e5-4ff1-4614-959e-3c6e14043ce8.json)
+
+配套报告、校验文件和交付清单已核验；上述完整流式哈希及 CRC 属于原始下载包，不扩大为用户已安装成功。
+
+### build 23 实际审图范围与真机交接
+
+父流程实际查看 [../build/ui-review/37226908383/thumbnail-diagnostic-contact.jpg](../build/ui-review/37226908383/thumbnail-diagnostic-contact.jpg)（**680×758**），仅含 **2 张 393×852 原生合成诊断布局图**。其中两个选中结果示例分别为 **HQ224／299×224／缓存命中**与 **HQ224／68×120／未缓存／降质标志 false**。小尺寸且 false 仍可能模糊，不能把这个标志或 HQ 名称当画质保证。图中为占位／合成内容，不是用户 Photos；没有借此确认真机清晰度，也没有声称审核其他成功产物图片。范围另见 [../build/ui-review/37226908383/thumbnail-diagnostic-review.json](../build/ui-review/37226908383/thumbnail-diagnostic-review.json)。
+
+**原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**。开启“设置 → 显示调试工具”，返回**同一搜索结果网格**，截少量模糊 tile，保留最终来源、请求尺寸、原始返回像素、降质是／否／未知、缓存命中与尝试路线；不是去独立本地预览对比页另发请求。默认调试 OFF，普通外观保持原样；大号辅助功能字体下诊断页脚仍可能裁切，不声称所有无障碍布局完美。
+
+大尺寸 HQ 足够且未明确降质即停止，否则尝试同独立对比契约的 HQ224；候选先按未明确降质、再按方向校正后的覆盖率选择，同分保留较早候选。仅用户 opt-in 且当前不足／降质时尝试联网 HQ；所有 HQ 都无可用像素才取 Fast224。普通错误／取消即使此前有可用候选也传播。只有已知 HQ 阶段、`degraded != true`、覆盖率至少 1 才缓存；来源未知不可复用，小图可显示但不永久占用 HQ 缓存。没有自动重试／定时器，已显示低清只会在下一次真实请求时重新评估。完整契约见 [HQ224_DISPLAY_VERIFICATION.md](HQ224_DISPLAY_VERIFICATION.md)。
+
+索引、首批 12／追加 12 的显示分页、模型 FP32／`.all`、20 worker、手动索引、缓存身份、九步启动条及全屏旧 Fast 路径不变。**尚无 build 23 实际手机画质确认**，本地覆盖、加载延迟、滚动 RSS／发热等也不能由模拟器结果推定。
+
+### 耗时解释与未实施的优化
+
+参照 **build 22 的实际测量**：模拟器构建＋测试 **1254 秒**，已包含 UI **757.953 秒**和 App **237.412 秒**；模型准备／转换 **216 秒**、设备构建／打包 **186 秒**、上传 **76 秒**、源码／核心检查 **41 秒**、地点 **14 秒**、模拟器选择 **53 秒**、工程生成 **7 秒**。本地约 1.4 GB 下载还需数分钟及全量 CRC，**没有精确全流程 elapsed 记录**，不编造精确交付总时长，也不当成 build 23 各阶段测量。
+
+主要成本是完整重建和完整验证，不是整个等待都花在 IPA 压缩。build 23 我方新增测试捕获方法不当造成的两轮失败／重试，是本可避免的额外等待；不能说每次改动都必须付出这些重复成本。未来固定版本模型、转换产物、SPM／构建产物可按 Xcode／SDK／模型／工具与配置身份分键缓存，命中后仍校验并保留测试；**预计收益尚未量化，未获准改变现有流水线**。详细历史阶段表见 [HQ224_DISPLAY_VERIFICATION.md](HQ224_DISPLAY_VERIFICATION.md)。
+
+以下 build 22 及更早账本全部为历史，原有失败与成功证据保留；旧显示策略不描述 build 23。
+
+## Previous delivery: 0.5.9 (build 22) — 第三次整体验证 SUCCESS；历史记录
 
 [Run 37208795156](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156)／[job 111455534540](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156/job/111455534540)，实际最终构建源码 **`2c05008a74f3ec4df170de1b2fc1fb79a0bcec84`**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。新 run 的 **attempt 1 是本功能第三次整体验证**，不能写成首轮成功。下列记录依据父流程已完成的验证与交付；本次仅更新指定文档，不执行命令、CI、Git 或网络操作。
 

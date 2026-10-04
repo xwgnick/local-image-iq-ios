@@ -1,14 +1,38 @@
 # 高质量结果缩略图与滚动分页
 
-**2026-10-04｜0.5.9 / build 22：第三次整体验证 SUCCESS，原生测试、设备构建、发布及本地 IPA 校验完成；真机仍待验收。**[CI 37208795156](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156)／[job 111455534540](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156/job/111455534540)，最终源码 **`2c05008a74f3ec4df170de1b2fc1fb79a0bcec84`**；这是新 run 的 **attempt 1，不是本功能首轮成功**。版本见 [项目配置](../project.yml)，完整历史见 [BUILD_STATUS.md](BUILD_STATUS.md)。本文记录父流程已经完成的证据；本次只更新指定文档，不执行命令、CI、Git 或网络操作。
+## 现行覆盖说明：0.5.10 / build 23
 
-## 1. 用户行为
+**build 23 已交付，第三次完整原生验证 SUCCESS；实际手机网格画质仍待确认。**[CI 37226908383](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37226908383)／[job 111508328530](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37226908383/job/111508328530)，最终源码 **`2075334aebd5c90abf0ee70b459e5645fe878d3b`**。新 run attempt 1 不等于整体首轮成功；三轮生产文件未变，完整测试修正历史仅见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+**下方第 1–8 节全部保留为 build 22 历史，尤其旧第 2 节“大 HQ 可读即停止／缺失就转 Fast”与旧缓存描述已经被以下规则取代，不能据此解释 build 23。**现行完整契约见 [HQ224_DISPLAY_VERIFICATION.md](HQ224_DISPLAY_VERIFICATION.md)。
+
+|现行网格规则|build 23 行为|
+|---|---|
+|本地候选|先按 tile 像素目标请求大尺寸 HQ；足够覆盖且 `degraded != true` 才结束，否则再尝试实际照片宽高比、短边 224 的 HQ224。HQ224 使用 `.current`／`.aspectFit`／`.fast` resize／`.highQualityFormat`，与独立对比的 HQ224 请求契约相同。|
+|候选选择|先选未明确降质的 HQ，再比较按方向校正的像素覆盖率；同分保留较早候选。小尺寸／降质 HQ 仍可显示，不因尺寸不足直接改选 Fast。|
+|联网与兜底|当前 HQ 仍不足／明确降质且用户 opt-in 时，才尝试联网大尺寸 HQ，不保证更清晰。只有所有已尝试 HQ 阶段都无可用像素，才请求本地 Fast224。普通错误／权限错误／取消即使此前有可用候选也照常传播。|
+|缓存与元数据|只有已知 HQ 阶段、`degraded != true` 且方向覆盖率 ≥ 1 才可复用缓存；来源未知、Fast、覆盖不足或明确降质不缓存。降质标志未知不等于来源未知：前者仍可能满足缓存条件，但不证明画质。图片及不可变实际选中元数据一起缓存，命中时保留原记录，不伪装成本次新请求。|
+|刷新边界|低清仍可显示但不永久占用 HQ 缓存；没有自动重试、轮询或定时器，已显示图片只在下一次真实请求时重新评估，不是实时自动升级。|
+
+**分页与索引不变**：默认首批 12／续批 12，设置 3／12；查询按需翻译、编码、全局排序各一次，后续公开同一排序前缀。完整候选 ID／向量仍在 RAM，不是有界内存或数据库分页。逐页校验及无关诊断取消保留图库的行为继续保留；手动索引、索引 HQ224／Fast、20 worker、FP32／`.all`、schema／缓存身份、九步启动条和全屏旧离线 Fast 加载均未改。
+
+当前核心 **79**、App **713（712 通过／1 既有 SQLite 跳过／0 失败）**、UI **11 全通过**；全部 CPU／`.all`／20 actor 门槛保留，未改原标准 `macos-15` 流程、三项全 true 输入、缓存配置或 runner 规格。[公开 Release ci-37226908383-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37226908383-1) 于 **2026-10-04T19:35:19Z** 发布，9 项资产、prerelease；[../build/device-download/37226908383/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37226908383/LocalImageIQ-iphoneos-unsigned.ipa) 已完整流式核验及全量 CRC PASS。
+
+**原 Sideloadly 账号／原有效 Bundle ID 覆盖，不卸载、不清索引、不重建。**设置开启“显示调试工具”后回到**同一搜索结果网格**，只截几张模糊格子的实际选中来源、请求尺寸、原始返回像素、降质是／否／未知、缓存命中与路线；不要用独立对比页或全屏作网格取图证明。默认调试 OFF，普通外观保持原样；页脚开关不额外加载，大号辅助功能字体可能裁切页脚。已看过的两张原生诊断布局图是合成占位场景，**没有用户 Photos 画质确认**，尺寸达标也不等于锐利。安装见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
+
+## 历史基线：0.5.9 / build 22
+
+以下第 1–8 节的“本轮／本路径／当前”均指 build 22 当时实现与证据；不作 build 23 现行策略或本次重新测试的声明。分页机制沿用，但旧图像选择策略已被页首覆盖说明取代。
+
+**0.5.9 / build 22 当时第三次整体验证 SUCCESS，原生测试、设备构建、发布及本地 IPA 校验完成；当时真机仍待验收。**[CI 37208795156](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156)／[job 111455534540](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37208795156/job/111455534540)，最终源码 **`2c05008a74f3ec4df170de1b2fc1fb79a0bcec84`**；这是新 run 的 attempt 1，不是该功能首轮成功。完整历史见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+## 历史 build 22 · 1. 用户行为（分页机制沿用）
 
 - 搜索默认先显示 **12 张**；滑到当前列表底部，再追加 **12 张**，直到全部候选显示完。最后不足一批则全部追加；空结果、不足 12 张及恰好 12 张不会生成多余页。
 - 设置保留 **3 张 / 12 张**选项，但标签已改为“**每批显示**”。`resultLimit` 现在是显示批量，不是旧 Top-K 总结果上限；修改后清空当前结果，下次显式搜索生效。
 - 同一会话只追加既有全局排序的前缀，保留查询、翻译结果、既有照片顺序和分数，不重置滚动容器或跳回顶部。继续往下显示的是候选，不代表都相关；没有新增分数阈值，负分也不被截掉。
 
-## 2. 结果缩略图：本地 HQ 优先，不请求原图
+## 历史 build 22 · 2. 结果缩略图（选择策略已被 build 23 取代）
 
 路径为 `PhotoThumbnailView` → `PhotoThumbnailCache` → `PhotoLibraryClient.thumbnailImage` → `DisplayThumbnailLoader`，仅用于结果网格。
 
@@ -29,7 +53,7 @@
 
 源码：[../App/Photos/DisplayThumbnailLoader.swift](../App/Photos/DisplayThumbnailLoader.swift)、[../App/UI/PhotoViews.swift](../App/UI/PhotoViews.swift)、[../App/Photos/PhotoLibraryClient.swift](../App/Photos/PhotoLibraryClient.swift)。
 
-## 3. 缓存与明确不变的路径
+## 历史 build 22 · 3. 缓存与其他路径（现行缓存资格见页首）
 
 - 缓存键包含 asset ID、**索引中保存的 revision + 当前照片 revision**（修改／创建时间）、请求像素宽高、网络开关及图库 `changeGeneration`。另有缓存自身 generation token，`clear()` 后的旧请求不能重新填入缓存。
 - 命中缓存前、异步加载后都检查权限、当前 revision、图库 generation 与清空 token；客户端还在首次请求、各回退阶段和返回前核对授权状态／revision／generation，拒绝过期结果。
@@ -40,7 +64,7 @@
 
 源码：[../App/Photos/PhotoThumbnailCache.swift](../App/Photos/PhotoThumbnailCache.swift)、[../App/Photos/PhotoLibraryClient.swift](../App/Photos/PhotoLibraryClient.swift)、[../App/UI/PhotoGallery.swift](../App/UI/PhotoGallery.swift)、[../App/Photos/IndexingImage.swift](../App/Photos/IndexingImage.swift)。
 
-## 4. 全局排一次，按需显示，不是数据库分页
+## 历史 build 22 · 4. 全局排一次，按需显示（机制沿用）
 
 `AppState.search()` 只解析／按需翻译查询一次，只调用一次 worker，传入 **`limit: Int.max`**。worker 对当前可访问且索引身份有效的完整候选集编码查询、计算全局地点中心与精确分数，再统一排序一次；沿用既有分数公式和 UTF-8 asset ID 同分排序，没有按页重新去均值、重新打分、截断或增加筛选阈值。
 
@@ -52,7 +76,7 @@
 
 源码：[../App/State/AppState.swift](../App/State/AppState.swift)、[../App/UI/ResultPageBoundary.swift](../App/UI/ResultPageBoundary.swift)、[../App/UI/ContentView.swift](../App/UI/ContentView.swift)、[../Packages/ImageIQCore/Sources/ImageIQCore/VectorSearch.swift](../Packages/ImageIQCore/Sources/ImageIQCore/VectorSearch.swift)。
 
-## 5. 发布前校验与会话失效
+## 历史 build 22 · 5. 发布前校验与会话失效（机制沿用）
 
 1. **初次 worker：**捕获授权状态和图库 generation，完整枚举当前授权照片；在解码向量、地点去均值及打分前过滤不可访问 ID。保留打分前、打分后两次完整快照复核，加上最初快照，共三次完整枚举。搜索只读，不删除或重写旧索引。
 2. **首屏与续页：**跨 actor 后在 MainActor 同步调用 `SearchResponse.validatePageAccess`；全局检查授权状态与图库 generation，但 revision 查询只针对**本次将公开的 ID**。首屏验证前 12 个，后续只验证新增 12 个／最后余项；空首屏也做全局校验。不是每一页重查完整结果的所有 revision。
@@ -63,7 +87,7 @@
 
 源码：[../App/State/PhotoIndexWorker.swift](../App/State/PhotoIndexWorker.swift)、[../App/State/AppState.swift](../App/State/AppState.swift)、[../App/Photos/PhotoLibraryClient.swift](../App/Photos/PhotoLibraryClient.swift)。
 
-## 6. 三次整体验证与实际通过账本
+## 历史 build 22 · 6. 三次整体验证与实际通过账本
 
 |整体验证|run／job／完整源码 SHA|实际结果|
 |---|---|---|
@@ -93,7 +117,7 @@
 
 静态／资源检查、完整真实模型数值对齐、全部 App 及独立 UI 回归门槛保留，不以新增模拟测试替代。完整流程见 [../.github/workflows/ios.yml](../.github/workflows/ios.yml)；本次文档更新不重新执行该流程。App 子套件已计入 662，UI 另计，测试耗时不是手机性能。
 
-## 7. 已交付资产与有限视觉复核
+## 历史 build 22 · 7. 当时交付资产与有限视觉复核
 
 |资产／核验|实际记录|
 |---|---|
@@ -111,7 +135,7 @@
 - 另两张是黑金深色／浅色设置夹具，均显示“**每批显示 12**”；UI 自动测试改成 3 的交互证据与这两张静态图分别记录，不能混作同一截图。
 - 未读取／授权真实 Photos，没有其他图片审核、HQ 清晰度、物理 iPhone 手势或性能证明。原生 `UIScrollView` 测试不等于 XCUI 真实图库滚动验收。
 
-## 8. 安装、不变项与剩余风险
+## 历史 build 22 · 8. 当时安装、不变项与剩余风险
 
 **原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**；已有当前策略有效索引复用，安装见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。本轮不变项包括索引 HQ224／Fast 策略、20 个索引 worker、手动索引、模型 FP32／`.all`、SQLite schema 与模型／索引／地点缓存身份、品牌和九步启动条逻辑。新版上下文首次启动可能按原规则显示条，见 [STARTUP_STEP_PROGRESS.md](STARTUP_STEP_PROGRESS.md)，不是新增模型步骤或索引迁移。
 
