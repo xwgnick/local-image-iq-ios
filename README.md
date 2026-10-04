@@ -2,7 +2,19 @@
 
 SwiftUI + PhotoKit + Core ML。独立离线 App，不是桌面网页套壳。
 
-## 当前交付：0.5.7 / build 20，B02 黑金主题，首轮 SUCCESS
+## 当前交付：0.5.8 / build 21，真实步骤进度，第二次整体验证 SUCCESS
+
+**原生验证、设备构建、发布及本地 IPA 校验完成；真机验收待确认。**[CI 37198392990](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37198392990)，构建源码 `687d410d15ab15c5d1ec5da33e448138f76ac1cf`。这是新 run 的 **attempt 1，但本功能第二次整体验证**，不是首轮成功：首轮测试编译失败后仅修正一处展示测试，两次运行间生产 App 源码未改，未绕过 CI 门槛。完整个人公开仓库 `macos-15` 流程、模型／全部计算单元／设备 IPA 均开启；核心 **79**、App **592＝591 通过／1 既有 SQLite 跳过／0 失败**、UI **11 全通过**。失败账本及子套件集中见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+
+**[本地已校验 IPA](build/device-download/37198392990/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37198392990-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37198392990-1)。原包 **1,418,591,485 字节**，SHA-256 `fd2d7053183dafb4d4e2d254a8be3b7a61f0a7ff6614f29d7301db8c07a3f6eb`，完整流式哈希及全量 CRC PASS；**arm64 Release、未签名、iOS 17+、SDK 18.5／Xcode 16.4**。9 项资产已发布，prerelease、非 draft／Latest。
+
+运行时仅在慢启动风险上下文或等待达到 **8 秒**时显示细条，严格按**实际成功完成步骤数 / 9**推进，不代表耗时或工作量；并行分支各自完成才计数，缓存复用核对五个模型步骤后批量报告，不是假跳步。无可见文字／百分比、流动动画、自动填充或最低停留；8 秒只是补显示，不取消任务。首次使用本功能／新版上下文通常立即显示，但不保证每次风险预判都真的慢；相同上下文已有完整成功记录时，正常小于 8 秒的重启仍只有图标。失败／后台隐藏，重试另开尝试，不在同一次内倒退。详见 [docs/STARTUP_STEP_PROGRESS.md](docs/STARTUP_STEP_PROGRESS.md)。
+
+父流程已实际查看 [1340×758 四图联系图](build/ui-review/37198392990/startup-progress-contact.jpg)：正常深色／慢深色／正常浅色／慢浅色，均为 **393×852 原生合成夹具**。条的 **0.375 仅为绘制输入，不是真实 n/9 或耗时**，顶部水印仅属测试。原生像素与状态分别覆盖；现有 UI 11 项通过**不等于新增了真实启动条可见性的端到端断言**。系统 Launch Screen 仍静态且仅图标，图标／背景资源未改；黑金主题、20 个索引 worker、手动索引、FP32／`.all`、模型及 SQLite／地点缓存身份不变。
+
+安装仍用**原 Sideloadly 账号／原有效 Bundle ID 覆盖，不卸载、不清索引、不重建**。见 [docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)。**以下 build 20 及更早记录全部为历史，其中“当前／本轮”、纯图标始终不显示条及旧测速／迁移要求不作为 build 21 操作要求。**
+
+## 历史交付（2026-10-03）：0.5.7 / build 20，B02 黑金主题，首轮 SUCCESS
 
 **原生验证、设备构建、发布及本地 IPA 校验已完成；物理 iPhone 验收待用户选择安装后确认。**[CI 37134037707](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37134037707)／[job 111234786439](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37134037707/job/111234786439)，源码 `a7d32dd66077b167f1df95e9186bc8722b2ad923`。沿用个人公开仓库完整 `macos-15` 手动流程，模型／全部计算单元／设备 IPA 三项均开启，**attempt 1 SUCCESS，无 CI 改动或重试**：核心 **79**，App **532＝531 通过／1 既有 SQLite 跳过／0 失败**，UI **11 全通过**；CPU 参考及全部模型对齐门槛保留。
 

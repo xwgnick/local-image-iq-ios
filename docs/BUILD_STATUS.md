@@ -1,6 +1,55 @@
-# Cloud build status — build 20
+# Cloud build status — build 21
 
-## Current: 0.5.7 (build 20) — 黑金主题首轮 SUCCESS；已交付，真机待验
+## Current: 0.5.8 (build 21) — 第二次整体验证 SUCCESS；已交付，真机待验
+
+[Run 37198392990](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37198392990)／[job 111424868574](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37198392990/job/111424868574)，实际构建源码 **`687d410d15ab15c5d1ec5da33e448138f76ac1cf`**。个人公开仓库标准 `macos-15` 完整手动流程，`include_models`／`all_compute_units`／`build_device_ipa` 均为 `true`。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。以下记录已完成的验证与交付，本次文档更新不另运行测试、构建或发布。
+
+### build 21 两次验证账本：不是首轮成功
+
+|整体验证|run／job／源码|结果|
+|---|---|---|
+|第一次|[37197915357／111423499374](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37197915357/job/111423499374)；`6f3182e4aeb5a4d45960a92371c89901e14cba05`|FAILED：展示测试尝试通过 SwiftUI environment key path 写入只读的 `accessibilityReduceMotion`，测试编译失败。|
+|第二次|[37198392990／111424868574](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37198392990/job/111424868574)；`687d410d15ab15c5d1ec5da33e448138f76ac1cf`|SUCCESS；这是新 run 的 attempt 1，不是本功能第一次验证。|
+
+两次之间**只修正 [StartupPresentationTests](../Tests/StartupPresentationTests.swift) 一处测试**，改用支持的父级 transaction／animation 输入验证无动画契约；**不是真实系统 Reduce Motion 开关测试**。生产 App 源码在两次运行间不变，没有删除或绕过 CI 门槛，不能把首次失败改写为首轮成功。
+
+### build 21 验证结果
+
+|项目|实际结果|
+|---|---|
+|Swift 核心|79 全通过。|
+|App XCTest|592＝591 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败；231.270 秒，wall 235.929 秒；比 build 20 新增 60 项。|
+|真实步骤／历史／状态|StartupProgressTests 15／0.022 秒；StartupHistoryTests 18／0.129 秒；StartupProgressStateTests 18／0.132 秒，全通过。|
+|原生启动展示|StartupPresentationTests 18／16.168 秒，全通过；含条形像素、图标中心与动画输入契约，不声称系统 Reduce Motion 设置已测试。|
+|真实模型对齐|GeneratedModelParityTests 8／140.867 秒，全通过；3 个真实并发调用方与后续缓存复用各取得五个模型步骤，核验共享一次初始化；CPU 参考、20 actor 120 次预测／252 项测量及原 23／58 数值门槛全部保留。|
+|既有增强测试|ParallelModelPreparationTests 7／0.044 秒；LaunchWorkerTests 8／0.151 秒，全通过，增强进度／排空与真实阶段断言，不计作新增方法。|
+|独立 UI|11 全通过／696.222 秒；导航 6／465.233 秒、键盘 5／230.989 秒；仍走原真实启动门控。|
+|设备构建|BUILD SUCCEEDED；0.5.8 / 21、arm64 Release、未签名、最低 iOS 17、SDK 18.5、Xcode 16.4。|
+
+子套件包含在 App 592 中，UI 另计；测试耗时不是手机启动耗时。**没有新增真实运行进度条可见性的 UI E2E 断言**；现有导航／键盘回归、原生夹具／像素测试和状态测试是不同证据，不能互相替代，也不证明所有真实多等待者取消／重试交错安全。
+
+### build 21 资产与本地核验
+
+- [Release ci-37198392990-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37198392990-1)，ID **402995736**，**2026-10-04T11:54:40Z** 发布；**9 项资产、prerelease、非 draft、非 Latest**。
+- IPA asset **609755881**，**1,418,591,485 字节**，SHA-256 **`fd2d7053183dafb4d4e2d254a8be3b7a61f0a7ff6614f29d7301db8c07a3f6eb`**；实际完整流式下载并核验长度／哈希，**`ipaVerifiedLocally: true`**，不只是远端声明。
+- [本地 IPA](../build/device-download/37198392990/LocalImageIQ-iphoneos-unsigned.ipa)、[设备报告](../build/device-download/37198392990/device-build.json)、[交付清单](../build/device-download/37198392990/delivery.json)、[校验文件](../build/device-download/37198392990/SHA256SUMS.txt)、[下载记录](../build/device-download/37198392990/release-fetch-6b93e5b1-81ed-4677-a85f-40eeb28ce3f2.json) 齐全，配套文件已核验。
+- **7-Zip 26.03 全量解压／CRC PASS**：11 文件夹、30 文件，解压后 **1,563,765,177 字节**；只验证原始 IPA，不验证 Sideloadly 重签包或手机安装。
+- [UIReview.zip](../build/ui-review/37198392990/UIReview.zip)，asset **609755740**，**5,788,770 字节**，SHA-256 **`bd325c444d81eaf030c5bea1c16cb5501ce989a1b3f6cb8e93ce1dd8c9cdc325`**，已下载核验。
+- 实际小范围读取 IPA 元数据，确认 **0.5.8 / 21、LaunchScreen** 和原地点 FNV **`raycast-v1-93c9a925e35247f2`**；模型与索引／地点缓存身份未变。
+
+### build 21 视觉与行为边界
+
+用户已确认设计预览；父流程实际查看 [1340×758 四图联系图](../build/ui-review/37198392990/startup-progress-contact.jpg)，顺序为**正常深色／慢深色／正常浅色／慢浅色**，每张原图 **393×852**。这是原生合成夹具，不读取私人 Photos，不是手机截图或真实启动进度序列；慢图 **0.375 仅为绘制输入，不是真实 n/9，也无实测耗时**，顶部水印仅存在于测试宿主。视觉与获批方案一致，不宣称设计预览与原生截图逐像素相同。
+
+完整 1x PNG 的慢／正常差异边界在两种主题下均为 **`[123,548,270,555]`**，包含视图截图抗锯齿，不能直接当成条的逻辑尺寸。独立原生 `ImageRenderer` **2x 像素测试**通过：条 **144×3 pt**、距图标框底 **28 pt**，**192×192 pt 图标框及屏幕中心不变**。详见 [审核记录](../build/ui-review/37198392990/startup-progress-review.json)。
+
+真实比例为九个成功完成步骤的集合计数；并行分支各自成功才增加，缓存复用核对五个模型步骤后批量报告，不是假跳步。首次／缺失／不同上下文立即显示；只有相同指纹完整九步成功记录时先隐藏，仍未完成到 **8 秒**才补显示。无自动填充、流动动画、可见标签或最低停留；8 秒不是取消／截止时间。迟到事件按尝试冻结、身份与并集去重；失败／后台隐藏，显式继续不写成功历史，重试重置为新尝试。共享观察者可回放，但同一 `AppState` 前台恢复仍须排空旧串行作业，可能停在 **1/9** 直到缓存步骤批量报告；不保证所有真实等待者交错均已覆盖。
+
+成功历史仅持久化小清单与 URL／bundle／版本／OS／计算配置身份形成的本地 SHA-256 摘要及 schema，不保存照片、查询或原始路径，不扫描权重、不联网；不是 Core ML 缓存命中探测。黑金主题、20 个索引图像 worker、手动索引、FP32／`.all`、模型与 SQLite／地点缓存身份不变；**系统 Launch Screen 仍静态且仅图标，未改资源**。完整契约见 [STARTUP_STEP_PROGRESS.md](STARTUP_STEP_PROGRESS.md)。
+
+**原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建。**首次使用本功能／新版上下文通常立即显示条，不保证每次慢风险预判都真的慢；相同指纹已有完整成功记录的正常重启小于 8 秒时无条。**物理 iPhone 安装、系统交接与实际行为仍待验收**，不作新手机性能声明。见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。以下 build 20 及更早账本原样保留为历史，其“当前／本轮”和当时要求不代表 build 21。
+
+## Previous delivery: 0.5.7 (build 20) — 黑金主题首轮 SUCCESS；已交付，真机待验
 
 [Run 37134037707](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37134037707)／[job 111234786439](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37134037707/job/111234786439)，实际构建源码 **`a7d32dd66077b167f1df95e9186bc8722b2ad923`**。既有个人公开仓库标准 `macos-15` 完整手动流程，`include_models`／`all_compute_units`／`build_device_ipa` 全为 `true`；**attempt 1 SUCCESS，无 CI 改动、重试或门槛绕过**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。下列为父流程已核验结果，本次仅更新文档，不另执行构建。
 

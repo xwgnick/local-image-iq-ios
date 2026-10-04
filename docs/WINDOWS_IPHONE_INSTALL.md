@@ -5,7 +5,18 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.5.7（build 20）— 黑金主题首轮 SUCCESS，可选择覆盖安装
+## 当前：0.5.8（build 21）— 真实步骤进度已交付，可覆盖安装
+
+**[本地已校验 IPA](../build/device-download/37198392990/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37198392990-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37198392990-1)。原包 **1,418,591,485 字节**，SHA-256 **`fd2d7053183dafb4d4e2d254a8be3b7a61f0a7ff6614f29d7301db8c07a3f6eb`**；已完整流式下载／哈希及 7-Zip 26.03 全量 CRC 校验，本机无需重下。另一台电脑从该 Release 下载并核对同一长度／哈希。
+
+[CI 37198392990](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37198392990)，源码 `687d410d15ab15c5d1ec5da33e448138f76ac1cf`：**新 run attempt 1，本功能第二次整体验证 SUCCESS，不是首轮成功**。首次测试编译失败后仅修正展示测试，生产 App 两次间不变，原 CI 门槛未绕过。核心 **79**、App **592（591 通过／1 既有 SQLite 跳过／0 失败）**、UI **11 全通过**；设备 **arm64 Release、未签名、iOS 17+、SDK 18.5／Xcode 16.4**。9 项资产已发布，prerelease、非 draft／Latest；失败账本及资产明细见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+1. 使用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建**；沿用下方第 1–5 节签名步骤，不执行历史迁移／清库要求。主题、20 个索引 worker、手动索引、FP32／`.all`、模型及 SQLite／地点缓存身份不变。
+2. 正常打开和使用即可。**系统静态 Launch Screen 仍只有图标**；App 内准备页只在慢风险上下文或仍未完成到 8 秒时加细条，表示真实完成步骤数 / 9，不是剩余时间。首次使用本功能／新版上下文通常立即显示，不保证实际一定慢；相同指纹已有完整九步成功记录后，正常小于 8 秒的重启不显示条。8 秒不取消任务，也不强制等待或自动填充；无需反复重启、清库或追加测速。
+
+**build 21 物理 iPhone 安装／行为验收仍待确认。**父流程已查看 [四张原生夹具联系图](../build/ui-review/37198392990/startup-progress-contact.jpg)，不是实机或真实进度序列；现有 UI 11 项通过不等于新增了实时进度条可见性 E2E。详细显示、失败与重试边界见 [STARTUP_STEP_PROGRESS.md](STARTUP_STEP_PROGRESS.md)。**以下 build 20 及更早段落全部为历史，旧包、纯图标始终无条及测速／迁移要求不代表本轮。**
+
+## 历史（2026-10-03）：0.5.7（build 20）— 黑金主题首轮 SUCCESS，可选择覆盖安装
 
 **[本地已校验 IPA](../build/device-download/37134037707/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release：ci-37134037707-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37134037707-1)（**402586668**）。IPA asset **608102465**，**1,418,554,047 字节**，SHA-256 **`161d8227129b744490ee40c709e780c6bf4dfc9a674ded89e01343f58f2c14d9`**；已完整流式下载并核验长度／哈希，7-Zip 全量 CRC PASS，`ipaVerifiedLocally: true`。[下载记录](../build/device-download/37134037707/release-fetch-055a1b45-0b9b-4ced-bf66-e1fbda52da44.json) 与配套报告已核验。本机无需重下；另一台电脑从 Release 下载后核对同一长度／哈希。
 
