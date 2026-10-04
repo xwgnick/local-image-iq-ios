@@ -412,7 +412,10 @@ final class ThumbnailDiagnosticPresentationTests: XCTestCase {
                     }
                     let frames = hosted.measurements.frames
                     let format = UIGraphicsImageRendererFormat()
-                    format.scale = 1
+                    // Compare native backing pixels, not a 1x reduction of two
+                    // regions at different screen offsets. Failed 1x evidence
+                    // had equal solid interiors but different edge/glyph filters.
+                    format.scale = hosted.window.screen.scale
                     format.opaque = true
                     format.preferredRange = .standard
                     var drawn = false
@@ -452,12 +455,11 @@ final class ThumbnailDiagnosticPresentationTests: XCTestCase {
                         print("[ThumbnailPresentation TEST] \(step) measured: \(lastObservation); \(lastDifference)")
                     }
                     guard difference.count == 0 else { return }
-                    // Assert sizes, not positions. Cropped images returned to
-                    // callers have a known top-left origin and one pixel/point.
+                    // Assert logical sizes and preserve the native raster scale.
                     XCTAssertEqual(actualFrame.rect.size, size, file: file, line: line)
                     XCTAssertEqual(referenceFrame.rect.size, size, file: file, line: line)
                     let cg = try XCTUnwrap(image.cgImage?.cropping(to: actualRect))
-                    let tileImage = UIImage(cgImage: cg, scale: 1, orientation: .up)
+                    let tileImage = UIImage(cgImage: cg, scale: image.scale, orientation: .up)
                     // Check that the returned local-coordinate tile is exactly
                     // the same raster that passed, not a differently flipped crop.
                     guard try ThumbnailPresentationPixels(image: tileImage) == actual else {
@@ -613,10 +615,10 @@ final class ThumbnailDiagnosticPresentationTests: XCTestCase {
     }
 
     private func crop(_ image: UIImage, to rect: CGRect) throws -> ThumbnailPresentationPixels {
-        // All callers use one-pixel/point, upright captures and tile-local pixel
-        // rectangles. Copy RGBA rows, never slice or compare encoded PNG data.
-        guard image.scale == 1 else { throw ThumbnailPresentationFailure.invalidRaster }
-        return try ThumbnailPresentationPixels(image: image).crop(rect)
+        // Callers specify tile-local points; compare original backing pixels.
+        let pixels = try ThumbnailPresentationPixels(image: image)
+        let pixelRect = try pixels.pixelRect(for: rect, in: CGRect(origin: .zero, size: image.size))
+        return try pixels.crop(pixelRect)
     }
 
     private func assertSamePixels(_ actual: ThumbnailPresentationPixels, _ reference: ThumbnailPresentationPixels,
