@@ -4,12 +4,24 @@ import ImageIQCore
 @MainActor
 struct ContentView: View {
     @ObservedObject var state: AppState
+    @StateObject private var photoActions: ResultPhotoActionsState
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var showFilters = false
+    @State private var showAlbumAction = false
+    @State private var albumActionIDs: [String] = []
     @State private var showLibrary = false
     @State private var showSettings = false
     @State private var compactGrid = false
     @State private var visiblePageBoundary: ResultPageBoundaryValue?
     @FocusState private var isSearchFocused: Bool
     private var showingResults: Bool { state.completedQuery != nil || state.activity == .searching }
+
+    init(state: AppState, photoActionService: (any PhotoLibraryActions)? = nil) {
+        self.state = state
+        _photoActions = StateObject(wrappedValue: ResultPhotoActionsState(
+            service: photoActionService ?? SystemPhotoLibraryActions(library: state.library)))
+    }
 
     var body: some View {
         NavigationStack {
@@ -19,6 +31,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         if !showingResults { introduction }
                         searchField
+                        filterControl
                         translationSummary
                         if !showingResults && !isSearchFocused { suggestions }
                         searchContent
@@ -48,10 +61,13 @@ struct ContentView: View {
             .background(IQStyle.background)
             .foregroundStyle(IQStyle.text)
             .safeAreaInset(edge: .bottom, spacing: 0) {
+                if state.isSelectingResults { selectionToolbar }
+                else {
                 libraryStatus
                     .padding(.horizontal, 20)
                     .padding(.vertical, 8)
                     .background(IQStyle.background)
+                }
             }
             .navigationTitle("Image IQ")
             .navigationBarTitleDisplayMode(.inline)
@@ -80,6 +96,45 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showLibrary) { LibrarySheet(state: state) }
             .sheet(isPresented: $showSettings) { SettingsSheet(state: state) }
+            .sheet(isPresented: $showFilters) {
+                SearchFiltersSheet(filters: state.searchFilters, albums: photoActions.albums,
+                                   albumsLoading: photoActions.albumsLoading, albumIssue: photoActions.albumIssue) {
+                    state.applySearchFilters($0)
+                }
+            }
+            .sheet(isPresented: $showAlbumAction) {
+                AlbumActionSheet(albums: photoActions.albums, isLoading: photoActions.albumsLoading,
+                                 issue: photoActions.albumIssue) { action in
+                    photoActions.perform(action, ids: albumActionIDs)
+                    showAlbumAction = false
+                }
+            }
+            .sheet(item: $photoActions.share) { prepared in
+                if photoActions.canPresent(prepared) {
+                    BatchPhotoShareSheet(share: prepared,
+                        validate: { photoActions.beginPresentation(prepared) },
+                        finished: { photoActions.dismissShare(id: $0) })
+                } else {
+                    ContentUnavailableView("照片访问权限已更改", systemImage: "lock")
+                        .onAppear { photoActions.dismissShare(id: prepared.id) }
+                }
+            }
+            .alert("照片操作", isPresented: Binding(get: { photoActions.message != nil },
+                                                 set: { if !$0 { photoActions.dismissMessage() } })) {
+                Button("好") { photoActions.dismissMessage() }
+            } message: { Text(photoActions.message ?? "") }
+            .onChange(of: state.resultSessionID) { _, _ in
+                // Background clearing must not remove files already handed to
+                // a share extension. Presence/access is rechecked independently.
+                if photoActions.share != nil || photoActions.sharingPresented { photoActions.libraryChanged() }
+                else { photoActions.invalidateSelection() }
+                showAlbumAction = false
+                albumActionIDs = []
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { photoActions.pause() }
+                else { photoActions.libraryChanged() }
+            }
             .fullScreenCover(item: $state.selection) { selection in
                 PhotoResultsViewer(hits: state.results, initialID: selection.id,
                                    library: state.library, networkAllowed: state.allowICloudDownload, state: state)
@@ -92,8 +147,90 @@ struct ContentView: View {
         }
     }
 
+    private var filterControl: some View {
+        HStack {
+            Button {
+                isSearchFocused = false
+                photoActions.loadAlbums()
+                showFilters = true
+            } label: {
+                Label(state.searchFilters.isEmpty ? "筛选" : "已筛选", systemImage: "line.3.horizontal.decrease")
+                    .font(.subheadline)
+                    .frame(minHeight: 44)
+            }
+            .disabled(state.isBusy || photoActions.isBusy)
+            .accessibilityIdentifier("open-search-filters")
+            if !state.searchFilters.isEmpty {
+                Text(filterSummary).font(.caption).foregroundStyle(IQStyle.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            if state.similarPhotoID != nil {
+                Text("相似照片").font(.caption).foregroundStyle(IQStyle.accent)
+            }
+        }
+    }
+
+    private var filterSummary: String {
+        var parts: [String] = []
+        if state.searchFilters.startDate != nil || state.searchFilters.endDateExclusive != nil { parts.append("日期") }
+        if state.searchFilters.albumID != nil { parts.append("相册") }
+        if state.searchFilters.imageKind != .all { parts.append(state.searchFilters.imageKind.title) }
+        return parts.joined(separator: " · ")
+    }
+
+    private var selectionToolbar: some View {
+        VStack(spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                Text("已选 \(state.selectedResultIDs.count) 张").font(.subheadline)
+                Spacer()
+                Button("全选已显示") { state.selectVisibleResults() }
+                    .accessibilityIdentifier("select-visible-results")
+                }
+                VStack(alignment: .leading) {
+                    Text("已选 \(state.selectedResultIDs.count) 张").font(.subheadline)
+                    Button("全选已显示") { state.selectVisibleResults() }
+                        .accessibilityIdentifier("select-visible-results")
+                }
+            }
+            selectionActionLayout {
+                Button { photoActions.prepareShare(ids: state.orderedSelectedResultIDs,
+                                                    networkAllowed: state.allowICloudDownload) } label: {
+                    Label("分享", systemImage: "square.and.arrow.up")
+                }
+                .accessibilityIdentifier("share-selected-photos")
+                .frame(minWidth: 44, minHeight: 44)
+                Menu {
+                    Button("加入收藏") { photoActions.perform(.favorite(true), ids: state.orderedSelectedResultIDs) }
+                    Button("取消收藏") { photoActions.perform(.favorite(false), ids: state.orderedSelectedResultIDs) }
+                } label: { Label("收藏", systemImage: "heart") }
+                .accessibilityIdentifier("favorite-selected-photos")
+                .frame(minWidth: 44, minHeight: 44)
+                Button {
+                    albumActionIDs = state.orderedSelectedResultIDs
+                    photoActions.loadAlbums()
+                    showAlbumAction = true
+                } label: { Label("相册", systemImage: "folder.badge.plus") }
+                .accessibilityIdentifier("album-selected-photos")
+                .frame(minWidth: 44, minHeight: 44)
+            }
+            .font(.subheadline)
+            .frame(minHeight: 44)
+            .disabled(state.selectedResultIDs.isEmpty || photoActions.isBusy || state.isBusy)
+            if photoActions.isBusy { ProgressView("正在处理照片…").font(.caption) }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 8)
+        .foregroundStyle(IQStyle.text).tint(IQStyle.accent).background(IQStyle.background)
+    }
+
+    private var selectionActionLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(spacing: 18))
+    }
+
     @ViewBuilder private var translationSummary: some View {
-        if let resolution = state.completedSearchQuery {
+        if state.similarPhotoID == nil, let resolution = state.completedSearchQuery {
             if resolution.translated {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("已用英文搜索：\(resolution.effective)")
@@ -232,8 +369,8 @@ struct ContentView: View {
                 Button("取消搜索") { state.cancel() }.font(.subheadline).frame(minHeight: 44)
             }.frame(maxWidth: .infinity).padding(.vertical, 54).accessibilityIdentifier("search-loading")
         } else if state.errorMessage != nil {
-            emptyCard(symbol: "exclamationmark.circle", title: "这次操作没有完成",
-                      detail: state.canRead ? "查看图库状态后重试，原始照片没有改变。" : "请先检查照片访问权限，再重试。")
+            emptyCard(symbol: "exclamationmark.circle", title: "搜索或统计暂未就绪",
+                      detail: state.canRead ? "查看图库状态后重试；此提示不代表收藏或相册操作失败。" : "请先检查照片访问权限，再重试。")
             Button("查看图库") { showLibrary = true }.buttonStyle(.bordered).frame(minHeight: 44)
         } else if !state.results.isEmpty {
             HStack {
@@ -242,6 +379,13 @@ struct ContentView: View {
                     Text("最相近的在前").font(.caption).foregroundStyle(IQStyle.secondary)
                 }
                 Spacer()
+                Button(state.isSelectingResults ? "完成" : "选择") {
+                    isSearchFocused = false
+                    state.setSelectingResults(!state.isSelectingResults)
+                }
+                .disabled(photoActions.isBusy)
+                .frame(minHeight: 44)
+                .accessibilityIdentifier("select-search-results")
                 Button { compactGrid.toggle() } label: {
                     Image(systemName: compactGrid ? "rectangle.grid.1x2" : "square.grid.3x3")
                         .frame(width: 44, height: 44).background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 13))
@@ -250,8 +394,9 @@ struct ContentView: View {
             }.accessibilityIdentifier("results-heading")
             PhotoResultsGrid(hits: state.results, compact: compactGrid, onSelect: { id in
                 isSearchFocused = false
-                state.selection = AppState.Selection(id: id)
-            }) { photo in
+                if state.isSelectingResults { state.toggleResultSelection(id) }
+                else { state.selection = AppState.Selection(id: id) }
+            }, selectionMode: state.isSelectingResults, selectedIDs: state.selectedResultIDs) { photo in
                 PhotoThumbnailView(photo: photo, cache: state.thumbnails, networkAllowed: state.allowICloudDownload,
                                    showDiagnostics: state.debugToolsEnabled)
             }

@@ -61,6 +61,113 @@ final class PresentationNavigationTests: XCTestCase {
         assertHomeControls()
     }
 
+    func testSearchFiltersApplyAndClearWithoutPhotosPermission() throws {
+        if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
+            throw XCTSkip("Live search filters require the real bundled models")
+        }
+        // Reuse the real-model startup gate and reset Photos to .notDetermined;
+        // never authorize, seed photos, replace state/services, or start indexing.
+        launch()
+        assertHomeControls()
+        let library = app.buttons["open-library"]
+        let libraryReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@ AND value == %@",
+                                   "选择照片", "authorization-required"), object: library)
+        XCTAssertEqual(XCTWaiter.wait(for: [libraryReady], timeout: 15), .completed)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCTAssertFalse(springboard.alerts.firstMatch.exists)
+        let filters = app.buttons["open-search-filters"]
+        expectHittable(filters)
+        XCTAssertEqual(filters.label, "筛选")
+        let caption = app.staticTexts["日期 · 截屏"]
+        XCTAssertFalse(caption.exists)
+
+        let apply = app.buttons["apply-search-filters"]
+        let issue = app.staticTexts["search-filter-album-issue"]
+        for clearing in [false, true] {
+            filters.tap()
+            expectHittable(apply)
+            XCTAssertTrue(app.navigationBars["筛选照片"].exists)
+            let form = try sheetForm()
+            // This is the real album service's permission failure, not a fixture.
+            // Reopening saved dates exposes custom controls above this lazy row.
+            scrollTo(issue, in: form)
+            XCTAssertEqual(issue.label, "请先允许访问照片。")
+            expectAbsent(app.descendants(matching: .any)
+                .matching(identifier: "search-filter-albums-loading").firstMatch)
+            XCTAssertFalse(app.alerts.firstMatch.exists)
+            XCTAssertFalse(springboard.alerts.firstMatch.exists)
+
+            if clearing {
+                let clear = app.buttons["clear-search-filters"]
+                scrollTo(clear, in: form)
+                XCTAssertEqual(clear.label, "清除筛选")
+                clear.tap()
+            } else {
+                let datePreset = app.descendants(matching: .any)
+                    .matching(identifier: "search-filter-date-preset").firstMatch
+                scrollTo(datePreset, in: form, swipeUp: false)
+                XCTAssertTrue(datePreset.label.contains("日期范围"))
+                datePreset.tap()
+                let lastYear = app.buttons["去年"]
+                expectHittable(lastYear)
+                lastYear.tap()
+                let selectedDate = XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "去年", "去年"),
+                    object: datePreset)
+                XCTAssertEqual(XCTWaiter.wait(for: [selectedDate], timeout: 5), .completed)
+
+                let imageKind = app.descendants(matching: .any)
+                    .matching(identifier: "search-filter-image-kind").firstMatch
+                scrollTo(imageKind, in: form)
+                imageKind.tap()
+                let screenshots = app.buttons["截屏"]
+                expectHittable(screenshots)
+                screenshots.tap()
+                let selectedKind = XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "截屏", "截屏"),
+                    object: imageKind)
+                XCTAssertEqual(XCTWaiter.wait(for: [selectedKind], timeout: 5), .completed)
+            }
+
+            expectHittable(apply)
+            XCTAssertTrue(apply.isEnabled, "An album permission error must not block date/type filters or clearing")
+            XCTAssertFalse(app.alerts.firstMatch.exists)
+            XCTAssertFalse(springboard.alerts.firstMatch.exists)
+            apply.tap()
+            expectAbsent(apply)
+            expectHittable(filters)
+            XCTAssertEqual(filters.label, clearing ? "筛选" : "已筛选")
+            if clearing { expectAbsent(caption) }
+            else { expectHittable(caption) }
+            assertHomeControls()
+            XCTAssertEqual(library.value as? String, "authorization-required")
+            XCTAssertTrue(library.label.contains("选择照片"))
+            XCTAssertFalse(library.label.contains("正在更新索引"))
+            XCTAssertFalse(springboard.alerts.firstMatch.exists)
+        }
+
+        library.tap()
+        let done = app.buttons["close-library"]
+        expectHittable(done)
+        // This action exists only for .notDetermined, not denied/authorized.
+        // Inspect it without tapping; opening/clearing filters must not prompt.
+        expectHittable(app.buttons["authorize-photos"])
+        let update = app.buttons["index-photos"]
+        scrollTo(update, in: try sheetForm(), allowDisabled: true)
+        XCTAssertEqual(update.label, "建立索引")
+        XCTAssertFalse(update.isEnabled)
+        XCTAssertFalse(app.buttons["stop-indexing"].exists)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertFalse(springboard.alerts.firstMatch.exists)
+        done.tap()
+        expectAbsent(done)
+        assertHomeControls()
+        XCTAssertEqual(filters.label, "筛选")
+        expectAbsent(caption)
+        XCTAssertFalse(springboard.alerts.firstMatch.exists)
+    }
+
     func testClearQueryKeepsKeyboardAndSettingsAdvancedStartsCollapsed() throws {
         launch()
         assertHomeControls()

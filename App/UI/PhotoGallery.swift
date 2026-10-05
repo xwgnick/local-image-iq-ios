@@ -11,13 +11,18 @@ struct PhotoResultsGrid<Thumbnail: View>: View {
     let hits: [SearchHit]
     let compact: Bool
     let onSelect: (String) -> Void
+    var selectionMode: Bool = false
+    var selectedIDs: Set<String> = []
     @ViewBuilder let thumbnail: (IndexedPhoto) -> Thumbnail
 
-    init(hits: [SearchHit], compact: Bool, onSelect: @escaping (String) -> Void,
+        init(hits: [SearchHit], compact: Bool, onSelect: @escaping (String) -> Void,
+            selectionMode: Bool = false, selectedIDs: Set<String> = [],
          @ViewBuilder thumbnail: @escaping (IndexedPhoto) -> Thumbnail) {
         self.hits = hits
         self.compact = compact
         self.onSelect = onSelect
+        self.selectionMode = selectionMode
+        self.selectedIDs = selectedIDs
         self.thumbnail = thumbnail
     }
 
@@ -53,11 +58,21 @@ struct PhotoResultsGrid<Thumbnail: View>: View {
                 }
                 .clipShape(shape)
                 .overlay(shape.strokeBorder(IQStyle.line, lineWidth: 1))
+                .overlay(alignment: .topTrailing) {
+                    if selectionMode {
+                        Image(systemName: selectedIDs.contains(hit.id) ? "checkmark.circle.fill" : "circle")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(selectedIDs.contains(hit.id) ? IQStyle.accent : .white)
+                            .background(.black.opacity(0.6), in: Circle())
+                            .padding(8)
+                    }
+                }
                 .contentShape(shape)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("查看第\(rank)张照片")
+        .accessibilityLabel(selectionMode ? "选择第\(rank)张照片" : "查看第\(rank)张照片")
+        .accessibilityValue(selectionMode ? (selectedIDs.contains(hit.id) ? "已选择" : "未选择") : "")
         .accessibilityIdentifier("result-tile-\(rank)")
     }
 }
@@ -270,11 +285,32 @@ struct PhotoGalleryViewer: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
                     shareButton
+                    if let state {
+                        Button {
+                            let id = selectedID
+                            dismiss()
+                            state.searchSimilar(to: id)
+                        } label: {
+                            Label("找相似", systemImage: "rectangle.on.rectangle")
+                                .frame(minHeight: 44)
+                        }
+                        .disabled(state.isBusy || !ids.contains(selectedID))
+                        .accessibilityIdentifier("find-similar-photos")
+                    }
                     if debugToolsEnabled { checkButton }
                 }
                 .fixedSize(horizontal: true, vertical: false)
                 VStack(spacing: 8) {
                     shareButton
+                    if let state {
+                        Button("找相似", systemImage: "rectangle.on.rectangle") {
+                            let id = selectedID
+                            dismiss()
+                            state.searchSimilar(to: id)
+                        }
+                        .frame(minHeight: 44)
+                        .disabled(state.isBusy || !ids.contains(selectedID))
+                    }
                     if debugToolsEnabled { checkButton }
                 }
             }

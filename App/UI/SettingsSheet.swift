@@ -220,7 +220,7 @@ struct SettingsSheet: View {
 
     private var privacySection: some View {
         Section("关于与隐私") {
-            Text("原照片保留在系统照片图库中。搜索在本机运行，不向应用服务器上传照片或搜索内容。索引只存搜索数据和可选地点标签，不存原图或定位坐标，也不参与备份。仅在「我的图库」开启 iCloud 后，系统照片才可能为准备图库下载缺失的图像数据。")
+            Text("原照片保留在系统照片图库中。搜索在本机运行，不向应用服务器上传照片或搜索内容。仅在你主动操作时修改收藏、加入或新建系统相册，不删除原照片或修改原图像素。批量分享会临时准备去除位置等元数据的预览 JPEG，分享结束后清理。索引不存原图或定位坐标，也不参与备份；只有你开启 iCloud 访问后，系统照片才可下载缺失资源。")
                 .font(.subheadline)
                 .foregroundStyle(IQStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)

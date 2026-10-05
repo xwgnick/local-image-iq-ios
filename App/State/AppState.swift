@@ -54,6 +54,13 @@ final class AppState: ObservableObject {
     var totalResultCount: Int { resultPages?.response.hits.count ?? results.count }
     var hasMoreResults: Bool { results.count < totalResultCount }
     @Published private(set) var completedQuery: String?
+    @Published private(set) var similarPhotoID: String?
+    @Published var searchFilters = PhotoSearchFilters() {
+        didSet { if oldValue != searchFilters { searchSettingsChanged() } }
+    }
+    @Published private(set) var isSelectingResults = false
+    @Published private(set) var selectedResultIDs: Set<String> = []
+    var orderedSelectedResultIDs: [String] { results.map(\.id).filter { selectedResultIDs.contains($0) } }
     @Published private(set) var completedSearchQuery: SearchQueryResolution?
     @Published private(set) var translationAvailability: QueryTranslationAvailability = .unchecked
     @Published private(set) var translationPreparationIssue: String?
@@ -344,6 +351,7 @@ final class AppState: ObservableObject {
     func search(useOriginal: Bool = false) {
         guard canSearch else { return }
         let text = query, weight = Float(locationWeight)
+        let filters = searchFilters
         let translate = chineseSearchEnabled && !useOriginal
         invalidateDisplayedPhotos()
         schedule(.searching) { [worker, queryTranslator] _ in
@@ -351,10 +359,68 @@ final class AppState: ObservableObject {
             try Task.checkCancellation()
             // Rank the complete accessible snapshot once. Subsequent pages only
             // expose a prefix; they never rerun translation, encoding or centering.
-            let response = try await worker.search(text: resolved.effective, limit: Int.max, locationWeight: weight)
+            let response = try await worker.search(text: resolved.effective, limit: Int.max,
+                                                  locationWeight: weight, filters: filters)
             try Task.checkCancellation()
-            return .search(response, resolved)
+            return .search(response, resolved, nil)
         }
+    }
+
+    func searchSimilar(to photoID: String) {
+        guard isForeground, canRead, modelsReady, !isBusy,
+              results.contains(where: { $0.id == photoID }) else { return }
+        let filters = searchFilters
+        invalidateDisplayedPhotos()
+        schedule(.searching) { [worker] _ in
+            let response = try await worker.searchSimilar(photoID: photoID, limit: Int.max, filters: filters)
+            try Task.checkCancellation()
+            let description = SearchQueryResolution(original: "相似照片", effective: "相似照片",
+                                                    translated: false, notice: nil)
+            return .search(response, description, photoID)
+        }
+    }
+
+    func applySearchFilters(_ filters: PhotoSearchFilters) {
+        do { try filters.validate() }
+        catch { errorMessage = "请选择有效的筛选条件。"; return }
+        let seed = similarPhotoID
+        let resolution = completedSearchQuery
+        let canRepeat = completedQuery != nil && !isBusy
+        // Changing filters invalidates the old continuation. A similar seed is
+        // captured first so filter application can repeat that same visual query.
+        searchFilters = filters
+        if canRepeat, let seed, isForeground, canRead, modelsReady {
+            invalidateDisplayedPhotos()
+            schedule(.searching) { [worker] _ in
+                let response = try await worker.searchSimilar(photoID: seed, limit: Int.max, filters: filters)
+                return .search(response, SearchQueryResolution(original: "相似照片", effective: "相似照片",
+                                                               translated: false, notice: nil), seed)
+            }
+        } else if canRepeat, let resolution, isForeground, canRead, modelsReady {
+            let weight = Float(locationWeight)
+            invalidateDisplayedPhotos()
+            schedule(.searching) { [worker] _ in
+                let response = try await worker.search(text: resolution.effective, limit: Int.max,
+                                                       locationWeight: weight, filters: filters)
+                return .search(response, resolution, nil)
+            }
+        }
+    }
+
+    func setSelectingResults(_ enabled: Bool) {
+        guard !enabled || (!isBusy && !results.isEmpty) else { return }
+        isSelectingResults = enabled
+        if !enabled { selectedResultIDs.removeAll() }
+    }
+
+    func toggleResultSelection(_ id: String) {
+        guard isSelectingResults, results.contains(where: { $0.id == id }) else { return }
+        if !selectedResultIDs.insert(id).inserted { selectedResultIDs.remove(id) }
+    }
+
+    func selectVisibleResults() {
+        guard isSelectingResults else { return }
+        selectedResultIDs = Set(results.map(\.id))
     }
 
     /// Idempotent for a particular visible-page boundary. Old scroll callbacks
@@ -501,6 +567,9 @@ final class AppState: ObservableObject {
     private func invalidateDisplayedPhotos() {
         dismissPhotoCheck()
         resultPages = nil
+        similarPhotoID = nil
+        isSelectingResults = false
+        selectedResultIDs.removeAll()
         results = []; selection = nil; completedQuery = nil; completedSearchQuery = nil
     }
 
@@ -512,7 +581,7 @@ final class AppState: ObservableObject {
     private enum Outcome {
         case launched(LibrarySummary)
         case summary(LibrarySummary, String)
-        case search(SearchResponse, SearchQueryResolution)
+        case search(SearchResponse, SearchQueryResolution, String?)
         case photoCheck(PhotoDiagnosticReport, UUID)
         case translationPrepared(QueryTranslationLanguage, QueryTranslationAvailability)
     }
@@ -551,7 +620,7 @@ final class AppState: ObservableObject {
                     self.status = summary.modelIssue == nil ? "Launch preparation complete." : "Launch preparation needs attention."
                     self.finishLaunchTiming(timing, outcome: summary.modelIssue == nil ? .ready : .failed)
                 case .summary(let summary, let message): self.summary = summary; self.status = message
-                case .search(let response, let query):
+                case .search(let response, let query, let seed):
                     self.authorization = self.authorizationStatus()
                     guard self.canRead else { throw AppFailure.permission }
                     let pageSize = max(1, self.resultLimit)
@@ -563,6 +632,7 @@ final class AppState: ObservableObject {
                     self.summary = response.summary
                     self.resultPages = ResultPages(response: response, pageSize: pageSize)
                     self.results = firstPage
+                    self.similarPhotoID = seed
                     self.completedSearchQuery = query
                     self.completedQuery = query.original
                     self.status = "\(response.hits.count) results · exact local scores, not probabilities."

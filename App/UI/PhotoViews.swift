@@ -192,7 +192,8 @@ enum PhotoPreviewIssue {
 }
 
 /// Shares the rendered UIImage, not the original asset/file or its GPS metadata.
-/// Saving into Photos is excluded: this app requests read access only.
+/// Saving into Photos is excluded here to avoid duplicate copies. Explicit
+/// favorite/album metadata writes are handled separately by PhotoLibraryActions.
 @MainActor
 struct PhotoShareSheet: UIViewControllerRepresentable {
     let image: UIImage
