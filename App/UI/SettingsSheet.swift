@@ -228,7 +228,7 @@ struct SettingsSheet: View {
             Text("可选文字搜索使用系统 Vision 在本机识别；识别文字与索引保存在受保护的本机目录，不参与备份、不上传。清除索引会同时删除文字记录；关闭开关只停止参与搜索。")
                 .font(.subheadline).foregroundStyle(IQStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("原照片保留在系统照片图库中。搜索在本机运行，不向应用服务器上传照片或搜索内容。仅在你主动操作时修改收藏、加入或新建系统相册，不删除原照片或修改原图像素。批量分享会临时准备去除位置等元数据的预览 JPEG，分享结束后清理。索引不存原图或定位坐标，也不参与备份；只有你开启 iCloud 访问后，系统照片才可下载缺失资源。")
+            Text("搜索在本机运行，不向应用服务器上传照片或搜索内容。收藏和相册操作仅由你主动发起；相似照片清理仅删除你勾选并再次确认的系统照片，不自动删除或修改原图像素。删除可能由系统 iCloud 照片同步到其他设备，与预览下载开关无关。批量分享临时准备去除位置等元数据的 JPEG，结束后清理。索引不存原图或定位坐标，不参与备份；只有你开启 iCloud 访问后，应用的预览请求才允许下载缺失资源。")
                 .font(.subheadline)
                 .foregroundStyle(IQStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)

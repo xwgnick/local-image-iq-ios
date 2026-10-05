@@ -13,7 +13,7 @@
     <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>读取你选择的照片，在本机搜索和筛选；仅在你主动操作时修改收藏、加入或新建相册。不删除原照片或修改原图像素，也不向应用服务器上传照片。</string>
+    <string>读取你选择的照片，在本机搜索、筛选和查找相似照片；仅按你的操作修改收藏、加入或新建相册。仅在你勾选并确认后删除系统照片，可能同步到 iCloud 和其他设备。不自动删除、不修改原图像素，也不向应用服务器上传照片。</string>
     <key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key><true/>
     <key>UILaunchStoryboardName</key><string>LaunchScreen</string>
     <key>UIStatusBarHidden</key><true/>

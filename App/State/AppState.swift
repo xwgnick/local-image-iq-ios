@@ -42,6 +42,9 @@ final class AppState: ObservableObject {
     private weak var debugPreviewState: LocalPreviewComparisonState?
 
     @Published private(set) var authorization = PhotoLibraryClient.authorization
+    /// Sheet-local read sessions observe Photos changes even if a search result
+    /// session was already nil. This is not a request to rescan or index.
+    @Published private(set) var photoLibraryEpoch = UUID()
     @Published private(set) var summary = LibrarySummary()
     @Published private(set) var results: [SearchHit] = []
     private struct ResultPages {
@@ -299,6 +302,7 @@ final class AppState: ObservableObject {
 
     func libraryChanged() {
         // Immediately invalidate visible/search state before waiting for an old job.
+        photoLibraryEpoch = UUID()
         thumbnails.clear()
         refresh()
     }
@@ -339,6 +343,7 @@ final class AppState: ObservableObject {
 
     private func beginManualIndex(rebuild: Bool) {
         guard canIndex else { return }
+        photoLibraryEpoch = UUID()
         invalidateDisplayedPhotos()
         progress = IndexProgress()
         let networkAllowed = allowICloudDownload
@@ -593,6 +598,7 @@ final class AppState: ObservableObject {
     }
 
     func clearIndex() {
+        photoLibraryEpoch = UUID()
         invalidateDisplayedPhotos()
         thumbnails.clear()
         summary.indexStatisticsKnown = false

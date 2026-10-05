@@ -122,6 +122,30 @@ actor SQLitePhotoStore {
         }
     }
 
+    /// Grouping requires the full cached revision, including a nullable creation
+    /// time. Read metadata only so stale rows are excluded before vector decoding.
+    func searchPhotoRevisions(modelVersion: String, accessibleIDs: Set<String>) throws -> [String: PhotoRevision] {
+        guard readOnly else { throw AppFailure.storage("Search revisions require a read-only connection.") }
+        defer { connection = nil }
+        try Task.checkCancellation()
+        guard !accessibleIDs.isEmpty,
+              FileManager.default.fileExists(atPath: directory.appendingPathComponent("index.sqlite3").path) else { return [:] }
+        let db = try database()
+        return try db.statement("SELECT id, revision, creation_time FROM photos WHERE model_version = ? ORDER BY id") { statement in
+            try db.bind(modelVersion, at: 1, to: statement)
+            var revisions: [String: PhotoRevision] = [:]
+            while try db.next(statement) {
+                try Task.checkCancellation()
+                let id = try db.string(statement, at: 0)
+                guard accessibleIDs.contains(id) else { continue }
+                revisions[id] = PhotoRevision(id: id, modificationTime: sqlite3_column_double(statement, 1),
+                                              creationTime: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2))
+            }
+            try Task.checkCancellation()
+            return revisions
+        }
+    }
+
     func record(id: String) throws -> CachedPhoto? {
         let db = try database()
         return try db.statement(Self.select + " WHERE p.id = ?") { statement in

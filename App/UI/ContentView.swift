@@ -5,6 +5,7 @@ import ImageIQCore
 struct ContentView: View {
     @ObservedObject var state: AppState
     @StateObject private var photoActions: ResultPhotoActionsState
+    @StateObject private var similarCleanup: SimilarPhotoCleanupState
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var showFilters = false
@@ -12,15 +13,20 @@ struct ContentView: View {
     @State private var albumActionIDs: [String] = []
     @State private var showLibrary = false
     @State private var showSettings = false
+    @State private var showSimilarCleanup = false
     @State private var compactGrid = false
     @State private var visiblePageBoundary: ResultPageBoundaryValue?
     @FocusState private var isSearchFocused: Bool
     private var showingResults: Bool { state.completedQuery != nil || state.activity == .searching }
 
-    init(state: AppState, photoActionService: (any PhotoLibraryActions)? = nil) {
+        init(state: AppState, photoActionService: (any PhotoLibraryActions)? = nil,
+            similarCleanupState: SimilarPhotoCleanupState? = nil) {
         self.state = state
         _photoActions = StateObject(wrappedValue: ResultPhotoActionsState(
             service: photoActionService ?? SystemPhotoLibraryActions(library: state.library)))
+        _similarCleanup = StateObject(wrappedValue: similarCleanupState ?? SimilarPhotoCleanupState(
+            grouping: SimilarPhotoGroupingService(library: state.library),
+            deletion: SystemPhotoDeletionService(library: state.library)))
     }
 
     var body: some View {
@@ -96,6 +102,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showLibrary) { LibrarySheet(state: state) }
             .sheet(isPresented: $showSettings) { SettingsSheet(state: state) }
+            .sheet(isPresented: $showSimilarCleanup, onDismiss: { similarCleanup.pause() }) {
+                SimilarPhotoCleanupSheet(state: similarCleanup, appState: state)
+            }
             .sheet(isPresented: $showFilters) {
                 SearchFiltersSheet(filters: state.searchFilters, albums: photoActions.albums,
                                    albumsLoading: photoActions.albumsLoading, albumIssue: photoActions.albumIssue) {
@@ -135,6 +144,7 @@ struct ContentView: View {
                 if phase != .active { photoActions.pause() }
                 else { photoActions.libraryChanged() }
             }
+            .onChange(of: state.photoLibraryEpoch) { _, _ in similarCleanup.invalidateAccess() }
             .fullScreenCover(item: $state.selection) { selection in
                 PhotoResultsViewer(hits: state.results, initialID: selection.id,
                                    library: state.library, networkAllowed: state.allowICloudDownload, state: state)
@@ -148,6 +158,7 @@ struct ContentView: View {
     }
 
     private var filterControl: some View {
+        cleanupEntryLayout {
         HStack {
             Button {
                 isSearchFocused = false
@@ -168,6 +179,23 @@ struct ContentView: View {
                 Text("相似照片").font(.caption).foregroundStyle(IQStyle.accent)
             }
         }
+        Button {
+            isSearchFocused = false
+            similarCleanup.resume()
+            showSimilarCleanup = true
+        } label: {
+            Label("相似照片清理", systemImage: "square.on.square")
+                .font(.subheadline).frame(minHeight: 44)
+        }
+        .disabled(state.isBusy || photoActions.isBusy)
+        .accessibilityIdentifier("open-similar-cleanup")
+        }
+    }
+
+    private var cleanupEntryLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(spacing: 12))
     }
 
     private var filterSummary: String {

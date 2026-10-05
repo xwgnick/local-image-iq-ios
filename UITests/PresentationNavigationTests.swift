@@ -533,6 +533,83 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertEqual(app.buttons["open-library"].value as? String, "authorization-required")
     }
 
+    func testSimilarCleanupEntryDoesNotScanOrDeleteWithoutPermission() throws {
+        // The existing helper's model-free recovery route is not model readiness.
+        if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
+            throw XCTSkip("Live similar cleanup navigation requires the real bundled models")
+        }
+        launch()
+        assertHomeControls()
+        let library = app.buttons["open-library"]
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@ AND value == %@",
+                                   "选择照片", "authorization-required"), object: library)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCTAssertFalse(springboard.alerts.firstMatch.exists)
+
+        let field = app.textFields["photo-query"]
+        let query = "TEST coast"
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        typeExactly(query, into: field)
+        let keyboardDone = app.buttons["keyboard-done"]
+        expectHittable(keyboardDone)
+        keyboardDone.tap()
+        expectAbsent(app.keyboards.firstMatch)
+        let entry = app.buttons["open-similar-cleanup"]
+        expectHittable(entry)
+        entry.tap()
+
+        let done = app.buttons["close-similar-cleanup"]
+        expectHittable(done)
+        XCTAssertEqual(done.label, "完成")
+        XCTAssertTrue(app.navigationBars["相似照片清理"].exists)
+        let threshold = app.sliders["similar-cleanup-threshold"]
+        XCTAssertTrue(threshold.waitForExistence(timeout: 5))
+        XCTAssertTrue(threshold.isEnabled)
+        let start = app.buttons["start-similar-grouping"]
+
+        func assertNoWorkOrPrompt() {
+            XCTAssertTrue(start.waitForExistence(timeout: 5))
+            XCTAssertEqual(start.label, "开始分组")
+            XCTAssertFalse(start.isEnabled)
+            XCTAssertFalse(app.buttons["cancel-similar-grouping"].exists)
+            XCTAssertFalse(app.buttons["prepare-similar-deletion"].exists)
+            XCTAssertFalse(app.progressIndicators["分组进度"].exists)
+            XCTAssertFalse(app.alerts.firstMatch.exists)
+            XCTAssertFalse(springboard.alerts.firstMatch.exists)
+        }
+
+        func expectThreshold(_ expected: Double) {
+            // Production supplies a decimal accessibilityValue, not a slider
+            // percentage. Accept either .99 or 0.99 without matching private nodes.
+            let value = XCTNSPredicateExpectation(predicate: NSPredicate { object, _ in
+                guard let slider = object as? XCUIElement, let text = slider.value as? String,
+                      let number = Double(text.replacingOccurrences(of: ",", with: ".")) else { return false }
+                return abs(number - expected) < 0.0001
+            }, object: threshold)
+            XCTAssertEqual(XCTWaiter.wait(for: [value], timeout: 5), .completed)
+        }
+
+        expectThreshold(0.96)
+        XCTAssertTrue(app.staticTexts["请先在“我的图库”中允许照片访问。"].waitForExistence(timeout: 5))
+        assertNoWorkOrPrompt()
+        expectHittable(threshold)
+        threshold.adjust(toNormalizedSliderPosition: 1)
+        expectThreshold(0.99)
+        assertNoWorkOrPrompt()
+        // Do not tap Start, prepare/confirm deletion, grant Photos access or add
+        // a third review screenshot. This is navigation of the real empty sheet.
+        done.tap()
+        expectAbsent(done)
+        expectHittable(field)
+        XCTAssertEqual(field.value as? String, query)
+        assertHomeControls()
+        XCTAssertEqual(library.value as? String, "authorization-required")
+        XCTAssertFalse(springboard.alerts.firstMatch.exists)
+    }
+
     private func launch(largeText: Bool = false) {
         // Intentionally keep the system keyboard/locale English for exact-key
         // fixtures and Apple's Search return key. The app's approved Chinese

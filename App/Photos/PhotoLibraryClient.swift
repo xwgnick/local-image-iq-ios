@@ -350,6 +350,71 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
         return result
     }
 
+    /// Dedicated cleanup comparison pixels. targetSize is the pane's pixel bounds,
+    /// not an original-size request. Every stage preserves the whole photograph.
+    func comparisonResult(id: String, targetSize: CGSize, networkAllowed: Bool) async throws -> DisplayThumbnailResult {
+        try Task.checkCancellation()
+        guard Self.canRead else { throw AppFailure.permission }
+        let authorization = Self.authorization
+        let generation = changeGeneration
+        guard let selectedAsset = asset(id: id) else {
+            throw AppFailure.photo("This photo is no longer accessible.")
+        }
+        let revision = PhotoRevision(asset: selectedAsset)
+        return try await Self.comparisonResult(
+            pixelWidth: selectedAsset.pixelWidth, pixelHeight: selectedAsset.pixelHeight,
+            targetSize: targetSize, networkAllowed: networkAllowed,
+            request: { [manager] size, mode, options, callback in
+                manager.requestImage(for: selectedAsset, targetSize: size, contentMode: mode,
+                                     options: options, resultHandler: callback)
+            }, cancel: { [manager] in manager.cancelImageRequest($0) }, validate: { [self] in
+                try validateThumbnail(id: id, revision: revision,
+                                      authorization: authorization, generation: generation)
+            })
+    }
+
+    /// Injectable adapter: no OCR, original-data request, index write or pixel cap.
+    /// Fit the asset aspect into the pane before the loader measures coverage, so
+    /// letterboxing does not incorrectly trigger a larger/network fallback.
+    static func comparisonResult(pixelWidth: Int, pixelHeight: Int, targetSize: CGSize,
+                                 networkAllowed: Bool, request: @escaping DisplayThumbnailLoader.Request,
+                                 cancel: @escaping @Sendable (PHImageRequestID) -> Void,
+                                 validate: @escaping @Sendable () throws -> Void = {}) async throws -> DisplayThumbnailResult {
+        try Task.checkCancellation()
+        try validate()
+        guard pixelWidth > 0, pixelHeight > 0,
+              let bounds = DisplayThumbnailLoader.targetSize(points: targetSize, displayScale: 1) else {
+            throw AppFailure.photo("Invalid comparison image size.")
+        }
+        let width = CGFloat(pixelWidth)
+        let height = CGFloat(pixelHeight)
+        let scale = min(bounds.width / width, bounds.height / height)
+        guard let fitted = DisplayThumbnailLoader.targetSize(
+            points: CGSize(width: width * scale, height: height * scale), displayScale: 1) else {
+            throw AppFailure.photo("Invalid comparison image size.")
+        }
+        let quality224 = LocalPreviewComparisonLoader.targetSize(
+            width: pixelWidth, height: pixelHeight, shortEdge: 224)
+        let result = try await DisplayThumbnailLoader.loadResult(
+            targetSize: fitted, quality224Target: quality224, networkAllowed: networkAllowed,
+            request: { size, _, options, callback in
+                do {
+                    try Task.checkCancellation()
+                    try validate()
+                    try Task.checkCancellation()
+                } catch {
+                    callback(nil, [PHImageErrorKey: error])
+                    return PHInvalidImageRequestID
+                }
+                options.isNetworkAccessAllowed = networkAllowed && options.isNetworkAccessAllowed
+                return request(size, .aspectFit, options, callback)
+            }, cancel: cancel)
+        try Task.checkCancellation()
+        try validate()
+        try Task.checkCancellation()
+        return result
+    }
+
     private func validateThumbnail(id: String, revision: PhotoRevision, authorization: PHAuthorizationStatus,
                                    generation: UInt64?) throws {
         try Task.checkCancellation()
