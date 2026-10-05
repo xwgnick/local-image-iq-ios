@@ -5,7 +5,7 @@ import Photos
 import ImageIQCore
 @testable import LocalImageIQ
 
-/// Three app-hosted tests, exactly two review attachments. No golden fixtures,
+/// Three app-hosted tests, three review screenshots. No golden fixtures,
 /// Photos images/mutations, Apple translation sessions, models, files or network.
 /// Only search readiness is authorized synthetically; the REAL thumbnail client
 /// must remain unauthorized. A readable host fails before AppState is constructed.
@@ -139,8 +139,16 @@ final class SearchToolsPresentationTests: XCTestCase {
         XCTAssertGreaterThan(scroll.contentSize.width, 0)
         XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width)
         let viewport = scroll.convert(scroll.bounds, to: hosted.controller.view)
-        XCTAssertTrue(hosted.controller.view.bounds.contains(viewport), "The native result viewport must fit the host")
+        let geometry = "host=\(hosted.controller.view.bounds); viewport=\(viewport); scrollBounds=\(scroll.bounds); " +
+            "content=\(scroll.contentSize); scale=\(hosted.window.screen.scale); " +
+            "rightOverflowPixels=\((viewport.maxX - hosted.controller.view.bounds.maxX) * hosted.window.screen.scale)"
+        let measurement = XCTAttachment(string: geometry)
+        measurement.name = "Search tools accessibility viewport geometry"
+        measurement.lifetime = .keepAlways
+        add(measurement)
+        XCTAssertTrue(hosted.controller.view.bounds.contains(viewport), "The native result viewport must fit the host: \(geometry)")
         let before = try capture(hosted, scale: hosted.window.screen.scale)
+        attach(before, name: "UIReview-search-tools-selection-accessibility-dark", expectedSize: size)
         assertReadOnly(c, session: session)
 
         // Exercise UIKit scrolling, not a gesture or a fabricated result view.
@@ -160,7 +168,7 @@ final class SearchToolsPresentationTests: XCTestCase {
         XCTAssertNotEqual(try pixels(before, in: viewport), try pixels(after, in: viewport),
                           "The real scroll viewport must render different content after scrolling")
 
-        // No extra attachment, expected failure, smaller font, or replacement UI.
+        // No expected failure, smaller font, or replacement UI.
         // The heading may start below the viewport at accessibility5. The real
         // bottom toolbar is mounted/rendered, but sits OUTSIDE this UIScrollView:
         // scroll width and host size do not prove its controls fit or are accessible,
@@ -316,8 +324,8 @@ final class SearchToolsPresentationTests: XCTestCase {
         return image
     }
 
-    private func attach(_ image: UIImage, name: String) {
-        XCTAssertEqual(image.size, phone)
+    private func attach(_ image: UIImage, name: String, expectedSize: CGSize? = nil) {
+        XCTAssertEqual(image.size, expectedSize ?? phone)
         // Review only: reduce the SAME native capture to 1x. Pixel assertions
         // always use the original backing-scale image, never this reduction.
         let format = UIGraphicsImageRendererFormat()

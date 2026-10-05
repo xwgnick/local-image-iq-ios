@@ -42,6 +42,9 @@ struct ContentView: View {
                     .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 24)
                     .frame(maxWidth: 800).frame(maxWidth: .infinity)
                 }
+                // Keep the actual scroll viewport within its container even
+                // when large Dynamic Type content proposes a wider ideal size.
+                .frame(width: viewport.size.width)
                 .scrollDismissesKeyboard(.interactively)
                 .coordinateSpace(name: ResultPageBoundary.coordinateSpace)
                 .onPreferenceChange(ResultPageBoundaryPreference.self) { boundary in
