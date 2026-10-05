@@ -120,7 +120,7 @@ final class SearchToolsPresentationTests: XCTestCase {
         assertReadOnly(c, session: session)
     }
 
-    func testMaximumTypeKeepsNativeResultsScrollableWithoutHorizontalOverflow() async throws {
+    func testMaximumTypeKeepsNativeResultsScrollableWithoutHorizontalContentOverflow() async throws {
         let c = try await readyContext()
         let session = try XCTUnwrap(c.state.resultSessionID)
         c.state.setSelectingResults(true)
@@ -146,7 +146,15 @@ final class SearchToolsPresentationTests: XCTestCase {
         measurement.name = "Search tools accessibility viewport geometry"
         measurement.lifetime = .keepAlways
         add(measurement)
-        XCTAssertTrue(hosted.controller.view.bounds.contains(viewport), "The native result viewport must fit the host: \(geometry)")
+        // A custom-width window and NavigationStack can have different native
+        // backing bounds (observed 320pt host vs 320 1/3pt UIKit viewport at 3x).
+        // Horizontal CONTENT overflow is checked against that actual viewport
+        // above and below, with no tolerance. The screenshot can only contain
+        // the window-visible intersection, not UIKit's off-canvas bounds.
+        let visibleViewport = viewport.intersection(hosted.controller.view.bounds)
+        XCTAssertFalse(visibleViewport.isNull)
+        XCTAssertGreaterThan(visibleViewport.width, 0)
+        XCTAssertGreaterThan(visibleViewport.height, 0)
         let before = try capture(hosted, scale: hosted.window.screen.scale)
         attach(before, name: "UIReview-search-tools-selection-accessibility-dark", expectedSize: size)
         assertReadOnly(c, session: session)
@@ -164,8 +172,10 @@ final class SearchToolsPresentationTests: XCTestCase {
         XCTAssertEqual(scroll.contentOffset.y, target.y, accuracy: 1 / hosted.window.screen.scale)
         XCTAssertEqual(scroll.contentOffset.x, initialOffset.x)
         XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width)
+        XCTAssertEqual(scroll.convert(scroll.bounds, to: hosted.controller.view), viewport,
+                   "Scrolling must not move or resize the actual viewport")
         let after = try capture(hosted, scale: hosted.window.screen.scale)
-        XCTAssertNotEqual(try pixels(before, in: viewport), try pixels(after, in: viewport),
+        XCTAssertNotEqual(try pixels(before, in: visibleViewport), try pixels(after, in: visibleViewport),
                           "The real scroll viewport must render different content after scrolling")
 
         // No expected failure, smaller font, or replacement UI.

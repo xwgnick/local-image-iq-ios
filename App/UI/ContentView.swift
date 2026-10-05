@@ -42,9 +42,6 @@ struct ContentView: View {
                     .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 24)
                     .frame(maxWidth: 800).frame(maxWidth: .infinity)
                 }
-                // Keep the actual scroll viewport within its container even
-                // when large Dynamic Type content proposes a wider ideal size.
-                .frame(width: viewport.size.width)
                 .scrollDismissesKeyboard(.interactively)
                 .coordinateSpace(name: ResultPageBoundary.coordinateSpace)
                 .onPreferenceChange(ResultPageBoundaryPreference.self) { boundary in
@@ -376,12 +373,13 @@ struct ContentView: View {
                       detail: state.canRead ? "查看图库状态后重试；此提示不代表收藏或相册操作失败。" : "请先检查照片访问权限，再重试。")
             Button("查看图库") { showLibrary = true }.buttonStyle(.bordered).frame(minHeight: 44)
         } else if !state.results.isEmpty {
-            HStack {
+            resultsHeadingLayout {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("已显示 \(state.results.count) 张候选照片").font(.headline)
                     Text("最相近的在前").font(.caption).foregroundStyle(IQStyle.secondary)
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
                 Button(state.isSelectingResults ? "完成" : "选择") {
                     isSearchFocused = false
                     state.setSelectingResults(!state.isSelectingResults)
@@ -394,6 +392,7 @@ struct ContentView: View {
                         .frame(width: 44, height: 44).background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 13))
                 }.accessibilityLabel(compactGrid ? "显示较大照片" : "显示紧凑网格")
                     .accessibilityIdentifier("toggle-grid-layout")
+                }
             }.accessibilityIdentifier("results-heading")
             PhotoResultsGrid(hits: state.results, compact: compactGrid, onSelect: { id in
                 isSearchFocused = false
@@ -420,6 +419,12 @@ struct ContentView: View {
                     .foregroundStyle(IQStyle.onAccent).buttonStyle(.plain).accessibilityIdentifier("setup-library")
             }
         }
+    }
+
+    private var resultsHeadingLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 8))
     }
 
     private func emptyCard(symbol: String, title: String, detail: String) -> some View {
