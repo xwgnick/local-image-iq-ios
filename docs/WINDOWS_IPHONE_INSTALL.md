@@ -5,7 +5,28 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.5.10（build 23）— HQ224 网格显示与实际来源诊断，已交付
+## 当前：0.6.0（build 24）— 批量照片操作、搜索筛选与找相似，已交付
+
+本地已校验包：[../build/device-download/37281481114/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37281481114/LocalImageIQ-iphoneos-unsigned.ipa)；另一台电脑使用 [公开 Release ci-37281481114-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37281481114-1)。Release **403520360**，**2026-10-05T08:41:51Z** 发布，**9 项资产、prerelease、非 draft**；本机无需重下。
+
+原始 IPA asset **611995265**，**1,418,824,951 字节**，SHA-256 **`8a06874c8b06369e4780bc52f9f7f6cd5af6d4d6f4b76f2b1b325774061ba3f2`**。父流程已完整流式核验长度／哈希及 **7-Zip 26.03 全量 CRC PASS**（11 文件夹、30 文件，解压后 **1,564,954,349 字节**）；同目录设备报告／交付清单／SHA 校验文件齐全，下载记录见 [../build/device-download/37281481114/release-fetch-9db1bccd-ad1e-4a51-b543-0fb8319c405c.json](../build/device-download/37281481114/release-fetch-9db1bccd-ad1e-4a51-b543-0fb8319c405c.json)。原包校验不验证 Sideloadly 重签后的包或手机。
+
+[CI 37281481114](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37281481114)／[job 111670359062](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37281481114/job/111670359062)，最终源码 **`ba18307f0d17ed3554487ad31b7fc6c0662fae5f`**：**第三次完整原生验证 SUCCESS，新 run attempt 1，不是整体首轮成功**。核心 **79**、App **855＝854 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败**（**278.530 秒，wall 303.931 秒**），UI **12 全通过／873.437 秒**。沿用个人公开仓库／标准 `macos-15`／原工作流，三项输入均 `true`，无新增缓存、测试跳过或 runner 更换。设备／小元数据已核对 **0.6.0 / 24、arm64 Release、未签名、最低 iOS 17、SDK 18.5／Xcode 16.4、LaunchScreen 与更新后的 Photos 使用说明**；SigLIP 768／地点身份沿用，**未再次全量比较模型权重**。完整测试、两次失败与最终生产布局修复、资产核验见 [BUILD_STATUS.md](BUILD_STATUS.md)。本次仅据已核验记录更新文档，没有重新构建或下载。
+
+### 覆盖安装后直接使用，无需调试
+
+1. 使用**同一 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**，签名沿用下方第 1–5 节。**不要卸载、清索引或重建索引**；已有有效索引直接复用。
+2. 正常搜索，在结果区点“**选择**”，选中照片后使用**批量分享／收藏／加入相簿／新建相簿**。
+3. 在**搜索区下方点“筛选”**，按**日期／相簿／类型**选择条件，再搜索。
+4. 打开照片查看器，点“**找相似**”。**不必开启“显示调试工具”**，也无需为了本版功能另做旧版诊断取证。
+
+分享输出 **JPEG，不是原始 RAW 或 Live Photo**。本版不会自动删除、重建索引或整理照片；**收藏、加入／新建相簿属于用户明确触发的 Photos 元数据写入**，并非所有操作只读。真实 Photos／有限照片授权、收藏与相簿实际写入、系统分享／AirDrop 和 build 24 实际 iPhone 安装仍**未验证**，须在手机上确认，不把模拟器通过当作真机成功。
+
+父流程实际查看 [../build/ui-review/37281481114/search-tools-contact.jpg](../build/ui-review/37281481114/search-tools-contact.jpg)（**1008×1548，5 张原生合成图**）：普通／选择／筛选／相簿各 **393×852**，辅助功能图 **320×852**。前四张与第二次失败对应图字节相同；辅助功能 header 已改为两行全宽，实测宿主／视口／内容均 **320 pt**、右侧溢出 **0**。**未授权占位符不是真实照片、画质或写入证据**；普通图底部测试水印遮叠操作行，不证明全部可点击，大字体需要滚动，未覆盖所有无障碍行为。
+
+以下 build 23 及更早版本的正文和安装历史全部保留；旧包、旧“当前／本轮”和调试／迁移要求不替代页首 build 24 及下方现行第 1–5 节。
+
+## 历史：0.5.10（build 23）— HQ224 网格显示与实际来源诊断，已交付
 
 本地已校验包：[../build/device-download/37226908383/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37226908383/LocalImageIQ-iphoneos-unsigned.ipa)；另一台电脑使用 [公开 Release ci-37226908383-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37226908383-1)。Release **403175811**，9 项资产、已发布 prerelease，发布时间 **2026-10-04T19:35:19Z**。
 

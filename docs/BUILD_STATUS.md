@@ -1,6 +1,63 @@
-# Cloud build status — build 23
+# Cloud build status — build 24
 
-## Current: 0.5.10 (build 23) — 第三次整体验证 SUCCESS；已交付，真机画质待验
+## Current: 0.6.0 (build 24) — 第三次完整原生验证 SUCCESS；已交付，真机待验
+
+[Run 37281481114](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37281481114)／[job 111670359062](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37281481114/job/111670359062)，最终构建源码 **`ba18307f0d17ed3554487ad31b7fc6c0662fae5f`**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。这是**新 run 的 attempt 1、本功能第三次整体验证 SUCCESS，不是整体首轮成功**。
+
+三轮均沿用同一**个人公开仓库／标准 `macos-15`／原工作流**，`include_models`／`all_compute_units`／`build_device_ipa` 三项均为 `true`，保留完整真实模型、App 和 UI 验证；**没有新增缓存、跳过测试或更换 runner**。
+
+### build 24 三次验证账本
+
+|整体验证|run／job／完整源码 SHA|实际结果与修正|
+|---|---|---|
+|第一次|[37275504713／111651522476](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37275504713/job/111651522476)；功能源码 `5408877125d5d741216d58d503972af39c9818e2`|FAILED：App 855 项／1 项既有 SQLite 跳过，**仅一项新增最大辅助功能字体布局测试产生 3 个断言失败，不是 3 项测试失败**；核心 79、独立 UI 12 全通过。|
+|第二次|[37278912460／111662131660](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37278912460/job/111662131660)；`8954c780259d2150f2c7d44010602a458e1eee2d`|FAILED：App 855 项／1 项既有跳过，仍是同一测试的 3 个断言失败；App **209.547 秒，wall 212.419 秒**；UI **12 全通过／713.452 秒**。生产 width frame 限制尝试无效：宿主宽 **320 pt**，视口／内容仍为 **320.333333 pt**，在 3× 下多出 **1 px**。|
+|第三次|[37281481114／111670359062](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37281481114/job/111670359062)；`ba18307f0d17ed3554487ad31b7fc6c0662fae5f`|SUCCESS：撤回 width clamp，**实际修复生产无障碍 header，改为两行全宽堆叠**；测试验证内容宽度 ≤ 实际视口，并按可见交集裁剪。最终实测宿主／视口／内容宽度均 **320 pt**、右侧溢出 **0**，不只是放宽裁剪。|
+
+第三次**替换了 containment 断言**，不能声称“全部断言未变”或“仅测试修复”；未放宽容差、延长超时或新增跳过。完整重试造成了**本可避免的额外等待**，本轮未实施 CI 优化。
+
+第二次失败证据仍为 **draft Release 403491693**；UI ZIP asset **611912499**，**6,231,074 字节**，SHA-256 **`69403534f49008e819860a8c83477bb7e378e05b986334abd446b80d227e1269`**。父流程仅以精确 **GET-only** 下载并保留，**没有发布、修改或删除该失败 draft**。
+
+### build 24 最终验证结果
+
+|项目|实际结果／范围|
+|---|---|
+|Swift 核心|**79 全通过**。|
+|App XCTest|**855＝854 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败**；**278.530 秒，wall 303.931 秒**。|
+|新增 App 方法|**142＝`PhotoLibraryActionsTests` 44＋`FilteredSimilarSearchTests` 36＋`ResultPhotoActionsStateTests` 17＋`SearchActionsPresentationTests` 24＋`SearchToolsStateTests` 18＋`SearchToolsPresentationTests` 3**，全部通过，已计入 App 855，不重复相加。|
+|搜索工具子套件|`SearchToolsStateTests` **18／1.218 秒**；`SearchToolsPresentationTests` **3／1.645 秒**，全通过。|
+|独立 UI|**12 全通过／873.437 秒**；导航 **7／599.974 秒**、键盘 **5／273.462 秒**，与 App 分开计数。|
+|设备构建与小型元数据|**0.6.0 / 24、arm64 Release、未签名、最低 iOS 17、SDK 18.5、Xcode 16.4、LaunchScreen**；已核对更新后的 Photos 使用说明。|
+
+上述测试秒数不是手机性能；原生状态／展示验证不等于真实 Photos 授权、照片写入或手机端到端验收。
+
+### build 24 资产与本地全量核验
+
+|资产／核验|实际身份与结果|
+|---|---|
+|公开 Release|[ci-37281481114-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37281481114-1)，ID **403520360**；**2026-10-05T08:41:51Z** 发布；**9 项资产、prerelease、非 draft**。|
+|原始 IPA|asset **611995265**；**1,418,824,951 字节**；SHA-256 **`8a06874c8b06369e4780bc52f9f7f6cd5af6d4d6f4b76f2b1b325774061ba3f2`**。已实际完整流式下载并核验长度／哈希，不是仅核对远端声明。|
+|归档完整性|**7-Zip 26.03 全量 CRC PASS**；**11 文件夹、30 文件**，解压后 **1,564,954,349 字节**；不验证 Sideloadly 重签包或手机安装。|
+|UI ZIP|asset **611995021**；**6,253,950 字节**；SHA-256 **`4bb66bb1d8349f1f154da8c6c858bc36b69dfae20cf9b531cb74392ccc9c5e80`**；[../build/ui-review/37281481114/UIReview.zip](../build/ui-review/37281481114/UIReview.zip) 已下载核验。|
+|模型／地点小型元数据|沿用 **SigLIP 768 模型身份**；地点 **2,943 项／15,175,079 字节**，Geo SHA-256 **`41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`**、manifest SHA-256 **`7edb232043452d9a6f718b8a59a121fa0938dfdd54e732ed97e2be60f195b7e5`**。**没有再次全量比较模型权重**，小元数据与 CRC 不证明跨版本权重字节一致。|
+
+本地已校验交付文件：
+
+- [../build/device-download/37281481114/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37281481114/LocalImageIQ-iphoneos-unsigned.ipa)
+- [../build/device-download/37281481114/device-build.json](../build/device-download/37281481114/device-build.json)
+- [../build/device-download/37281481114/delivery.json](../build/device-download/37281481114/delivery.json)
+- [../build/device-download/37281481114/SHA256SUMS.txt](../build/device-download/37281481114/SHA256SUMS.txt)
+- [../build/device-download/37281481114/release-fetch-9db1bccd-ad1e-4a51-b543-0fb8319c405c.json](../build/device-download/37281481114/release-fetch-9db1bccd-ad1e-4a51-b543-0fb8319c405c.json)
+
+### build 24 实际审图与手机交接边界
+
+父流程**实际查看** [../build/ui-review/37281481114/search-tools-contact.jpg](../build/ui-review/37281481114/search-tools-contact.jpg)（**1008×1548**）：普通／选择／筛选／相簿四张原生图各 **393×852**，辅助功能大字体图 **320×852**，共 **5 张**。前四张与第二次失败对应图**字节相同**；辅助功能 header 现为**两行全宽**。这些是**合成状态、未授权占位符**，不是私人照片、真机画质或 Photos 写入证据。普通图底部测试水印与操作行重叠，不能宣称全部控件完整可点击；大字体需要滚动，未验证所有无障碍行为。
+
+**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建；无需开启调试。**搜索结果点“选择”后可批量分享、收藏、加入相簿／新建相簿；搜索区下方“筛选”可按日期／相簿／类型选择；查看器可点“找相似”。分享导出 **JPEG，不是原始 RAW／Live Photo**；不自动删除、重建索引或整理照片，但用户明确操作的收藏／加入或新建相簿会涉及 **Photos 元数据写入**，不能概括为全部只读。**实际 iPhone 安装、真实 Photos／有限授权、真实写入与 AirDrop 均未验证**。操作见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
+
+以下 build 23 及更早版本的全部正文与旧历史保留；其中“当前／本轮”和旧调试取证要求仅属于当时版本，不替代页首 build 24。
+
+## Previous delivery: 0.5.10 (build 23) — 第三次整体验证 SUCCESS；历史记录，真机画质待验
 
 [Run 37226908383](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37226908383)／[job 111508328530](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37226908383/job/111508328530)，最终构建源码 **`2075334aebd5c90abf0ee70b459e5645fe878d3b`**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。该新 run 的 **attempt 1 是本功能第三次完整原生验证，不是整体首轮成功**。
 

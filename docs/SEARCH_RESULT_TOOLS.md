@@ -1,9 +1,10 @@
 # 搜索结果工具：筛选、多选操作与相似照片
 
-状态：**0.6.0 / build 24，源码已加入，原生 CI 待验证**（2026-10-05）。本页记录当前实现契约，不代表测试通过或新 IPA 已交付。最近已验证交付仍为 **0.5.10 / build 23**；不覆盖 [../README.md](../README.md)、[BUILD_STATUS.md](BUILD_STATUS.md) 或旧历史。
+状态：**0.6.0 / build 24，VERIFIED，已交付**（2026-10-05）。最终源码 `ba18307f0d17ed3554487ad31b7fc6c0662fae5f`，[CI run 37281481114](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37281481114)／[job 111670359062](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37281481114/job/111670359062) SUCCESS；这是**本功能整体第三次原生验证**，虽为新 run 的 attempt 1，不能称首次功能尝试即成功。完整原生门槛、公开发布、IPA 完整下载及流式 SHA-256／CRC 校验均已完成；真机操作与画质等边界仍见下文。当前摘要见 [../README.md](../README.md)，build 23 等旧版本记录保留于 [BUILD_STATUS.md](BUILD_STATUS.md)。
 
 ## 1. 界面与选择范围
 
+- 三个入口：**搜索结果的「选择」**提供多选分享、收藏及加入／新建相册；**搜索框下的「筛选」**提供日期、相册、图片类型条件；**照片查看器的「找相似」**使用缓存图像向量并排除种子本身。默认保持简洁黑金界面。
 - 搜索框下只增加简洁的「筛选／已筛选」行及条件摘要；批量工具栏仅在结果进入「选择」模式后出现，替代底部图库状态栏，不常驻堆放操作。
 - 只能选择当前已显示的结果。「全选已显示」指已经追加到列表的结果，不只是屏幕内的格子，也不包含尚未显示的候选。默认首批 12 张，继续追加 12 张时保留原选择，新追加项不会自动选中。
 - 分享和写入的选中 ID 按搜索排名排列，不按点击先后排列。「完成」退出多选并清空选择；查询、筛选、搜索设置、搜索取消、后台或图库失效会清理相应结果会话和选择。取消无关诊断／翻译任务不因此清掉仍有效的图库结果。
@@ -62,25 +63,64 @@
 
 ## 7. 测试账本与未验证项
 
-以下是**新增测试源码数量及覆盖意图，均待原生执行确认，不是 PASS 记录**：
+第三次完整原生执行 **PASS（保留 1 项既有跳过）**：
 
-| App XCTest 套件 | 新增 | 覆盖重点 |
-|---|---:|---|
-| `PhotoLibraryActionsTests` | 44 | 日期／类型、权限／能力与整批修改计划、取消边界、顺序临时写入／清理、合成 JPEG 元数据。 |
-| `FilteredSimilarSearchTests` | 36 | 全局中心／分数位模式、筛选先于限制、缓存种子、当前访问与后续页种子校验、无编码／像素请求／索引写入。 |
-| `ResultPhotoActionsStateTests` | 17 | 注入服务、独立修改任务真实结果、分享预检／持有／身份清理、后台与迟到回调。 |
-| `SearchActionsPresentationTests` | 24 | 日期草稿／DST、相册菜单、分享 coordinator 完成与 dismantle、原生筛选／相册宿主快照。 |
-| `SearchToolsStateTests` | 18 | 翻译／原文决定复用、相似搜索、多选排名、跨批追加与会话失效。 |
-| `SearchToolsPresentationTests` | 3 | 原生结果／选择状态、徽标像素与可访问性、窄屏最大字号工具栏。 |
-| 合计 | **142** | App 总量预期 **713 → 855**，子套件已包含其中，不重复相加。 |
+- 核心：**79 项通过**。
+- App：**855 项，854 通过／1 既有 SQLite 物理测试跳过／0 失败**；测试耗时 **278.530 秒**，墙钟 **303.931 秒**。
+- 独立 UI：**12 项全部通过，873.437 秒**；导航 **7 项／599.974 秒**，键盘 **5 项／273.462 秒**。
 
-独立 UI 新增 **1** 项 `testSearchFiltersApplyAndClearWithoutPhotosPermission`，总量预期 **11 → 12**，与 App 测试分开计。完整模型门槛下，该测试走真实 App／真实相册服务，在未授权状态应用「去年＋截屏」再清除，检查不弹授权、不自动索引；显式 model-free 模式会跳过，不得算作完整验证。既有核心 79、真实模型 CPU／`.all`／20 actor 及其余原生门槛不削减。
+以下新增 App 测试已在最终 run 通过；子套件包含在 App 总数内，不重复相加：
 
-证据边界：
+| App XCTest 套件 | 新增／最终结果 | 覆盖重点 |
+|---|---|---|
+| `PhotoLibraryActionsTests` | 44／PASS | 日期／类型、权限／能力与整批修改计划、取消边界、顺序临时写入／清理、合成 JPEG 元数据。 |
+| `FilteredSimilarSearchTests` | 36／PASS | 全局中心／分数位模式、筛选先于限制、缓存种子、当前访问与后续页种子校验、无编码／像素请求／索引写入。 |
+| `ResultPhotoActionsStateTests` | 17／PASS | 注入服务、独立修改任务真实结果、分享预检／持有／身份清理、后台与迟到回调。 |
+| `SearchActionsPresentationTests` | 24／PASS | 日期草稿／DST、相册菜单、分享 coordinator 完成与 dismantle、原生筛选／相册宿主快照。 |
+| `SearchToolsStateTests` | 18／PASS，1.218 秒 | 翻译／原文决定复用、相似搜索、多选排名、跨批追加与会话失效。 |
+| `SearchToolsPresentationTests` | 3／PASS，1.645 秒 | 原生结果／选择状态像素、徽标像素与布局、窄屏最大字号下的滚动与横向内容宽度／可见像素检查；不是完整可访问性审计或工具栏适配验证。 |
+| 合计 | **142／PASS** | App 总量 **713 → 855**；上述子套件均已包含在最终 App 结果中。 |
 
-- 单元测试主要使用修改计划／取消门模型、注入 Photos 服务与文件 writer、合成图片；**不实际修改系统 Photos 收藏或相册**。原生宿主快照／可访问性检查也不等于真实用户手势端到端；结果宿主以合成检索状态配合真实未授权缩略图路径，不读取私照。
+独立 UI 新增 **1** 项 `testSearchFiltersApplyAndClearWithoutPhotosPermission`，总量 **11 → 12**，与 App 测试分开计，三次 CI 均为 12 项通过。完整模型门槛下，该测试走真实 App／真实相册服务，在未授权状态应用「去年＋截屏」再清除，检查不弹授权、不自动索引；显式 model-free 模式会跳过，不得算作完整验证。
+
+本次 `include_models`、`all_compute_units`、`build_device_ipa` 均为 `true`；完整模型转换／数值对齐、真实模型 CPU／`.all`／20 actor、核心／App／UI 与设备构建门槛全部保留并通过。**CI 未改变**，未新增缓存、削减门槛、跳过新增测试或更换 runner 规格；既有 SQLite 物理测试跳过不属于新增规避。
+
+### 三次原生 CI 历史与最终修正
+
+失败用例属于新增的 `SearchToolsPresentationTests`，经源码核对，当前名称为 `testMaximumTypeKeepsNativeResultsScrollableWithoutHorizontalContentOverflow`。两次失败均是**同一个最大字号测试用例中的 3 条断言失败，不是 3 个测试用例失败**。
+
+| 次序 | 源码 SHA | CI run／job | 已知结果 |
+|---|---|---|---|
+| 首次功能实现 | `5408877125d5d741216d58d503972af39c9818e2` | run `37275504713`／job `111651522476` | App 共 855 项：1 项既有跳过，上述 1 个用例内 3 条断言失败，其余 App 测试通过；UI 12 项通过；核心 79 项通过。 |
+| 第二次：生产界面宽度约束尝试 | `8954c780259d2150f2c7d44010602a458e1eee2d` | run `37278912460`／job `111662131660` | App 共 855 项：1 项既有跳过，同一用例内同样 3 条断言失败，其余 App 测试通过；App 耗时 209.547 秒、墙钟 212.419 秒；UI 12 项通过，耗时 713.452 秒。生产界面添加 `frame(width: viewportWidth)` 的尝试未奏效。 |
+| 第三次：标题布局与像素测量修正 | `ba18307f0d17ed3554487ad31b7fc6c0662fae5f` | run `37281481114`／job `111670359062`，新 run 的 attempt 1 | **SUCCESS**；核心 79 通过，App 855（854 通过／1 既有跳过／0 失败），UI 12 通过。撤回上一轮宽度约束，最大可访问性字号标题改为 `VStack`；最终截图确认标题为全宽两行，测量修正后的测试通过。 |
+
+第二次失败的**原始几何测量**为：宿主 `320 × 852`，`UIScrollView` 视口 `320.3333333 × 852`，scale 为 `3`，**内容宽度等于实际视口宽度**，右侧像素检查相差 **1 个像素**。这些观测不能写成“已确认内容横向溢出”。
+
+第三次修正了宿主包含性／像素裁剪检查，改按**实际宿主与视口的可见交集**计算；仍严格要求**横向内容宽度 ≤ 实际 `UIScrollView` 视口宽度，不加容差**，并附原始几何测量附件。因此不能声称测试断言完全未改。
+
+最终实际测量：**宿主宽度 320、视口宽度 320、内容宽度 320、右侧溢出 0、内容高度 1556.6667**。这证明该最终夹具满足相应几何断言，**不能证明原先 1 像素差异的原因，也不能将其消失完全归因于测量修正**；第三次同时修复了真实标题布局。
+
+### 已实际查看的最终原生截图
+
+- 已实际查看最终 [原生截图拼图](../build/ui-review/37281481114/search-tools-contact.jpg)，大小 **1008 × 1548**，包含 **5 张本功能原生夹具截图**：普通结果、选择态、筛选、相册各 **393 × 852**；最大字号 `accessibility5` 结果为 **320 × 852**。
+- 前四张截图文件与第二次失败 run 的对应截图**逐字节相同**；第五张标题从拥挤窄列改为**全宽两行**。第二次 [原生截图拼图](../build/ui-review/37278912460/search-tools-contact.jpg) 亦已查看，保留作历史对照。
+- 普通字号截图底部的 **TEST 水印与最下方操作行重叠**，所以不能宣称完整工具栏及所有按钮的可点击性已经充分验证。大字号结果控件有一部分位于滚动折叠线下；滚动与几何断言通过不等于全部控件同时可见，更不是完整 AX／无障碍证明。
+- 照片格来自**合成检索状态和未授权缩略图路径的空白占位，不是真实 Photos 照片或操作**；截图复核不能替代 Photos 写入、完整可访问性或分享端到端验证。
+
+### 最终交付与本地完整性校验
+
+- [公开 Release：ci-37281481114-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37281481114-1)，release ID **`403520360`**，**9 项资产、prerelease、非草稿**；发布于 **2026-10-05T08:41:51Z**。
+- IPA asset **`611995265`**，已完整下载 **1,418,824,951 bytes** 至 [../build/device-download/37281481114/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37281481114/LocalImageIQ-iphoneos-unsigned.ipa)。流式长度及 SHA-256 校验 **PASS**：`8a06874c8b06369e4780bc52f9f7f6cd5af6d4d6f4b76f2b1b325774061ba3f2`。见[下载校验记录](../build/device-download/37281481114/release-fetch-9db1bccd-ad1e-4a51-b543-0fb8319c405c.json)。
+- **7-Zip 26.03 全量 CRC PASS**：11 个文件夹、30 个文件，解包总长度 **1,564,954,349 bytes**；这是完整包校验，不只是文件头或版本元数据检查。
+- 最终 UI ZIP：**6,253,950 bytes**，SHA-256 `4bb66bb1d8349f1f154da8c6c858bc36b69dfae20cf9b531cb74392ccc9c5e80`。
+- 第二次失败资产仅作历史记录：release **DRAFT `403491693`**，UI asset `611912499`，**6,231,074 bytes**，SHA-256 `69403534f49008e819860a8c83477bb7e378e05b986334abd446b80d227e1269`。当时仅下载既有资产，未发布该草稿、未交付第二次尝试的 IPA；不要与上述最终公开交付混淆。
+
+### 证据边界与仍待真机验证的项目
+
+- 单元测试主要使用修改计划／取消门模型、注入 Photos 服务与文件 writer、合成图片；**不实际修改系统 Photos 收藏或相册**。原生宿主像素／布局检查不等于真实用户手势端到端，也不等于完整可访问性审计或工具栏适配验证；结果宿主以合成检索状态配合真实未授权缩略图路径，不读取私照。
 - 已写测试覆盖控制器级分享访问预检及 coordinator 身份／文件生命周期；部分展示测试直接构建 `Coordinator.makeController()`，绕过 representable 的创建前守卫。**没有专门的端到端测试证明权限失效时实际活动控制器绝不创建**，不能把构造与清理测试写成完整分享 E2E。
-- 原生编译、上述 855 App／12 UI 的实际通过／跳过数、原生截图复核均待 CI；真机 PhotoKit 收藏／加入与新建相册、有限授权变化、真实临时文件与分享扩展／AirDrop 生命周期、导出画质及大图内存表现均待手机验证。
+- **第三次完整原生验证、最终截图复核、公开发布与本地完整 IPA 校验已经完成**，但不代表已在真实 iPhone 验收。真机 PhotoKit 收藏／加入与新建相册、有限授权变化、真实临时文件与分享扩展／AirDrop 生命周期、导出画质、大图内存及设备行为仍未验证。
 
 ## 8. 源码入口
 
@@ -88,5 +128,3 @@
 - 写入与分享：[../App/Photos/PhotoLibraryActions.swift](../App/Photos/PhotoLibraryActions.swift)、[../App/State/ResultPhotoActionsState.swift](../App/State/ResultPhotoActionsState.swift)、[../App/UI/BatchPhotoShareSheet.swift](../App/UI/BatchPhotoShareSheet.swift)。
 - 界面：[../App/UI/ContentView.swift](../App/UI/ContentView.swift)、[../App/UI/SearchFiltersSheet.swift](../App/UI/SearchFiltersSheet.swift)、[../App/UI/AlbumActionSheet.swift](../App/UI/AlbumActionSheet.swift)。
 - 当前权限／隐私文案：[../App/Info.plist](../App/Info.plist)、[../App/UI/SettingsSheet.swift](../App/UI/SettingsSheet.swift)。
-
-本次仅新增本页；不改 README、历史、生产源码或测试，不执行终端、Git、CI 或网络操作。
