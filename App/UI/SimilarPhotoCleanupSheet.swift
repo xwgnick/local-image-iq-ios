@@ -27,10 +27,11 @@ struct SimilarPhotoCleanupSheet: View {
     }
 
     private var thresholdBinding: Binding<Double> {
-        Binding(get: { Double(state.threshold) }, set: { value in
+        // Integer slider ticks avoid Float-to-Double roundoff at decimal steps.
+        Binding(get: { (Double(state.threshold) * 100).rounded() }, set: { value in
             guard !state.isDeleting else { return }
             // The controller cancels/invalidates the old read; never regroup here.
-            state.threshold = Float(value)
+            state.threshold = Float(value.rounded()) / 100
         })
     }
 
@@ -159,7 +160,7 @@ struct SimilarPhotoCleanupSheet: View {
                     .font(.subheadline.weight(.medium))
                     .monospacedDigit()
                     .fixedSize(horizontal: false, vertical: true)
-                Slider(value: thresholdBinding, in: 0.90...0.99, step: 0.01)
+                Slider(value: thresholdBinding, in: 90...99, step: 1)
                     .disabled(state.isDeleting)
                     .accessibilityLabel("相似度阈值，越高越严格")
                     .accessibilityValue(String(format: "%.2f", Double(state.threshold)))

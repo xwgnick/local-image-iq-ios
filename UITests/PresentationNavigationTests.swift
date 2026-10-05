@@ -596,7 +596,12 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["请先在“我的图库”中允许照片访问。"].waitForExistence(timeout: 5))
         assertNoWorkOrPrompt()
         expectHittable(threshold)
-        threshold.adjust(toNormalizedSliderPosition: 1)
+        // This slider's accessibilityValue is COSINE (0.96), not a normalized
+        // thumb position (2/3). XCUI's normalized adjust interpreted the custom
+        // value incorrectly and stopped at 0.98 in the captured failure. Move
+        // the real thumb from its known default tick to the end of its track.
+        threshold.coordinate(withNormalizedOffset: CGVector(dx: 2.0 / 3.0, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: threshold.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)))
         expectThreshold(0.99)
         assertNoWorkOrPrompt()
         // Do not tap Start, prepare/confirm deletion, grant Photos access or add

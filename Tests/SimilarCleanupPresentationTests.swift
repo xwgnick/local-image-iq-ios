@@ -102,6 +102,10 @@ final class SimilarCleanupPresentationTests: XCTestCase {
         c.cleanup.toggleSelection(c.grouping.groups[0].photos[0].id)
         try await settle(host)
 
+        // Render the real lazy hierarchy before measuring its scrolling extent.
+        // Initial layout preferences can still precede realised group rows.
+        _ = try capture(host)
+        try await settle(host)
         XCTAssertEqual(host.window.bounds.size, size)
         XCTAssertEqual(host.controller.view.bounds.size, size)
         let scroll = try scrollView(in: host)
@@ -110,11 +114,17 @@ final class SimilarCleanupPresentationTests: XCTestCase {
         let viewport = scroll.convert(scroll.bounds, to: host.controller.view)
         let origin = scroll.contentOffset
         let bottom = scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom
-        let distance = min(scroll.bounds.height / 2, bottom - origin.y)
+        let distance = bottom - origin.y
         XCTAssertGreaterThan(distance, 0)
+        let beforeGeometry = "bounds=\(scroll.bounds); content=\(scroll.contentSize); inset=\(scroll.adjustedContentInset); origin=\(origin); bottom=\(bottom)"
         scroll.setContentOffset(CGPoint(x: origin.x, y: origin.y + distance), animated: false)
+        let immediateOffset = scroll.contentOffset
         try await settle(host)
-        XCTAssertGreaterThan(scroll.contentOffset.y, origin.y)
+        let geometry = XCTAttachment(string: "\(beforeGeometry); immediate=\(immediateOffset); settled=\(scroll.contentOffset); contentAfter=\(scroll.contentSize)")
+        geometry.name = "Cleanup maximum-font native scroll geometry"
+        geometry.lifetime = .keepAlways
+        add(geometry)
+        XCTAssertGreaterThan(scroll.contentOffset.y, origin.y, "\(beforeGeometry); immediate=\(immediateOffset); settled=\(scroll.contentOffset)")
         XCTAssertEqual(scroll.contentOffset.x, origin.x)
         XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width)
         XCTAssertEqual(scroll.convert(scroll.bounds, to: host.controller.view), viewport)
