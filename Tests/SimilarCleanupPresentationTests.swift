@@ -444,17 +444,23 @@ private final class SimilarCleanupReviewGrouping: SimilarPhotoGrouping {
     static func fixtureGroups() -> [SimilarPhotoGroup] {
         // Already ordered like the real grouping result: sizes 4, 3, 2. No
         // attempt to retest grouping math here (covered by the pure-state suite).
-        [4, 3, 2].enumerated().map { groupIndex, count in
+        let sizes: [Int] = [4, 3, 2]
+        var result: [SimilarPhotoGroup] = []
+        for (groupIndex, count) in sizes.enumerated() {
             var vector = [Float](repeating: 0, count: 768)
             vector[groupIndex] = 1
-            let photos = (0..<count).map { index in
-                IndexedPhoto(id: "TEST-cleanup-\(groupIndex + 1)-\(index + 1)",
-                    modificationTime: Double(200 + groupIndex * 10 + index),
+            var photos: [IndexedPhoto] = []
+            for index in 0..<count {
+                let ordinal: Int = groupIndex * 10 + index
+                let id = "TEST-cleanup-\(groupIndex + 1)-\(index + 1)"
+                let photo = IndexedPhoto(id: id, modificationTime: Double(200 + ordinal),
                     modelVersion: "TEST-cleanup-presentation", imageEmbedding: vector,
-                    creationTime: Double(100 + groupIndex * 10 + index))
+                    creationTime: Double(100 + ordinal))
+                photos.append(photo)
             }
-            return SimilarPhotoGroup(id: photos[0].id, photos: photos, minimumSimilarity: 1)
+            result.append(SimilarPhotoGroup(id: photos[0].id, photos: photos, minimumSimilarity: 1))
         }
+        return result
     }
 
     func group(threshold: Float,
