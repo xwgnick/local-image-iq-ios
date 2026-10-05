@@ -99,6 +99,29 @@ actor SQLitePhotoStore {
         }
     }
 
+    /// Manual text indexing needs only active-image IDs/revisions, not pixels,
+    /// embeddings, place joins, migrations or an image-cache reconciliation.
+    func searchRevisions(modelVersion: String, accessibleIDs: Set<String>) throws -> [String: Double] {
+        guard readOnly else { throw AppFailure.storage("Search revisions require a read-only connection.") }
+        defer { connection = nil }
+        try Task.checkCancellation()
+        guard !accessibleIDs.isEmpty,
+              FileManager.default.fileExists(atPath: directory.appendingPathComponent("index.sqlite3").path) else { return [:] }
+        let db = try database()
+        return try db.statement("SELECT id, revision FROM photos WHERE model_version = ? ORDER BY id") { statement in
+            try db.bind(modelVersion, at: 1, to: statement)
+            var revisions: [String: Double] = [:]
+            while try db.next(statement) {
+                try Task.checkCancellation()
+                let id = try db.string(statement, at: 0)
+                guard accessibleIDs.contains(id) else { continue }
+                revisions[id] = sqlite3_column_double(statement, 1)
+            }
+            try Task.checkCancellation()
+            return revisions
+        }
+    }
+
     func record(id: String) throws -> CachedPhoto? {
         let db = try database()
         return try db.statement(Self.select + " WHERE p.id = ?") { statement in

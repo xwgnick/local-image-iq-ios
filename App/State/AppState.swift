@@ -5,7 +5,7 @@ import ImageIQCore
 
 @MainActor
 final class AppState: ObservableObject {
-    enum Activity: Equatable { case starting, refreshing, indexing, searching, clearing, checkingPhoto, preparingTranslation }
+    enum Activity: Equatable { case starting, refreshing, indexing, indexingText, searching, clearing, checkingPhoto, preparingTranslation }
     enum LaunchPhase: Equatable { case pending, checkingLibrary, preparingSearch, failed, ready }
     struct Selection: Identifiable { let id: String }
 
@@ -62,6 +62,18 @@ final class AppState: ObservableObject {
     @Published private(set) var selectedResultIDs: Set<String> = []
     var orderedSelectedResultIDs: [String] { results.map(\.id).filter { selectedResultIDs.contains($0) } }
     @Published private(set) var completedSearchQuery: SearchQueryResolution?
+    @Published var textSearchEnabled = false {
+        didSet {
+            guard oldValue != textSearchEnabled else { return }
+            textSearchPreferences?.set(textSearchEnabled, forKey: Self.textSearchPreferenceKey)
+            searchSettingsChanged()
+            if !textSearchEnabled, activity == .indexingText { operationTask?.cancel() }
+        }
+    }
+    @Published private(set) var textIndexProgress = TextIndexProgress()
+    @Published private(set) var textIndexOperationIssue: String?
+    @Published private(set) var textSearchUsed = false
+    @Published private(set) var textMatchedIDs: Set<String> = []
     @Published private(set) var translationAvailability: QueryTranslationAvailability = .unchecked
     @Published private(set) var translationPreparationIssue: String?
     @Published var chineseSearchEnabled = true {
@@ -100,6 +112,8 @@ final class AppState: ObservableObject {
     private let queryTranslator: any QueryTranslating
     private let translationPreferences: UserDefaults?
     private static let translationPreferenceKey = "chineseSearchEnabled.v1"
+    private let textSearchPreferences: UserDefaults?
+    private static let textSearchPreferenceKey = "photoTextSearchEnabled.v1"
     private let worker: any PhotoWorkServicing
     private let authorizationStatus: () -> PHAuthorizationStatus
     private var operationTask: Task<Void, Never>?
@@ -115,7 +129,7 @@ final class AppState: ObservableObject {
          startupContext: @escaping () -> StartupContext? = { nil },
          startupVisibilityDelay: @escaping @Sendable (Double) async throws -> Void = { seconds in
              try await Task.sleep(for: .seconds(seconds))
-         }) {
+         }, textSearchPreferences: UserDefaults? = nil) {
         self.library = library
         self.worker = worker ?? PhotoIndexWorker(library: library)
         self.startupHistory = startupHistory
@@ -130,6 +144,10 @@ final class AppState: ObservableObject {
             appleTranslationService = service
         }
         self.translationPreferences = translationPreferences
+        self.textSearchPreferences = textSearchPreferences
+        if let saved = textSearchPreferences?.object(forKey: Self.textSearchPreferenceKey) as? Bool {
+            textSearchEnabled = saved
+        }
         if let saved = translationPreferences?.object(forKey: Self.translationPreferenceKey) as? Bool {
             chineseSearchEnabled = saved
         }
@@ -152,6 +170,9 @@ final class AppState: ObservableObject {
     var canRead: Bool { authorization == .authorized || authorization == .limited }
     var modelsReady: Bool { summary.modelVersion != nil && summary.modelIssue == nil }
     var canIndex: Bool { isForeground && canRead && modelsReady && !isBusy }
+    var canIndexText: Bool {
+        textSearchEnabled && canIndex && summary.indexStatisticsKnown && summary.indexedCount > 0
+    }
     var canSearch: Bool {
         isForeground && canRead && modelsReady && summary.indexStatisticsKnown && summary.indexedCount > 0 && !isBusy && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -348,19 +369,38 @@ final class AppState: ObservableObject {
         }
     }
 
+    func indexPhotoText() {
+        guard canIndexText else { return }
+        invalidateDisplayedPhotos()
+        textIndexProgress = TextIndexProgress()
+        textIndexOperationIssue = nil
+        // Partial progress is durable, but the previous counts cease to be
+        // authoritative as soon as this explicit update may start changing rows.
+        summary.textIndexStatisticsKnown = false
+        let networkAllowed = allowICloudDownload
+        schedule(.indexingText) { [weak self, worker] token in
+            let summary = try await worker.indexText(networkAllowed: networkAllowed) { [weak self] progress in
+                await self?.accept(textProgress: progress, token: token)
+            }
+            return .summary(summary, "文字索引扫描结束；已完成记录可复用，未完成项可手动重试。")
+        }
+    }
+
     func search(useOriginal: Bool = false) {
         guard canSearch else { return }
         let text = query, weight = Float(locationWeight)
         let filters = searchFilters
         let translate = chineseSearchEnabled && !useOriginal
+        let includeText = textSearchEnabled
         invalidateDisplayedPhotos()
         schedule(.searching) { [worker, queryTranslator] _ in
             let resolved = try await Self.resolve(text, translate: translate, using: queryTranslator)
             try Task.checkCancellation()
             // Rank the complete accessible snapshot once. Subsequent pages only
             // expose a prefix; they never rerun translation, encoding or centering.
-            let response = try await worker.search(text: resolved.effective, limit: Int.max,
-                                                  locationWeight: weight, filters: filters)
+            let response = try await worker.search(text: resolved.effective, originalText: resolved.original,
+                                                  limit: Int.max, locationWeight: weight, filters: filters,
+                                                  textSearchEnabled: includeText)
             try Task.checkCancellation()
             return .search(response, resolved, nil)
         }
@@ -398,10 +438,12 @@ final class AppState: ObservableObject {
             }
         } else if canRepeat, let resolution, isForeground, canRead, modelsReady {
             let weight = Float(locationWeight)
+            let includeText = textSearchEnabled
             invalidateDisplayedPhotos()
             schedule(.searching) { [worker] _ in
-                let response = try await worker.search(text: resolution.effective, limit: Int.max,
-                                                       locationWeight: weight, filters: filters)
+                let response = try await worker.search(text: resolution.effective, originalText: resolution.original,
+                                                       limit: Int.max, locationWeight: weight, filters: filters,
+                                                       textSearchEnabled: includeText)
                 return .search(response, resolution, nil)
             }
         }
@@ -554,6 +596,9 @@ final class AppState: ObservableObject {
         invalidateDisplayedPhotos()
         thumbnails.clear()
         summary.indexStatisticsKnown = false
+        summary.textIndexStatisticsKnown = false
+        textIndexProgress = TextIndexProgress()
+        textIndexOperationIssue = nil
         schedule(.clearing) { [worker] _ in .summary(try await worker.clear(), "Local index deleted. Your Photos library was not changed.") }
     }
 
@@ -566,6 +611,8 @@ final class AppState: ObservableObject {
 
     private func invalidateDisplayedPhotos() {
         dismissPhotoCheck()
+        textSearchUsed = false
+        textMatchedIDs.removeAll()
         resultPages = nil
         similarPhotoID = nil
         isSelectingResults = false
@@ -576,6 +623,11 @@ final class AppState: ObservableObject {
     private func accept(progress: IndexProgress, token: UUID) {
         guard token == operationID else { return }
         self.progress = progress
+    }
+
+    private func accept(textProgress: TextIndexProgress, token: UUID) {
+        guard token == operationID, activity == .indexingText, isForeground else { return }
+        self.textIndexProgress = textProgress
     }
 
     private enum Outcome {
@@ -629,13 +681,25 @@ final class AppState: ObservableObject {
                     // On MainActor recheck its generation and only exposed IDs,
                     // not thousands of offscreen assets before showing page one.
                     try response.validatePageAccess(firstPage.map(\.id))
-                    self.summary = response.summary
+                    var searchSummary = response.summary
+                    // Vector-only search deliberately does not open optional OCR
+                    // storage. Absence of a read is not a newly measured zero.
+                    if !searchSummary.textIndexStatisticsKnown, searchSummary.textIndexIssue == nil {
+                        searchSummary.textIndexCounts = self.summary.textIndexCounts
+                        searchSummary.textIndexStatisticsKnown = self.summary.textIndexStatisticsKnown
+                        searchSummary.textIndexIssue = self.summary.textIndexIssue
+                    }
+                    self.summary = searchSummary
                     self.resultPages = ResultPages(response: response, pageSize: pageSize)
                     self.results = firstPage
                     self.similarPhotoID = seed
                     self.completedSearchQuery = query
                     self.completedQuery = query.original
-                    self.status = "\(response.hits.count) results · exact local scores, not probabilities."
+                    self.textSearchUsed = response.textSearchUsed
+                    self.textMatchedIDs = response.textMatchedIDs
+                    self.status = response.textSearchUsed
+                        ? "\(response.hits.count) results · visual and OCR ranks combined; displayed scores remain visual only."
+                        : "\(response.hits.count) results · exact local scores, not probabilities."
                 case .translationPrepared(let language, let availability):
                     if self.translationLanguage == language {
                         self.translationAvailability = availability
@@ -668,6 +732,12 @@ final class AppState: ObservableObject {
                         }
                     }
                     self.status = "Launch preparation stopped. Your original photos are unchanged."
+                } else if activity == .indexingText {
+                    self.summary.textIndexStatisticsKnown = false
+                    self.textIndexOperationIssue = error is CancellationError || Task.isCancelled
+                        ? "文字索引已暂停，已完成记录保留；手动更新可继续。"
+                        : "文字索引未完成。请检查照片权限后重试；图片索引没有重新计算。"
+                    self.status = self.textIndexOperationIssue ?? "文字索引已停止。"
                 } else if activity == .preparingTranslation {
                     self.translationPreparationIssue = (error is CancellationError || Task.isCancelled)
                         ? "语言包准备已取消。原文搜索仍然可用。"

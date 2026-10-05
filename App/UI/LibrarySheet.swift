@@ -24,6 +24,7 @@ struct LibrarySheet: View {
                 }
                 errorSection
                 cloudSection
+                if state.textSearchEnabled { PhotoTextIndexSection(state: state) }
                 if state.debugToolsEnabled {
                     detailsSection
                 }
@@ -53,7 +54,7 @@ struct LibrarySheet: View {
             .accessibilityIdentifier("confirm-rebuild-index")
             Button("取消", role: .cancel) { }
         } message: {
-            Text("只清除本机的搜索索引和地点缓存，再重新建立索引；不会修改或删除系统相册中的原照片。重建期间，尚未完成索引的照片不可搜索。")
+            Text("清除图片、地点及文字索引，再重新建立图片索引；文字索引需另行手动更新。不会修改或删除原照片，重建期间未完成索引的照片不可搜索。")
         }
         .onChange(of: state.debugToolsEnabled) { _, enabled in
             if !enabled {

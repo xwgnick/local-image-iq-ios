@@ -291,6 +291,65 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
         return result
     }
 
+    /// On-demand OCR pixels, independent of indexing, tiles and original-data export.
+    /// The native asset dimensions are a request, not a guarantee of returned detail.
+    func textRecognitionImage(id: String, networkAllowed: Bool) async throws -> DisplayThumbnailResult {
+        try Task.checkCancellation()
+        guard Self.canRead else { throw AppFailure.permission }
+        let authorization = Self.authorization
+        let generation = changeGeneration
+        guard let selectedAsset = asset(id: id) else {
+            throw AppFailure.photo("This photo is no longer accessible.")
+        }
+        let revision = PhotoRevision(asset: selectedAsset)
+        return try await Self.textRecognitionImage(
+            pixelWidth: selectedAsset.pixelWidth, pixelHeight: selectedAsset.pixelHeight,
+            networkAllowed: networkAllowed,
+            request: { [manager] size, mode, options, callback in
+                manager.requestImage(for: selectedAsset, targetSize: size, contentMode: mode,
+                                     options: options, resultHandler: callback)
+            }, cancel: { [manager] in manager.cancelImageRequest($0) }, validate: { [self] in
+                try validateThumbnail(id: id, revision: revision,
+                                      authorization: authorization, generation: generation)
+            })
+    }
+
+    /// Injectable OCR adapter to the existing candidate/fallback policy. Tests need
+    /// neither PHAsset nor library access. Only content mode differs at every stage;
+    /// native HQ / HQ224 / opt-in network HQ / last-resort Fast semantics stay shared.
+    static func textRecognitionImage(pixelWidth: Int, pixelHeight: Int, networkAllowed: Bool,
+                                     request: @escaping DisplayThumbnailLoader.Request,
+                                     cancel: @escaping @Sendable (PHImageRequestID) -> Void,
+                                     validate: @escaping @Sendable () throws -> Void = {}) async throws -> DisplayThumbnailResult {
+        try Task.checkCancellation()
+        try validate()
+        guard pixelWidth > 0, pixelHeight > 0 else {
+            throw AppFailure.photo("Photo dimensions are unavailable. Try updating photo text again.")
+        }
+        let nativeTarget = CGSize(width: pixelWidth, height: pixelHeight)
+        let quality224 = LocalPreviewComparisonLoader.targetSize(
+            width: pixelWidth, height: pixelHeight, shortEdge: 224)
+        let result = try await DisplayThumbnailLoader.loadResult(
+            targetSize: nativeTarget, quality224Target: quality224, networkAllowed: networkAllowed,
+            request: { size, _, options, callback in
+                do {
+                    try Task.checkCancellation()
+                    try validate()
+                    try Task.checkCancellation()
+                } catch {
+                    callback(nil, [PHImageErrorKey: error])
+                    return PHInvalidImageRequestID
+                }
+                // Preserve the captured opt-in even if the shared loader changes.
+                options.isNetworkAccessAllowed = networkAllowed && options.isNetworkAccessAllowed
+                return request(size, .aspectFit, options, callback)
+            }, cancel: cancel)
+        try Task.checkCancellation()
+        try validate()
+        try Task.checkCancellation()
+        return result
+    }
+
     private func validateThumbnail(id: String, revision: PhotoRevision, authorization: PHAuthorizationStatus,
                                    generation: UInt64?) throws {
         try Task.checkCancellation()

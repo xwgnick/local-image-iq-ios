@@ -413,6 +413,126 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
+    func testPhotoTextOptInDoesNotIndexOrAskPhotosPermission() throws {
+        if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
+            throw XCTSkip("Live photo text opt-in requires the real bundled models")
+        }
+        launch()
+        assertHomeControls()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let toggle = app.switches["photo-text-search-enabled"]
+        let update = app.buttons["index-photo-text"]
+        let done = app.buttons["close-settings"]
+
+        func assertNoWorkOrPermissionPrompt() {
+            XCTAssertFalse(app.buttons["pause-text-index"].exists)
+            XCTAssertFalse(app.buttons["stop-indexing"].exists)
+            XCTAssertFalse(app.progressIndicators["文字索引进度"].exists)
+            XCTAssertFalse(app.alerts.firstMatch.exists)
+            XCTAssertFalse(springboard.alerts.firstMatch.exists)
+        }
+
+        func openTextSettings() throws -> XCUIElement {
+            let library = app.buttons["open-library"]
+            let ready = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "label CONTAINS %@ AND value == %@",
+                                       "选择照片", "authorization-required"), object: library)
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
+            assertNoWorkOrPermissionPrompt()
+            app.buttons["open-settings"].tap()
+            expectHittable(done)
+            let form = try sheetForm()
+            scrollTo(toggle, in: form)
+            XCTAssertEqual(app.switches.matching(identifier: "photo-text-search-enabled").count, 1)
+            XCTAssertTrue(toggle.isEnabled, "The optional preference must not require Photos permission")
+            return form
+        }
+
+        func tapOptIn(_ enabled: Bool, in form: XCUIElement) {
+            scrollTo(toggle, in: form, swipeUp: false)
+            expectSwitch(toggle, enabled: !enabled)
+            // Same native SwiftUI Form Toggle and full-row AX frame as the
+            // captured show-debug-tools case above: tap its trailing thumb.
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            scrollTo(toggle, in: form, swipeUp: false)
+            expectSwitch(toggle, enabled: enabled)
+            assertNoWorkOrPermissionPrompt()
+        }
+
+        // Best-effort cleanup if an assertion exits while Settings is still
+        // open. Only a captured ON value authorizes a tap; never write defaults
+        // or inject a production launch flag, and never interact with OS alerts.
+        defer {
+            if app.state == .runningForeground, done.exists,
+               !app.alerts.firstMatch.exists, !springboard.alerts.firstMatch.exists,
+               let form = try? sheetForm() {
+                scrollTo(toggle, in: form, swipeUp: false)
+                if toggle.value as? String == "1" { tapOptIn(false, in: form) }
+            }
+        }
+
+        var form = try openTextSettings()
+        let initialValue = try XCTUnwrap(toggle.value as? String)
+        XCTAssertTrue(initialValue == "0" || initialValue == "1", "Read the actual switch before recovering a prior crash")
+        if initialValue == "1" { tapOptIn(false, in: form) }
+        expectSwitch(toggle, enabled: false)
+        expectAbsent(update)
+        assertNoWorkOrPermissionPrompt()
+
+        tapOptIn(true, in: form)
+        scrollTo(update, in: form, allowDisabled: true)
+        XCTAssertTrue(update.exists)
+        XCTAssertTrue(update.label.contains("文字索引"))
+        XCTAssertFalse(update.isEnabled, "Opt-in alone cannot authorize Photos or start indexing")
+        assertNoWorkOrPermissionPrompt()
+
+        // Check production privacy text via the real XCUI tree, not in-process
+        // SwiftUI AX or a copied presentation fixture. Match stable fragments.
+        let privacy = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "识别文字仅保存在本机")).firstMatch
+        scrollTo(privacy, in: form)
+        for fragment in ["不参与备份", "不代表当前有权限搜索", "关闭增强不会删除", "清除索引会一起删除"] {
+            XCTAssertTrue(privacy.label.contains(fragment))
+        }
+        assertNoWorkOrPermissionPrompt()
+        done.tap()
+        expectAbsent(done)
+
+        // ON is a real persisted preference, unlike session-only debug tools.
+        // Relaunch through the unchanged full-model readiness/Photos-reset helper.
+        app.terminate()
+        launch()
+        assertHomeControls()
+        form = try openTextSettings()
+        expectSwitch(toggle, enabled: true)
+        scrollTo(update, in: form, allowDisabled: true)
+        XCTAssertTrue(update.exists)
+        XCTAssertFalse(update.isEnabled)
+        assertNoWorkOrPermissionPrompt()
+        tapOptIn(false, in: form)
+        expectAbsent(update)
+        done.tap()
+        expectAbsent(done)
+        assertHomeControls()
+
+        // Leave OFF, including after sheet reconstruction, for every later test.
+        form = try openTextSettings()
+        expectSwitch(toggle, enabled: false)
+        expectAbsent(update)
+        assertNoWorkOrPermissionPrompt()
+        done.tap()
+        expectAbsent(done)
+        app.buttons["open-library"].tap()
+        let libraryDone = app.buttons["close-library"]
+        expectHittable(libraryDone)
+        // This action is specific to .notDetermined; never tap it.
+        expectHittable(app.buttons["authorize-photos"])
+        assertNoWorkOrPermissionPrompt()
+        libraryDone.tap()
+        expectAbsent(libraryDone)
+        assertHomeControls()
+        XCTAssertEqual(app.buttons["open-library"].value as? String, "authorization-required")
+    }
+
     private func launch(largeText: Bool = false) {
         // Intentionally keep the system keyboard/locale English for exact-key
         // fixtures and Apple's Search return key. The app's approved Chinese

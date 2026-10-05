@@ -6,7 +6,8 @@ struct LocalImageIQApp: App {
     @StateObject private var state = AppState(
         translationPreferences: .standard,
         startupHistory: StartupHistoryStore(defaults: .standard),
-        startupContext: { StartupContext.current() })
+        startupContext: { StartupContext.current() },
+        textSearchPreferences: .standard)
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {

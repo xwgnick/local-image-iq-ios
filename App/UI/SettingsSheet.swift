@@ -13,6 +13,7 @@ struct SettingsSheet: View {
             Form {
                 searchSection
                 translationSection
+                PhotoTextIndexSection(state: state)
                 maintenanceSection
                 if state.debugToolsEnabled {
                     diagnosticsSection
@@ -39,7 +40,7 @@ struct SettingsSheet: View {
                     .disabled(state.isBusy)
                 Button("取消", role: .cancel) { }
             } message: {
-                Text("只删除本机的搜索索引，不删除原照片。重新准备图库后即可搜索。")
+                Text("只删除本机图片、地点及文字索引，不删除原照片。图片索引和可选文字索引需分别手动更新。")
             }
         }
         .tint(IQStyle.accent)
@@ -137,6 +138,10 @@ struct SettingsSheet: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("关于分数").font(.subheadline.weight(.semibold))
+                        if state.textSearchUsed {
+                            Text("本次按图片与文字的名次合并排序；下方分数仅为原图片／地点分数，不是合并排序分数。")
+                                .font(.footnote).foregroundStyle(IQStyle.secondary)
+                        }
                         Text("分数表示相似度，不是概率。地点分数按不同标签去均值后，再与图像分数加权。无标签时地点贡献为零；权重为 100% 时，这些照片得零分，可能排在地点分数为负的照片前面。")
                             .font(.footnote)
                             .foregroundStyle(IQStyle.secondary)
@@ -220,6 +225,9 @@ struct SettingsSheet: View {
 
     private var privacySection: some View {
         Section("关于与隐私") {
+            Text("可选文字搜索使用系统 Vision 在本机识别；识别文字与索引保存在受保护的本机目录，不参与备份、不上传。清除索引会同时删除文字记录；关闭开关只停止参与搜索。")
+                .font(.subheadline).foregroundStyle(IQStyle.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Text("原照片保留在系统照片图库中。搜索在本机运行，不向应用服务器上传照片或搜索内容。仅在你主动操作时修改收藏、加入或新建系统相册，不删除原照片或修改原图像素。批量分享会临时准备去除位置等元数据的预览 JPEG，分享结束后清理。索引不存原图或定位坐标，也不参与备份；只有你开启 iCloud 访问后，系统照片才可下载缺失资源。")
                 .font(.subheadline)
                 .foregroundStyle(IQStyle.secondary)

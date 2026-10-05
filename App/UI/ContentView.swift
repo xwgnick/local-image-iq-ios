@@ -376,7 +376,8 @@ struct ContentView: View {
             resultsHeadingLayout {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("已显示 \(state.results.count) 张候选照片").font(.headline)
-                    Text("最相近的在前").font(.caption).foregroundStyle(IQStyle.secondary)
+                    Text(state.textSearchUsed ? "已结合照片文字" : "最相近的在前")
+                        .font(.caption).foregroundStyle(IQStyle.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 HStack {
