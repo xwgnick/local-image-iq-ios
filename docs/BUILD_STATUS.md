@@ -1,5 +1,11 @@
 # Cloud build status — build 25
 
+## 2026-10-06：安装包文件名增加版本与构建号（不重编译）
+
+当前入口为 [../build/device-download/37295461425/LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa](../build/device-download/37295461425/LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa)。它是已交付 build 25 的本地副本，**1,418,904,925 字节**，重新全文件 SHA-256 为 **`2981559cb264fe5a5f0378df51e543624c82141dc6bd0715971961f37569d11f`**，与原发布一致；[本地命名记录](../build/device-download/37295461425/versioned-local-copy.json) 单独保存，旧包、旧报告及校验文件原样保留。
+
+后续打包从实际构建的 App 版本／build 生成文件名，发布端按工程身份独立核验文件名、报告和校验行，不使用报告任意路径或通配符选包。**本地发布测试 104 项通过**，打包自检含 4 个合法名称、56 个非法身份验证；本地下载器离线回归同时覆盖旧名和严格版本名。**未重新构建 App、触发 CI、修改已有 Release 或重新签名**；这不是新的原生运行／安装验证，既有成功构建身份仍如下。
+
 ## Current: 0.7.0 (build 25) — 第二次完整原生验证 SUCCESS；已交付，真机待验
 
 [Run 37295461425](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425)／[job 111715497281](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425/job/111715497281)，最终构建源码 **`45e58ba5aceb9331b15ed39a4504f143618d5f75`**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。这是**新 run 的 attempt 1、本功能第二次整体验证 SUCCESS，不是本功能首轮成功**。

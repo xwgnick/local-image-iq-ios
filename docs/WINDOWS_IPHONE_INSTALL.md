@@ -7,7 +7,9 @@
 
 ## 当前：0.7.0（build 25）— 可选照片文字搜索，已交付
 
-**[本地已校验 IPA](../build/device-download/37295461425/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release ci-37295461425-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37295461425-1)。Release **403616561**，**2026-10-05T10:55:25Z** 发布，**9 项资产、prerelease、非 draft**；本机无需重下，另一台电脑可从该 Release 下载。
+**[LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa](../build/device-download/37295461425/LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa)** · [公开 Release ci-37295461425-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37295461425-1)。Release **403616561**，**2026-10-05T10:55:25Z** 发布，**9 项资产、prerelease、非 draft**；本机无需重下，另一台电脑可从该 Release 下载。
+
+2026-10-06 起本地交付入口使用带版本与 build 的名称；上述文件为原包的逐字节相同副本，已重新全文件核验同一 SHA-256，见[命名记录](../build/device-download/37295461425/versioned-local-copy.json)。原文件、下载记录与远端资产未改；该历史 Release 下载后仍是旧名。后续新构建会自动使用版本化名称，不需要因改名重装、清库或重新编译。
 
 1. 用**同一 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**，签名沿用下方第 1–5 节。**不卸载、不清索引、不重建图像索引**；已有当前有效图像索引直接复用，无需开启调试。
 2. 到 **设置 → 照片文字 → 文字搜索增强**主动开启。开关**默认 OFF、选择持久化**；单独开关**不启动索引、不弹 Photos 授权提示**。

@@ -8,10 +8,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { ASSET_PATHS, MAX_ASSET_BYTES, REPOSITORY, collectAssets, createClient,
-  hashStream, main, parseArgs, readExpectedAppIdentity, validateAssetSize, validateEnvironment } from './publish_release.mjs';
+  hashStream, main, parseArgs, readExpectedAppIdentity, validateAssetSize, validateDeviceReport, validateEnvironment } from './publish_release.mjs';
+import { deviceIPAName } from './device_artifact_name.mjs';
 
 const SHA = 'a'.repeat(40), MODEL = `siglip2-b16-224-v1-${'b'.repeat(64)}`;
-const IPA = 'LocalImageIQ-iphoneos-unsigned.ipa';
+const IPA = deviceIPAName('0.4.0', '11');
+const LEGACY_IPA = 'LocalImageIQ-iphoneos-unsigned.ipa';
 const TAG = 'ci-12345-2';
 const UNTAGGED = 'untagged-e8f3a293686e58364ecc';
 const DRAFT_URL = `https://github.com/${REPOSITORY}/releases/tag/untagged-${'d'.repeat(40)}`;
@@ -35,8 +37,9 @@ async function fixture(t, { appVersion = '0.4.0', appBuild = '11' } = {}) {
   const project = `settings:\n  base:\n    MARKETING_VERSION: "${appVersion}"\n    CURRENT_PROJECT_VERSION: "${appBuild}"\n`;
   await put('project.yml', project);
   // Multiple createReadStream chunks without any large allocation or actual IPA.
-  const ipa = Buffer.alloc(196_613, 0x61);
-  await put(ASSET_PATHS[IPA], ipa);
+  const ipa = Buffer.alloc(196_613, 0x61), ipaName = deviceIPAName(appVersion, appBuild);
+  const ipaPath = `build/device/${ipaName}`;
+  await put(ipaPath, ipa);
   for (const name of ['UIReview.zip', 'TestResults.xcresult.zip', 'LocalImageIQ-Simulator.zip'])
     await put(ASSET_PATHS[name], `SYNTHETIC ZIP: ${name}`);
   const places = { schemaVersion: 1, generated: { file: 'Places.geojson', bytes: 17,
@@ -46,14 +49,14 @@ async function fixture(t, { appVersion = '0.4.0', appBuild = '11' } = {}) {
   const report = { platform: 'iphoneos', architectures: ['arm64'], configuration: 'Release', signed: false,
     installableWithoutResigning: false, deviceTested: false, appVersion, appBuild,
     bundleIdentifier: 'com.example.localimageiq', modelVersion: MODEL, modelDimension: 768,
-    ipa: IPA, bytes: ipa.length, sha256: digest(ipa),
+    ipa: ipaName, bytes: ipa.length, sha256: digest(ipa),
     places: { ...places.generated, manifestSHA256: digest(placesBytes) } };
   await putJSON('device-build.json', report);
-  await put(ASSET_PATHS['SHA256SUMS.txt'], `${digest(ipa)}  ${IPA}\n`);
+  await put(ASSET_PATHS['SHA256SUMS.txt'], `${digest(ipa)}  ${ipaName}\n`);
   await putJSON('parity-report.json', { schemaVersion: 2, modelVersion: MODEL, passed: true });
   await putJSON('provenance.json', { schemaVersion: 2, modelVersion: MODEL, training: false, redistributionApproved: false });
   const logs = [], environment = { ...env(), GITHUB_STEP_SUMMARY: path.join(root, 'summary.md'), GITHUB_OUTPUT: path.join(root, 'outputs.txt') };
-  return { root, put, putJSON, project, report, ipa, logs, environment,
+  return { root, put, putJSON, project, report, ipa, ipaName, ipaPath, logs, environment,
     run(mock, f = flags()) { return main({ root, argv: argv(f), env: environment, transport: mock.transport, log: line => logs.push(line) }); } };
 }
 
@@ -79,7 +82,8 @@ function github(options = {}) {
     if (u.hostname === 'uploads.github.com') {
       assert.equal(entry.method, 'POST'); assert.equal(init.duplex, 'half');
       const name = u.searchParams.get('name');
-      assert.ok(name in ASSET_PATHS || name === 'delivery.json');
+      assert.ok(name in ASSET_PATHS || name === 'delivery.json' ||
+        /^LocalImageIQ-[0-9]+(?:\.[0-9]+)*-build[0-9]+(?:\.[0-9]+)*-iphoneos-unsigned\.ipa(?![\s\S])/.test(name));
       assert.equal(init.headers['Content-Type'], name.endsWith('.json') ? 'application/json'
         : name.endsWith('.zip') ? 'application/zip' : 'application/octet-stream');
       assert.ok(!Buffer.isBuffer(init.body) && typeof init.body[Symbol.asyncIterator] === 'function');
@@ -166,6 +170,25 @@ const checkPatchIdentity = mock => {
   }
 };
 
+const checkIPADelivery = (f, mock, result, expectedName) => {
+  assert.equal(result.ok, true); assert.equal(f.ipaName, expectedName);
+  assert.equal(result.deviceReport.ipa, expectedName);
+  const uploaded = [...mock.assets.values()], byName = name => uploaded.find(a => a.name === name);
+  assert.deepEqual(uploaded.filter(a => a.name.endsWith('.ipa')).map(a => a.name), [expectedName]);
+  assert.deepEqual(byName(expectedName).data, f.ipa);
+  assert.equal(JSON.parse(byName('device-build.json').data.toString()).ipa, expectedName);
+  assert.equal(byName('SHA256SUMS.txt').data.toString(), `${digest(f.ipa)}  ${expectedName}\n`);
+  const manifest = JSON.parse(byName('delivery.json').data.toString());
+  assert.equal(manifest.deviceReport.ipa, expectedName);
+  for (const assets of [result.assets, manifest.assets]) {
+    const ipas = assets.filter(a => a.name.endsWith('.ipa'));
+    assert.equal(ipas.length, 1); assert.equal(ipas[0].name, expectedName);
+    assert.equal(ipas[0].sha256, digest(f.ipa)); assert.equal(ipas[0].bytes, f.ipa.length);
+  }
+  assert.ok(mock.requests.some(r => new URL(r.url).hostname === 'uploads.github.com' &&
+    new URL(r.url).searchParams.get('name') === expectedName));
+};
+
 test('mock drops an omitted draft tag; explicit identity preserves it independently of the untagged URL', async () => {
   const mock = github(), client = createClient(SECRET, mock.transport);
   await client.json('/releases', { method: 'POST', body: {
@@ -239,6 +262,87 @@ test('a new project version and build publish through the same production entry'
   assert.equal(result.ok, true); assert.equal(result.release.state, 'published-prerelease');
   assert.equal(result.deviceReport.appVersion, identity.appVersion);
   assert.equal(result.deviceReport.appBuild, identity.appBuild);
+  checkIPADelivery(f, mock, result, 'LocalImageIQ-1.2.3-build42-iphoneos-unsigned.ipa');
+});
+
+test('current 0.7.0 build 25 uses the versioned name throughout upload, reports and manifest', async t => {
+  const f = await fixture(t, { appVersion: '0.7.0', appBuild: '25' }), mock = github();
+  const result = await f.run(mock);
+  assert.equal(result.release.state, 'published-prerelease');
+  checkIPADelivery(f, mock, result, 'LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa');
+  const record = JSON.parse(await readFile(path.join(f.root, 'build/release-evidence/release-delivery.json'), 'utf8'));
+  assert.equal(record.deviceReport.ipa, f.ipaName); assert.deepEqual(record.assets, result.assets);
+});
+
+test('dotted numeric builds retain all components in the published IPA name', async t => {
+  const f = await fixture(t, { appVersion: '1.2.3', appBuild: '42.1.0' }), mock = github();
+  checkIPADelivery(f, mock, await f.run(mock), 'LocalImageIQ-1.2.3-build42.1.0-iphoneos-unsigned.ipa');
+});
+
+test('stale legacy and versioned IPAs alongside the expected file cannot be selected', async t => {
+  const f = await fixture(t, { appVersion: '0.7.0', appBuild: '25' }), mock = github();
+  // Identical bytes: hashes cannot substitute for checking the expected filename.
+  for (const name of [LEGACY_IPA, IPA]) await f.put(`build/device/${name}`, f.ipa);
+  checkIPADelivery(f, mock, await f.run(mock), 'LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa');
+});
+
+test('mismatched version or build basename is rejected even with valid SHA256 and matching sums', async t => {
+  for (const wrongName of ['LocalImageIQ-0.6.0-build25-iphoneos-unsigned.ipa', 'LocalImageIQ-0.7.0-build24-iphoneos-unsigned.ipa']) {
+    await t.test(wrongName, async t => {
+      const f = await fixture(t, { appVersion: '0.7.0', appBuild: '25' }), mock = github();
+      await f.put(`build/device/${wrongName}`, f.ipa);
+      await f.putJSON('device-build.json', { ...f.report, ipa: wrongName });
+      await f.put(ASSET_PATHS['SHA256SUMS.txt'], `${digest(f.ipa)}  ${wrongName}\n`);
+      await assert.rejects(collectAssets(f.root, flags()), /device-identity/);
+      const result = await f.run(mock);
+      assert.equal(result.ok, false); assert.equal(result.boundary, 'local-evidence');
+      assert.equal(mock.requests.length, 0); noCreate(mock);
+    });
+  }
+});
+
+test('device report validation independently rejects the actual asset name despite matching bytes and hash', async t => {
+  const identity = { appVersion: '0.7.0', appBuild: '25' }, f = await fixture(t, identity);
+  const { assets, metadata } = await collectAssets(f.root, flags());
+  const ipa = assets.find(a => a.name === f.ipaName);
+  assert.doesNotThrow(() => validateDeviceReport(f.report, ipa, metadata, identity));
+  for (const name of [LEGACY_IPA, 'LocalImageIQ-0.6.0-build25-iphoneos-unsigned.ipa', 'LocalImageIQ-0.7.0-build24-iphoneos-unsigned.ipa'])
+    assert.throws(() => validateDeviceReport(f.report, { ...ipa, name }, metadata, identity), /device-identity/);
+});
+
+test('only the old fixed filename cannot publish even when its report and checksum agree', async t => {
+  const f = await fixture(t, { appVersion: '0.7.0', appBuild: '25' }), mock = github();
+  await f.put(`build/device/${LEGACY_IPA}`, f.ipa);
+  await rm(path.join(f.root, f.ipaPath));
+  await f.putJSON('device-build.json', { ...f.report, ipa: LEGACY_IPA });
+  await f.put(ASSET_PATHS['SHA256SUMS.txt'], `${digest(f.ipa)}  ${LEGACY_IPA}\n`);
+  const result = await f.run(mock);
+  assert.equal(result.ok, false); assert.equal(result.boundary, 'local-evidence');
+  assert.equal(mock.requests.length, 0); noCreate(mock);
+});
+
+test('unsafe project versions and builds are refused before any HTTP request', async t => {
+  const f = await fixture(t, { appVersion: '0.7.0', appBuild: '25' });
+  for (const [key, valid] of [['MARKETING_VERSION', '0.7.0'], ['CURRENT_PROJECT_VERSION', '25']]) {
+    for (const value of ['../1', '1/2', '1\\2', '/1', 'C:\\1', '1%2F2', '', '.1', '1.', '1..2', '1-rc1',
+      ' 1', '1 ', '1\t', '1\0', '1\n', '1\r\n', '1\u2028', '1\u2029']) {
+      await f.put('project.yml', f.project.replace(`${key}: "${valid}"`, `${key}: "${value}"`));
+      await assert.rejects(readExpectedAppIdentity(f.root), /identity/, `${key}: ${JSON.stringify(value)}`);
+      const mock = github(), result = await f.run(mock);
+      assert.equal(result.ok, false); assert.equal(result.boundary, 'local-evidence');
+      assert.equal(mock.requests.length, 0); noCreate(mock);
+    }
+  }
+});
+
+test('a checksum naming the legacy IPA cannot validate the correctly named current report and asset', async t => {
+  const f = await fixture(t, { appVersion: '0.7.0', appBuild: '25' }), mock = github();
+  await f.put(`build/device/${LEGACY_IPA}`, f.ipa);
+  await f.put(ASSET_PATHS['SHA256SUMS.txt'], `${digest(f.ipa)}  ${LEGACY_IPA}\n`);
+  await assert.rejects(collectAssets(f.root, flags()), /checksum-report/);
+  const result = await f.run(mock);
+  assert.equal(result.ok, false); assert.equal(result.boundary, 'local-evidence');
+  assert.equal(mock.requests.length, 0); noCreate(mock);
 });
 
 test('a new project identity rejects a stale report version or build before any requests', async t => {
@@ -264,6 +368,7 @@ test('device places featureCount must match the manifest even when every hash an
 
 test('exact allowlist ignores extra files and never selects an alternate IPA/path', async t => {
   const f = await fixture(t);
+  assert.ok(Object.keys(ASSET_PATHS).every(name => !name.endsWith('.ipa')), 'Only non-IPA paths are static');
   await f.put('build/release-evidence/private-photo.jpg', 'MUST NOT UPLOAD');
   await f.put('build/device/other.ipa', 'MUST NOT UPLOAD');
   await f.put('build/release-evidence/secret.env', SECRET);
@@ -276,7 +381,8 @@ test('reject every missing success output before remote creation', async t => {
   for (const name of ['UIReview.zip', 'TestResults.xcresult.zip', 'places-manifest.json', 'parity-report.json',
     'provenance.json', IPA, 'device-build.json', 'SHA256SUMS.txt']) {
     await t.test(name, async t => {
-      const f = await fixture(t), mock = github(); await rm(path.join(f.root, ASSET_PATHS[name]));
+      const f = await fixture(t), mock = github();
+      await rm(path.join(f.root, name === f.ipaName ? f.ipaPath : ASSET_PATHS[name]));
       const result = await f.run(mock); assert.equal(result.ok, false); noCreate(mock);
     });
   }
@@ -292,7 +398,7 @@ test('device identity, version/build, real IPA bytes/hash and checksum gate crea
     });
   }
   await t.test('real IPA changed with original report', async t => {
-    const f = await fixture(t), mock = github(); await f.put(ASSET_PATHS[IPA], Buffer.alloc(f.ipa.length, 0x62));
+    const f = await fixture(t), mock = github(); await f.put(f.ipaPath, Buffer.alloc(f.ipa.length, 0x62));
     assert.equal((await f.run(mock)).ok, false); noCreate(mock);
   });
   await t.test('wrong SHA256SUMS', async t => {
@@ -371,7 +477,8 @@ test('success: stream/verify ALL payload + manifest, then publish prerelease, ne
 });
 
 test('failure: best available evidence only, never IPA/report/checksums/simulator or publish', async t => {
-  const f = await fixture(t), mock = github();
+  const f = await fixture(t, { appVersion: '0.7.0', appBuild: '25' }), mock = github();
+  await f.put(`build/device/${LEGACY_IPA}`, f.ipa);
   await rm(path.join(f.root, ASSET_PATHS['TestResults.xcresult.zip']));
   await f.put(ASSET_PATHS['parity-report.json'], '{ incomplete failure report');
   const result = await f.run(mock, flags('failure'));
@@ -379,7 +486,9 @@ test('failure: best available evidence only, never IPA/report/checksums/simulato
   assert.equal(result.release.state, 'draft'); assert.match(mock.release.name, /DRAFT.*FAILURE/);
   assert.equal(result.release.url, DRAFT_URL);
   assert.match(mock.release.body, /upstream-workflow/); noPublish(mock); noDelete(mock);
-  assert.ok([...mock.assets.values()].every(a => ![IPA, 'device-build.json', 'SHA256SUMS.txt', 'LocalImageIQ-Simulator.zip'].includes(a.name)));
+  assert.ok([...mock.assets.values()].every(a => ![f.ipaName, LEGACY_IPA, 'device-build.json', 'SHA256SUMS.txt', 'LocalImageIQ-Simulator.zip'].includes(a.name)));
+  const manifest = JSON.parse([...mock.assets.values()].find(a => a.name === 'delivery.json').data.toString());
+  for (const assets of [result.assets, manifest.assets]) assert.ok(assets.every(a => !a.name.endsWith('.ipa')));
   assert.equal(result.deviceReport, null); assert.equal(result.model.exportParityPassed, null);
 });
 
@@ -491,7 +600,7 @@ test('direct streaming downloads work; corrupt/insecure/second-redirect download
 });
 
 test('same-size IPA mutation after preflight is detected while streaming upload', async t => {
-  const f = await fixture(t), mock = github({ onCreate: () => f.put(ASSET_PATHS[IPA], Buffer.alloc(f.ipa.length, 0x62)) });
+  const f = await fixture(t), mock = github({ onCreate: () => f.put(f.ipaPath, Buffer.alloc(f.ipa.length, 0x62)) });
   const result = await f.run(mock); assert.equal(result.ok, false); assert.equal(result.boundary, `upload-verify:${IPA}`);
   noPublish(mock); noDelete(mock); assert.equal(mock.release.draft, true);
 });

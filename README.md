@@ -6,9 +6,11 @@ SwiftUI + PhotoKit + Core ML + 系统 Vision。独立原生 App，以本机检�
 
 **DELIVERED：已完成原生验证、设备构建、发布及本地 IPA 校验；真机行为仍待验证。**最终源码 `45e58ba5aceb9331b15ed39a4504f143618d5f75`，[CI 37295461425](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425)／[job 111715497281](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425/job/111715497281) SUCCESS。该新 run 为 attempt 1，**是本功能整体第二次原生验证，不是首轮成功**；首轮仅因新增测试辅助函数不接受 throwing closure 失败，随后一行 `rethrows` 修正只改测试，两轮间 App 生产代码不变。核心 79 通过；App 974（973 通过／1 既有 SQLite 物理保护测试跳过／0 失败）；UI 13 全通过。新增六组 119 项 App 测试全部通过，其中 4 项实际调用 Vision 识别合成图；详细耗时、失败账本及验收边界见 [docs/PHOTO_TEXT_SEARCH.md](docs/PHOTO_TEXT_SEARCH.md)。
 
-- 本地已校验包：[build/device-download/37295461425/LocalImageIQ-iphoneos-unsigned.ipa](build/device-download/37295461425/LocalImageIQ-iphoneos-unsigned.ipa)。完整下载 **1,418,904,925 bytes**，全文件流式长度／SHA-256 与 7-Zip 26.03 全量 CRC 均通过。
+- 本地已校验包：[build/device-download/37295461425/LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa](build/device-download/37295461425/LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa)。**1,418,904,925 bytes**；2026-10-06 增加带版本名的本地副本，并重新全文件核验 SHA-256 与原包相同。没有重新编译、打包或签名；原包及其 CRC／下载记录保留。
 - [公开 Release：ci-37295461425-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37295461425-1)，ID `403616561`，9 项资产、prerelease、非草稿；发布时间 **2026-10-05T10:55:25Z**。
 - 设备包为 **arm64 Release、未签名、iOS 17+、SDK 18.5／Xcode 16.4**，仍需 Sideloadly 本机签名。
+
+后续设备构建自动把 App 实际版本与构建号写入 IPA 文件名；发布时与工程版本、报告及校验文件交叉核验。本轮命名脚本已通过 **104 项本地发布测试和打包命名自检**，未另触发原生 CI。既有公开 Release 资产仍保留旧名称，未修改历史发布。
 
 ### 本版变化与下一步
 

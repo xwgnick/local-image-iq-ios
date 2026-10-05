@@ -10,6 +10,7 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { deviceIPAName } from './device_artifact_name.mjs';
 
 export const REPOSITORY = 'xwgnick/local-image-iq-ios';
 export const MAX_ASSET_BYTES = 2 * 1024 ** 3; // GitHub requires each asset to be UNDER 2 GiB.
@@ -17,7 +18,6 @@ const API = `https://api.github.com/repos/${REPOSITORY}`;
 const UPLOADS = `https://uploads.github.com/repos/${REPOSITORY}`;
 const WEB = `https://github.com/${REPOSITORY}`;
 const EVIDENCE = 'build/release-evidence';
-const IPA = 'LocalImageIQ-iphoneos-unsigned.ipa';
 const SIM = 'LocalImageIQ-Simulator.zip';
 const HEX = /^[a-f0-9]{64}$/;
 const MODEL = /^siglip2-b16-224-v1-[a-f0-9]{64}$/;
@@ -27,7 +27,6 @@ export const ASSET_PATHS = Object.freeze({
   'parity-report.json': `${EVIDENCE}/parity-report.json`,
   'provenance.json': `${EVIDENCE}/provenance.json`,
   'places-manifest.json': `${EVIDENCE}/places-manifest.json`,
-  [IPA]: `build/device/${IPA}`,
   'device-build.json': 'build/device/device-build.json',
   'SHA256SUMS.txt': 'build/device/SHA256SUMS.txt',
   [SIM]: `build/${SIM}`,
@@ -84,7 +83,9 @@ export async function readExpectedAppIdentity(root) {
     requireThat(value !== null, 'project-identity');
     return value[1];
   };
-  return { appVersion: setting('MARKETING_VERSION'), appBuild: setting('CURRENT_PROJECT_VERSION') };
+  const identity = { appVersion: setting('MARKETING_VERSION'), appBuild: setting('CURRENT_PROJECT_VERSION') };
+  deviceIPAName(identity.appVersion, identity.appBuild); // Validate before constructing any device path.
+  return identity;
 }
 
 async function inspectFile(root, relative, required) {
@@ -105,12 +106,15 @@ async function inspectFile(root, relative, required) {
 export async function collectAssets(root, flags) {
   root = await realpath(root);
   const success = flags.status === 'success';
+  const expectedIdentity = success && flags.device ? await readExpectedAppIdentity(root) : null;
+  const ipaName = expectedIdentity ? deviceIPAName(expectedIdentity.appVersion, expectedIdentity.appBuild) : null;
   const names = ['UIReview.zip', 'TestResults.xcresult.zip', 'places-manifest.json'];
   if (flags.models) names.push('parity-report.json', 'provenance.json');
-  if (success) names.push(...(flags.device ? [IPA, 'device-build.json', 'SHA256SUMS.txt'] : [SIM]));
+  if (success) names.push(...(flags.device ? [ipaName, 'device-build.json', 'SHA256SUMS.txt'] : [SIM]));
   const assets = [];
   for (const name of names) {
-    const asset = await inspectFile(root, ASSET_PATHS[name], success);
+    // The only dynamic path comes from the validated project identity, never a report or glob.
+    const asset = await inspectFile(root, name === ipaName ? `build/device/${ipaName}` : ASSET_PATHS[name], success);
     if (asset) assets.push(asset);
   }
   const byName = name => assets.find(asset => asset.name === name);
@@ -139,10 +143,10 @@ export async function collectAssets(root, flags) {
     metadata.model.exportParityPassed = true;
   }
   if (flags.device) {
-    const report = await json('device-build.json'), ipa = byName(IPA);
-    validateDeviceReport(report, ipa, metadata, await readExpectedAppIdentity(root));
+    const report = await json('device-build.json'), ipa = byName(ipaName);
+    validateDeviceReport(report, ipa, metadata, expectedIdentity);
     const sums = await readFile(byName('SHA256SUMS.txt').file, 'utf8');
-    requireThat(sums.trim() === `${ipa.sha256}  ${IPA}`, 'checksum-report');
+    requireThat(sums.trim() === `${ipa.sha256}  ${ipaName}`, 'checksum-report');
     // Deliberately not a copy of free-form diagnostic/nextStep strings.
     metadata.deviceReport = Object.fromEntries(['platform', 'architectures', 'configuration', 'signed',
       'installableWithoutResigning', 'deviceTested', 'appVersion', 'appBuild', 'bundleIdentifier',
@@ -152,11 +156,12 @@ export async function collectAssets(root, flags) {
 }
 
 export function validateDeviceReport(report, ipa, metadata, expectedIdentity) {
+  const expectedIPA = deviceIPAName(expectedIdentity.appVersion, expectedIdentity.appBuild);
   requireThat(report.platform === 'iphoneos' && JSON.stringify(report.architectures) === '["arm64"]' &&
     report.configuration === 'Release' && report.signed === false && report.installableWithoutResigning === false &&
     report.deviceTested === false && report.appVersion === expectedIdentity.appVersion && report.appBuild === expectedIdentity.appBuild &&
     report.bundleIdentifier === 'com.example.localimageiq' && report.modelDimension === 768 &&
-    report.modelVersion === metadata.model.version && report.ipa === IPA &&
+    report.modelVersion === metadata.model.version && report.ipa === expectedIPA && ipa.name === expectedIPA &&
     report.bytes === ipa.bytes && report.sha256 === ipa.sha256 &&
     report.places?.sha256 === metadata.places.sha256 && report.places?.bytes === metadata.places.bytes &&
     report.places?.featureCount === metadata.places.featureCount &&

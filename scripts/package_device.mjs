@@ -6,6 +6,7 @@ import { createReadStream, existsSync, readdirSync, readFileSync, statSync, writ
   mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { validatePlaces } from './check_places.mjs';
+import { deviceIPAName } from './device_artifact_name.mjs';
 
 function run(executable, args) {
   const result = spawnSync(executable, args, { encoding: 'utf8' });
@@ -24,18 +25,34 @@ export function verifyPlatform(info, architectures, buildDescription) {
 }
 
 if (process.argv[2] === '--self-test') {
-  const info = { DTPlatformName: 'iphoneos', CFBundleSupportedPlatforms: ['iPhoneOS'], CFBundlePackageType: 'APPL', CFBundleExecutable: 'LocalImageIQ' };
+  const info = { DTPlatformName: 'iphoneos', CFBundleSupportedPlatforms: ['iPhoneOS'], CFBundlePackageType: 'APPL',
+    CFBundleExecutable: 'LocalImageIQ', CFBundleShortVersionString: '0.7.0', CFBundleVersion: '25' };
   verifyPlatform(info, 'arm64', '    platform IOS\n');
   assert.throws(() => verifyPlatform({ ...info, DTPlatformName: 'iphonesimulator' }, 'arm64', '    platform IOSSIMULATOR\n'));
   assert.throws(() => verifyPlatform(info, 'arm64', '    platform IOSSIMULATOR\n'));
   assert.throws(() => verifyPlatform(info, 'x86_64', '    platform IOS\n'));
-  console.log('PASS: device/simulator platform validator synthetic checks (not a device build)');
+  const names = [
+    [info.CFBundleShortVersionString, info.CFBundleVersion, 'LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa'],
+    ['1.2.3', '42', 'LocalImageIQ-1.2.3-build42-iphoneos-unsigned.ipa'],
+    ['01.2.3.4', '42.1.0', 'LocalImageIQ-01.2.3.4-build42.1.0-iphoneos-unsigned.ipa'],
+    ['1'.repeat(300), '2'.repeat(300), `LocalImageIQ-${'1'.repeat(300)}-build${'2'.repeat(300)}-iphoneos-unsigned.ipa`],
+  ];
+  for (const [version, build, expected] of names) assert.equal(deviceIPAName(version, build), expected);
+  const invalid = ['', '.', '.1', '1.', '1..2', '../1', '1/2', '1\\2', '/1', 'C:\\1', '1%2F2',
+    '1-rc1', ' 1', '1 ', '1\t', '1\n', '1\r\n', '1\u2028', '1\u2029', '1\0',
+    null, undefined, 1, NaN, true, [], {}, new String('1')];
+  for (const value of invalid) {
+    assert.throws(() => deviceIPAName(value, '25'), /device-artifact-identity/);
+    assert.throws(() => deviceIPAName('0.7.0', value), /device-artifact-identity/);
+  }
+  console.log(`PASS: device/simulator platform checks; ${names.length} valid names and ${invalid.length * 2} invalid identities (synthetic, not a device build)`);
 } else {
   assert.equal(process.platform, 'darwin', 'Package device binaries on macOS after xcodebuild -sdk iphoneos');
   assert.equal(process.argv.length, 4, 'Expected app-directory and output-directory');
   const app = path.resolve(process.argv[2]), output = path.resolve(process.argv[3]);
   assert.ok(app.endsWith('.app') && statSync(app).isDirectory());
   const info = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', path.join(app, 'Info.plist')]));
+  const ipaName = deviceIPAName(info.CFBundleShortVersionString, info.CFBundleVersion);
   const executable = path.join(app, info.CFBundleExecutable);
   const architectures = run('xcrun', ['lipo', '-archs', executable]);
   const macho = run('xcrun', ['vtool', '-show-build', executable]);
@@ -105,7 +122,7 @@ if (process.argv[2] === '--self-test') {
   }
   mkdirSync(output, { recursive: true });
   const staging = mkdtempSync(path.join(output, '.payload-'));
-  const ipa = path.join(output, 'LocalImageIQ-iphoneos-unsigned.ipa');
+  const ipa = path.join(output, ipaName);
   try {
     mkdirSync(path.join(staging, 'Payload'));
     run('ditto', [app, path.join(staging, 'Payload', 'LocalImageIQ.app')]);
