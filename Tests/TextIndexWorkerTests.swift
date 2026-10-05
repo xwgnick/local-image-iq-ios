@@ -822,7 +822,7 @@ private final class TextWorkerLibrary: PhotoLibraryIndexing, PhotoSearchFilterin
     private var matchingIDs: Set<String>?
     private var filteringAction: (@Sendable () -> Void)?
     init(_ revisions: [PhotoRevision]) { self.revisions = revisions }
-    private func locked<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
+    private func locked<T>(_ body: () throws -> T) rethrows -> T { lock.lock(); defer { lock.unlock() }; return try body() }
     var canReadImages: Bool { locked { readable } }
     var authorizationStatusRawValue: Int? { locked { authorization } }
     var changeGeneration: UInt64? { locked { generation } }
