@@ -5,7 +5,28 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.6.0（build 24）— 批量照片操作、搜索筛选与找相似，已交付
+## 当前：0.7.0（build 25）— 可选照片文字搜索，已交付
+
+**[本地已校验 IPA](../build/device-download/37295461425/LocalImageIQ-iphoneos-unsigned.ipa)** · [公开 Release ci-37295461425-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37295461425-1)。Release **403616561**，**2026-10-05T10:55:25Z** 发布，**9 项资产、prerelease、非 draft**；本机无需重下，另一台电脑可从该 Release 下载。
+
+1. 用**同一 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**，签名沿用下方第 1–5 节。**不卸载、不清索引、不重建图像索引**；已有当前有效图像索引直接复用，无需开启调试。
+2. 到 **设置 → 照片文字 → 文字搜索增强**主动开启。开关**默认 OFF、选择持久化**；单独开关**不启动索引、不弹 Photos 授权提示**。
+3. 再显式点“**更新文字索引**”，保持 App 在**前台**；只处理当前有效的既有图像索引记录。若有**新增／编辑照片，先手动更新图像索引，再更新文字索引**，无需全库重建。
+4. 回到**同一搜索框**输入原始中文；增强开启后自动用 **RRF（倒数排名融合）**结合文字匹配与既有视觉搜索，**不在每次搜索时执行 OCR**。
+
+**不要求开启云端下载**，照片网络请求仍遵守用户原有许可；可取得的本地预览细节可能不足以识别文字。无需额外 OCR 模型权重，但**真实手机 OCR 质量、耗时、内存／发热和 build 25 安装仍待验证**。关闭增强**不删除已存 OCR**；“清除索引”会同时删除图像与文字索引，**不是本次安装或启用步骤，不要执行**。build 24 的批量分享／收藏／相簿、筛选、找相似及全部既有功能保留；本次未实现重复照片整理、标签或评分。
+
+### build 25 包与验证摘要
+
+原始 IPA asset **612295927**，**1,418,904,925 字节**，SHA-256 **`2981559cb264fe5a5f0378df51e543624c82141dc6bd0715971961f37569d11f`**。已完整流式核验实际长度／哈希，**7-Zip 26.03 全量 CRC PASS**（**11 文件夹、30 文件、解压后 1,565,210,109 字节**）；同目录设备报告、交付清单及 SHA 校验文件齐全，见 [../build/device-download/37295461425/release-fetch-dfea268a-1857-42c3-aab7-d04a1582beef.json](../build/device-download/37295461425/release-fetch-dfea268a-1857-42c3-aab7-d04a1582beef.json)。原包校验不验证 Sideloadly 重签包或手机安装。
+
+[CI 37295461425](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425)／[job 111715497281](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425/job/111715497281)，最终源码 **`45e58ba5aceb9331b15ed39a4504f143618d5f75`**：**第二次完整原生验证 SUCCESS，新 run attempt 1，不是本功能首轮成功；DELIVERED／PENDING-DEVICE**。首次仅新增测试的 `locked` helper 不接受抛错闭包，随后一行改为 `rethrows`；两次间生产 App 不变，该编译失败造成的额外等待本可避免。核心 **79**、App **974＝973 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败**（**279.990 秒，wall 286.767 秒**），UI **13 全通过／999.189 秒**。沿用个人公开仓库／标准 `macos-15`，`include_models`／`all_compute_units`／`build_device_ipa` 均为 `true`，**CI 未改、完整门槛保留**。
+
+设备为 **0.7.0 / 25、arm64 Release、未签名、最低 iOS 17、SDK 18.5／Xcode 16.4、LaunchScreen**；SigLIP 768 模型版本／地点身份沿用，**未再次全量比较模型权重字节**。已实际查看 [../build/ui-review/37295461425/photo-text-contact.jpg](../build/ui-review/37295461425/photo-text-contact.jpg)（**680×758，两张各 393×852 原生合成图**）：黑金深色、开关 ON；左图保存 12／含文字 8／降质 3、未授权且更新禁用，右图进度 12／24＝0.5 及暂停按钮。**合成计数不是真实相册 OCR 质量或性能；顶部 TEST 水印不在生产界面。**完整两次账本、新增六套件 119 项、真实 Vision 合成图测试及资产身份见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+以下 build 24 及更早正文和安装历史全部保留；旧包、旧“当前／本轮”和旧调试／迁移要求不替代页首 build 25 及下方现行第 1–5 节。
+
+## 历史：0.6.0（build 24）— 批量照片操作、搜索筛选与找相似，已交付
 
 本地已校验包：[../build/device-download/37281481114/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37281481114/LocalImageIQ-iphoneos-unsigned.ipa)；另一台电脑使用 [公开 Release ci-37281481114-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37281481114-1)。Release **403520360**，**2026-10-05T08:41:51Z** 发布，**9 项资产、prerelease、非 draft**；本机无需重下。
 

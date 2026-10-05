@@ -1,8 +1,8 @@
 # 照片文字搜索
 
-**0.7.0 / build 25：待原生 CI 验证，未交付（PENDING-NATIVE / PENDING-ARTIFACTS / NOT-DELIVERED）。**
+**0.7.0 / build 25：DELIVERED。原生验证、设备构建、发布与本地 IPA 校验已完成；真机验收仍未完成。**
 
-版本来自 [../project.yml](../project.yml)。当前已交付版本仍是 **0.6.0 / build 24**，见 [BUILD_STATUS.md](BUILD_STATUS.md)；旧包不包含本功能。build 25 的原生测试结果、截图审阅、设备 IPA、发布及本地包校验均待完成，不能以源码或测试数量代替交付证据。
+版本来自 [../project.yml](../project.yml)，最终源码 `45e58ba5aceb9331b15ed39a4504f143618d5f75`。[CI 37295461425](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425)／[job 111715497281](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425/job/111715497281) **SUCCESS**；新 run 的 attempt 为 1，但这是本功能整体**第二次原生验证，不是首轮成功**。实际结果、失败／修正及资产账本见第 7–9 节。0.6.0 / build 24 的 [结果工具契约](SEARCH_RESULT_TOOLS.md) 与 [历史交付账本](BUILD_STATUS.md) 仍作为基线保留，旧包不含 OCR；本版状态以本文及 [当前 README](../README.md) 为准。
 
 ## 1. 怎么用
 
@@ -15,7 +15,7 @@
 
 按钮需要照片可读权限、搜索模型已就绪、已知且非零的图片索引计数、前台且没有其他工作。**仅开启开关不会请求照片权限，也不会自动开启 iCloud 下载。**
 
-未来 build 25 正式交付后，用原 Sideloadly 账号及原有效 Bundle ID **覆盖安装，不卸载、不清库、不为升级重建图片索引**。已有有效图片向量可复用；想用新功能，只需开启并手动更新文字索引。新增或编辑过的照片例外：先更新图片索引，再更新文字索引。
+现在可用已交付的 [build 25 IPA](../build/device-download/37295461425/LocalImageIQ-iphoneos-unsigned.ipa)，以原 Sideloadly 账号及原有效 Bundle ID **覆盖安装，不卸载、不清库、不为升级重建图片索引**。已有有效的当前图片向量可复用；想用新功能，只需开启并在前台手动更新文字索引。新增或编辑过的照片例外：先手动更新图片索引，再更新文字索引。安装流程见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。本版新增范围仅为照片文字搜索，不扩展为近重复整理、标签／评分或保存查询。
 
 入口与持久化：[../App/UI/PhotoTextIndexSection.swift](../App/UI/PhotoTextIndexSection.swift)、[../App/State/AppState.swift](../App/State/AppState.swift)、[../App/LocalImageIQApp.swift](../App/LocalImageIQApp.swift)。生产环境通过 `UserDefaults.standard` 保存 `photoTextSearchEnabled.v1`；未注入偏好存储的测试实例不代表生产开关只在会话内有效。
 
@@ -23,7 +23,7 @@
 
 - 候选限定为**当前有权限访问、已有当前模型／图片输入策略索引**的照片；图片记录的 revision 必须与当前照片一致才做 OCR。已有图片记录但 revision 过期的计入「已变化跳过」，未建图片索引的不会自动补入。
 - 文字更新独立于图片向量：只检查模型身份、读取图片 ID／revision 和计数，**不解码图片向量、不调用图片或文字向量编码器、不加载额外 Core ML 权重、不解析地点边界，也不改写图片索引**。原有启动模型准备和图片索引的 20 worker 不因此改变。
-- 冷启动、回前台、图库通知及普通统计刷新**不自动扫描照片、不做 OCR、不清理文字记录**。文字统计只读已保存元数据；数据库不存在就返回零，不创建目录、数据库或迁移。
+- 冷启动、回前台、图库通知及普通统计刷新**不自动扫描照片、不做 OCR、不清理文字记录**。文字统计只读已保存的轻量元数据；数据库不存在就返回零，不创建目录、数据库或迁移。这不保证瞬时启动，原模型准备与元数据读取仍可能耗时。
 - 可选文字统计读取失败时，显示统计不可用，不阻断图片模型就绪、刷新或图片索引完成；取消仍按取消处理，不能吞成普通统计警告。统计不是当前授权可搜索数量，也不验证识别正确性。
 - 每次手动文字更新先按当前合格 ID／revision／策略清理过期文字记录。相同 ID、revision、策略且非 `isReduced` 的记录可复用，**成功识别为空也是真实完成记录**。小图／降质记录照样保存并参与搜索，但下次手动更新会重试；没有后台升级或轮询。
 - 普通读取／识别失败及离线需云端项目只计数，**不把错误或部分识别保存为完成**；后续项目可继续。权限丢失、访问变化、取消和存储错误会停止本次工作。「已检查」包含跳过／失败，不等于都识别成功。
@@ -95,28 +95,73 @@
 
 **Photos 与 SQLite 无法原子锁定。**最终检查后发生的权限／照片变化不能保证撤销已提交记录；后续搜索仍重新检查资格。不能把这些边界检查描述成“照片授权变化与 SQL 提交绝对原子一致”。
 
-## 7. 测试清单与待验证项
+## 7. 最终原生测试结果与边界
 
-以下按当前源码中实际 `func test…` **方法定义静态计数**，不是断言数、循环场景数或执行通过数；**本版本未据此宣称运行通过，原生 CI 待验证**。
+以下为最终 run **37295461425** 的实际执行结果，不再是源码方法静态计数；各子组已计入所属总数，不能重复相加。
 
-|来源|方法数|源码所含范围|
-|---|---:|---|
-|[../Tests/VisionTextRecognitionTests.swift](../Tests/VisionTextRecognitionTests.swift)|35|含 4 项真实 Vision 合成图片识别；另含配置、方向、降质、共享像素回退、错误及取消排空。|
-|[../Tests/TextIndexStoreTests.swift](../Tests/TextIndexStoreTests.swift)|24|持久化、词项／数字边界、资格先于正文解码、只读不建库、事务回滚、保护／备份属性及手动清理。|
-|[../Tests/TextIndexWorkerTests.swift](../Tests/TextIndexWorkerTests.swift)|29|图片 revision 候选、无编码副作用、续跑／降质重试、可选统计失败隔离、完整排序与权限、关闭／无命中不变、显式搜索失败及两库清除。|
-|[../Tests/TextHybridRankingTests.swift](../Tests/TextHybridRankingTests.swift)|7|完整名次、等权 RRF60、重复／越界 ID、稳定平局、诊断分数位保持。|
-|[../Tests/PhotoTextStateTests.swift](../Tests/PhotoTextStateTests.swift)|20|默认关闭与偏好持久化、无自动 OCR、忙碌／后台／取消排空、原文与译文分流、筛选复用、统计知识及会话失效。|
-|[../Tests/PhotoTextPresentationTests.swift](../Tests/PhotoTextPresentationTests.swift)|4|原生宿主内设置／进度展示、开关不触发工作、最大辅助功能字体滚动；使用合成计数，不识别照片。|
-|**上述 App 测试合计**|**119**|静态源码清单，非已通过测试报告。|
-|[../UITests/PresentationNavigationTests.swift](../UITests/PresentationNavigationTests.swift)|**1 项本功能方法**|`testPhotoTextOptInDoesNotIndexOrAskPhotosPermission`；实际 UI 开关、隐私文字与重启持久化，不是该文件全部方法数。|
+|范围|实际结果|报告耗时|
+|---|---|---|
+|Core|79 通过|—|
+|App|974 项：973 通过、1 既有 SQLite 物理保护测试跳过、0 失败|测试 279.990 秒；wall 286.767 秒|
+|`GeneratedModelParityTests`（包含在 App 内）|8 通过；保留 CPU／`.all` 与全部 20 个图像 actor 的数值对齐验证|158.481 秒|
+|UI|13 通过、0 失败|999.189 秒|
+|UI 导航（包含在 UI 内）|8 通过|739.131 秒|
+|UI 键盘（包含在 UI 内）|5 通过|260.058 秒|
 
-真实 Vision 识别恰为以下 **4 项，已包含在 35 中，不重复加总**；注入的只有合成像素，不伪造 OCR 输出，也不因模拟器／缺少 App 模型而跳过：
+### 新增六组 App 测试：119 项全部通过
 
-- `testNativeVisionServiceRecognizesSyntheticEnglish`
-- `testNativeVisionServiceRecognizesSyntheticChinese`
-- `testNativeVisionServiceRecognizesEXIFRotatedSyntheticEnglish`
-- `testNativeVisionBlankImageIsSuccessfulEmptyText`
+|来源|通过数|耗时（秒）|覆盖范围|
+|---|---:|---:|---|
+|[../Tests/VisionTextRecognitionTests.swift](../Tests/VisionTextRecognitionTests.swift)|35|3.459|含 4 项真实 Vision 合成图片识别；另含配置、方向、降质、共享像素回退、错误及取消排空。|
+|[../Tests/TextIndexStoreTests.swift](../Tests/TextIndexStoreTests.swift)|24|0.221|持久化、词项／数字边界、资格先于正文解码、只读不建库、事务回滚、保护／备份属性及手动清理。|
+|[../Tests/TextIndexWorkerTests.swift](../Tests/TextIndexWorkerTests.swift)|29|1.305|图片 revision 候选、无编码副作用、续跑／降质重试、可选统计失败隔离、完整排序与权限、关闭／无命中不变、显式搜索失败及两库清除。|
+|[../Tests/TextHybridRankingTests.swift](../Tests/TextHybridRankingTests.swift)|7|0.019|完整名次、等权 RRF60、重复／越界 ID、稳定平局、诊断分数位保持。|
+|[../Tests/PhotoTextStateTests.swift](../Tests/PhotoTextStateTests.swift)|20|0.342|默认关闭与偏好持久化、无自动 OCR、忙碌／后台／取消排空、原文与译文分流、筛选复用、统计知识及会话失效。|
+|[../Tests/PhotoTextPresentationTests.swift](../Tests/PhotoTextPresentationTests.swift)|4|1.409|原生宿主内设置／进度展示、开关不触发工作、最大辅助功能字体滚动；使用合成计数，不识别照片。|
+|**合计（包含在 App 974 内）**|**119**|—|全部通过。|
 
-独立 UI 方法在显式无模型测试模式下会跳过；不等于这 4 项 Vision 测试会跳过。展示测试源码预设两张审阅图：`UIReview-photo-text-settings-dark`、`UIReview-photo-text-progress-dark`，**实际产物与审阅仍 PENDING**。文件保护的物理设备属性断言也不能用模拟器替代。
+实际调用 Vision 的以下 **4 项全部通过，已包含在 35 中，不重复加总**。注入的只有合成像素，不伪造 OCR 输出，也不因模拟器／缺少 App 模型而跳过：
 
-**尚无 build 25 原生通过／发布／IPA 校验证据；尚无手机中文／英文准确率、真实 PhotoKit 本地可用率、有限授权端到端、耗时／峰值内存／大图库覆盖结论。**合成图片测试、状态测试和展示夹具都不能替代这些验收。
+- `testNativeVisionServiceRecognizesSyntheticEnglish`：英文。
+- `testNativeVisionServiceRecognizesSyntheticChinese`：中文「星巴克咖啡」及数字 `3817`。
+- `testNativeVisionServiceRecognizesEXIFRotatedSyntheticEnglish`：EXIF 旋转英文。
+- `testNativeVisionBlankImageIsSuccessfulEmptyText`：空白图成功返回空文字。
+
+[../UITests/PresentationNavigationTests.swift](../UITests/PresentationNavigationTests.swift) 中新增的 `testPhotoTextOptInDoesNotIndexOrAskPhotosPermission` **本轮通过**：实际操作开关、检查隐私文字及重启持久化，同时验证不自动索引、不弹 Photos 授权。它已计入导航 8 项／UI 13 项，不是额外的第 14 项。该方法在显式无模型测试模式下仍可跳过，但本轮不是跳过；这一条件与 4 项 Vision 测试无关。既有 SQLite 物理保护断言跳过也不能写成已验证设备文件保护。
+
+### 原生截图实际审阅
+
+已实际查看 `UIReview-photo-text-settings-dark`、`UIReview-photo-text-progress-dark` 两张 **393 × 852** 原生夹具截图；[最终拼图](../build/ui-review/37295461425/photo-text-contact.jpg) 为 **680 × 758**：
+
+- 左侧黑金设置页：文字搜索增强 ON；已保存 12、含文字 8、降低分辨率 3。更新按钮禁用是**注入无照片授权**的预期状态，不是正常授权场景不可用的证据。
+- 右侧进度页：12／24，进度值 0.5，显示「暂停文字索引」。
+- 顶部 TEST 为测试水印，不属于生产 UI。两图都是合成汇总状态，不是真实照片识别结果，也不是 OCR 质量、吞吐或性能测量。
+
+**仍未验证**手机中文／英文准确率、真实 PhotoKit 本地／大图可用率、有限授权端到端、实际耗时／峰值内存／发热与大图库覆盖。原生通过、合成图片识别和展示夹具不能替代这些验收；也不能据此承诺全部照片离线可用、瞬时启动或普遍改善排序。第 3 节像素与内存边界、第 4 节实验性 RRF 限制继续有效。
+
+## 8. 两轮验证与失败／修正账本
+
+|轮次|源码与运行|实际结果／修正|
+|---|---|---|
+|整体第一轮|`2440465db50b647703e7aed31fc13933ef5feb83`；[run 37294323538](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37294323538)／[job 111711860808](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37294323538/job/111711860808)|失败点仅为新增 [TextIndexWorkerTests.swift 的 throwing closure](../Tests/TextIndexWorkerTests.swift#L840) 传给不接受抛出的私有 `locked` 辅助函数。随后一行将该测试辅助函数改为 `rethrows`；只改测试，非 App 生产修复。|
+|整体第二轮／最终交付|`45e58ba5aceb9331b15ed39a4504f143618d5f75`；[run 37295461425](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425)／[job 111715497281](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425/job/111715497281)|SUCCESS；新 run attempt 1。完整测试、设备包、发布及本地校验结果见第 7、9 节。|
+
+首轮的测试签名错误**可避免，并额外产生了一次 CI**；新 run attempt 1 不等于本功能首轮成功。两轮之间 App 生产代码未改；工作流未改，也没有通过删测、跳过新增测试、缓存捷径或更换 runner 规格取得成功。仍使用标准 `macos-15`，`include_models`、`all_compute_units`、`build_device_ipa` 均为 `true`，保留完整原生与模型对齐门槛。
+
+## 9. 发布、资产与本地完整性
+
+[Release ci-37295461425-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37295461425-1)：ID **403616561**，发布于 **2026-10-05T10:55:25Z**，**9 项资产、prerelease、非草稿**。
+
+|资产|Release asset ID|字节数|SHA-256|
+|---|---:|---:|---|
+|未签名设备 IPA|612295927|1,418,904,925|`2981559cb264fe5a5f0378df51e543624c82141dc6bd0715971961f37569d11f`|
+|UI 审阅资产|612295719|6,382,650|`5d191c618f48c28b5b3cd0ac9bdcefd93de3eb48a7b00ba7b5f9c332340b7265`|
+
+- 本地 IPA：[../build/device-download/37295461425/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37295461425/LocalImageIQ-iphoneos-unsigned.ipa)。已完成**全文件流式下载、长度与 SHA-256 校验**，不是只读文件头或局部抽样。
+- 下载记录及配套文件保留在同一下载目录；记录见 [../build/device-download/37295461425/release-fetch-dfea268a-1857-42c3-aab7-d04a1582beef.json](../build/device-download/37295461425/release-fetch-dfea268a-1857-42c3-aab7-d04a1582beef.json)。
+- **7-Zip 26.03 全量 CRC：PASS**；11 个目录、30 个文件，解包总大小 **1,565,210,109 bytes**。
+- 包仍为 **arm64 Release、未签名、SDK 18.5／Xcode 16.4、最低 iOS 17**，保留系统静态 Launch Screen；需 Sideloadly 本机签名后覆盖安装。包完整性不等于已完成真机安装或行为验收。
+- SigLIP 2 的 **768 维向量、模型／图片索引版本及离线地点缓存身份保持不变**，原有效图片索引可保留。既有 CPU／`.all` 和全部 20 个图像 actor 的模型对齐测试不变且通过。
+- IPA **没有新增随包 OCR 权重**。相较 build 24 的 1,418,824,951 bytes，包大 **79,974 bytes（约 80 KB）**；这是两个编译产物的大小差，包含编译产物变化，不能单独归因于 OCR 功能开销。
+
+交付不改变原 [隐私与再分发边界](../README.md)：OCR 本机执行，但 PhotoKit 资源可能需用户明确允许联网；公开 prerelease 不等于商店分发、签名永久有效或法律审核完成。

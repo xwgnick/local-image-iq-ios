@@ -1,6 +1,69 @@
-# Cloud build status — build 24
+# Cloud build status — build 25
 
-## Current: 0.6.0 (build 24) — 第三次完整原生验证 SUCCESS；已交付，真机待验
+## Current: 0.7.0 (build 25) — 第二次完整原生验证 SUCCESS；已交付，真机待验
+
+[Run 37295461425](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425)／[job 111715497281](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425/job/111715497281)，最终构建源码 **`45e58ba5aceb9331b15ed39a4504f143618d5f75`**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。这是**新 run 的 attempt 1、本功能第二次整体验证 SUCCESS，不是本功能首轮成功**。
+
+两次均沿用**个人公开仓库／标准 `macos-15`／原工作流**，`include_models`／`all_compute_units`／`build_device_ipa` 三项均为 `true`；**CI 未改，真实模型、App、UI 全部门槛保留**。
+
+### build 25 两次验证账本
+
+|整体验证|run／job／完整源码 SHA|实际结果与修正|
+|---|---|---|
+|第一次|[37294323538／111711860808](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37294323538/job/111711860808)；`2440465db50b647703e7aed31fc13933ef5feb83`|FAILED：仅新增 [TextIndexWorkerTests.swift](../Tests/TextIndexWorkerTests.swift#L840) 的测试编译失败；throwing closure 传入不接受抛错闭包的私有 `locked` helper。随后仅一行将该测试 helper 改为 `rethrows`。|
+|第二次|[37295461425／111715497281](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37295461425/job/111715497281)；`45e58ba5aceb9331b15ed39a4504f143618d5f75`|SUCCESS：测试修正后完整原生验证与设备打包通过；**两次之间生产 App 源码不变**。|
+
+首次是新增测试 helper 的编译错误，不是生产 App 回归；修正仅在测试。该失败及重跑带来**本可避免的额外等待**，不能归为完整测试必需成本。
+
+### build 25 最终验证结果
+
+|项目|实际结果／范围|
+|---|---|
+|Swift 核心|**79 全通过**。|
+|App XCTest|**974＝973 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败**；**279.990 秒，wall 286.767 秒**。|
+|新增：Vision 文字识别|**35／3.459 秒，全通过**；其中 **4 项实际调用 Vision 的合成图片测试**：中文“星巴克咖啡3817”、英文、EXIF 旋转、空白，全部通过。|
+|新增：文字存储|**24／0.221 秒，全通过**。|
+|新增：文字索引 worker|**29／1.305 秒，全通过**。|
+|新增：RRF 排名融合|**7／0.019 秒，全通过**。|
+|新增：文字功能状态|**20／0.342 秒，全通过**。|
+|新增：原生 UI 宿主展示|**4／1.409 秒，全通过**。|
+|`GeneratedModelParityTests`|**8／158.481 秒，全通过**；既有真实模型 **CPU／`.all`／20 actor 对齐门槛不变**。|
+|独立 UI|**13 全通过／999.189 秒**；导航 **8／739.131 秒**、键盘 **5／260.058 秒**，包含文字增强 opt-in 开关持久化，且切换开关**不启动索引、不弹 Photos 授权提示**。|
+|设备构建／小型元数据|**0.7.0 / 25、arm64 Release、未签名、最低 iOS 17、SDK 18.5、Xcode 16.4、LaunchScreen**。|
+
+新增六套件 **35＋24＋29＋7＋20＋4＝119** 项已包含在 App 974 中，不重复相加；独立 UI 另计。实际 Vision 调用的输入仍为合成图，不是用户相册 OCR 质量验收；测试秒数也不是手机性能。
+
+### build 25 资产与本地全量核验
+
+|资产／核验|实际身份与结果|
+|---|---|
+|公开 Release|[ci-37295461425-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37295461425-1)，ID **403616561**；**2026-10-05T10:55:25Z** 发布；**9 项资产、prerelease、非 draft**。|
+|原始 IPA|asset **612295927**；**1,418,904,925 字节**；SHA-256 **`2981559cb264fe5a5f0378df51e543624c82141dc6bd0715971961f37569d11f`**。已实际完整流式下载并核验长度／哈希，不是仅核对远端声明。|
+|归档完整性|**7-Zip 26.03 全量 CRC PASS**；**11 文件夹、30 文件**，解压后 **1,565,210,109 字节**；不验证 Sideloadly 重签包或手机安装。|
+|UI ZIP|asset **612295719**；**6,382,650 字节**；SHA-256 **`5d191c618f48c28b5b3cd0ac9bdcefd93de3eb48a7b00ba7b5f9c332340b7265`**；[../build/ui-review/37295461425/UIReview.zip](../build/ui-review/37295461425/UIReview.zip) 已下载核验。|
+|模型／地点小型元数据|沿用同一 **SigLIP 768 模型版本／身份**；地点 **2,943 项／15,175,079 字节**，Geo SHA-256 **`41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`**、manifest SHA-256 **`7edb232043452d9a6f718b8a59a121fa0938dfdd54e732ed97e2be60f195b7e5`**。**没有再次全量比较模型权重字节**，小元数据与 CRC 不证明跨版本权重字节一致。|
+
+本地已校验交付文件：
+
+- [../build/device-download/37295461425/LocalImageIQ-iphoneos-unsigned.ipa](../build/device-download/37295461425/LocalImageIQ-iphoneos-unsigned.ipa)
+- [../build/device-download/37295461425/device-build.json](../build/device-download/37295461425/device-build.json)
+- [../build/device-download/37295461425/delivery.json](../build/device-download/37295461425/delivery.json)
+- [../build/device-download/37295461425/SHA256SUMS.txt](../build/device-download/37295461425/SHA256SUMS.txt)
+- [../build/device-download/37295461425/release-fetch-dfea268a-1857-42c3-aab7-d04a1582beef.json](../build/device-download/37295461425/release-fetch-dfea268a-1857-42c3-aab7-d04a1582beef.json)
+
+### build 25 实际审图与使用边界
+
+已实际查看 [../build/ui-review/37295461425/photo-text-contact.jpg](../build/ui-review/37295461425/photo-text-contact.jpg)（**680×758**），仅含 **2 张各 393×852 的原生合成夹具图**：黑金深色、文字增强开关 **ON**；左图已保存 **12**／含文字 **8**／降质 **3**，无 Photos 授权，更新按钮禁用；右图进度 **12／24＝0.5**，可见暂停按钮。**这些计数是合成状态，不是真实照片 OCR 质量或性能证据；顶部 TEST 水印仅在测试宿主中，不属于生产界面。**
+
+**同一 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不重建图像索引。**在 **设置 → 照片文字 → 文字搜索增强**主动开启（**默认 OFF、选择持久化**），再显式点“**更新文字索引**”，保持 App 前台；只复用**当前有效的既有图像索引记录**。新增／编辑照片应先手动更新图像索引，再更新文字索引；升级或单独开关不会自动建索引。
+
+仍使用**同一搜索框**输入原始中文；启用增强后自动通过 **RRF（倒数排名融合）**结合文字匹配与既有视觉结果，**不在每次查询时执行 OCR**。照片网络请求遵守用户现有许可，**不强制开启云端下载**；本地预览细节可能不足以识别文字。不附带额外 OCR 模型权重；**手机端 OCR 质量、耗时、内存／发热及实际安装仍待验证**。
+
+关闭“文字搜索增强”**不会删除已存 OCR 数据**；“清除索引”会同时移除图像与文字索引，**不是升级或启用步骤，不要为本次交接执行**。build 24 的批量操作、日期／相簿／类型筛选、找相似及全部既有基线保留；本次**未实现重复照片整理、标签或评分**。简明安装步骤见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
+
+以下 build 24 及更早版本的全部正文与安装／验证历史保留；其中“当前／本轮”及旧操作要求仅属于对应历史版本，不替代页首 build 25。
+
+## Historical: 0.6.0 (build 24) — 第三次完整原生验证 SUCCESS；已交付，真机待验
 
 [Run 37281481114](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37281481114)／[job 111670359062](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37281481114/job/111670359062)，最终构建源码 **`ba18307f0d17ed3554487ad31b7fc6c0662fae5f`**。**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE**。这是**新 run 的 attempt 1、本功能第三次整体验证 SUCCESS，不是整体首轮成功**。
 
