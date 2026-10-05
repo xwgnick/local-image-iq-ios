@@ -5,7 +5,34 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.7.0（build 25）— 可选照片文字搜索，已交付
+## 当前：0.8.0（build 26）— 相似照片清理，已交付
+
+**[../build/device-download/37373137157/LocalImageIQ-0.8.0-build26-iphoneos-unsigned.ipa](../build/device-download/37373137157/LocalImageIQ-0.8.0-build26-iphoneos-unsigned.ipa)** · [公开 Release ci-37373137157-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37373137157-1)。本机已完整下载校验，无需重下；另一台电脑可从该 Release 下载。这是**首个实际远端发布的版本化 IPA 名称**，不是 build 25 的本地改名副本。
+
+1. 用**同一 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**，签名沿用下方第 1–5 节。**不卸载、不清索引、不因升级重建索引**；无需开启调试。
+2. 首页**搜索下方 → 相似照片清理**。阈值默认 **0.96**，范围 **0.90–0.99，越高越严格**；进入页面／调整阈值不自动扫描，显式点“**开始**”才分组。
+3. 分组按**照片数降序**展示，点“**对比**”检查，再逐张勾选。**不自动勾选、不自动删除、不自动决定保留哪张**；阈值不是概率，也不保证像素完全重复。
+4. 点“**删除 N 张**”后，须在 App 确认对话框明确确认；**整组选中有额外警告**，最终权限与系统行为由 Photos 决定。不要用不可替代照片做删除验证。
+
+**删除的是系统 Photos 中的真实照片，不只是 App 索引。即使 App 照片网络开关关闭，也可能经 iCloud 同步删除其他设备上的照片。**通常可在系统“最近删除”恢复，但取决于 OS 与实际状态，**不保证始终有 30 天或一定可恢复**。实际 iPhone 安装、真实相册分组质量、真实删除及系统确认仍待验证。
+
+清理只使用**当前有效的既有图像索引**。新增／索引过期的照片须先手动更新图像索引，否则不纳入；**这不是升级必做步骤**，已有有效索引直接复用。App schema、图像策略、OCR 和照片网络许可不变。
+
+### build 26 包与验证摘要
+
+Release **404106453**，**2026-10-05T21:34:51Z** 发布，**9 项资产、prerelease、非 draft**。IPA asset **613657795**，**1,419,110,911 字节**，SHA-256 **`2f05a081f9987db820c3c8f21b89efbbeefa65762ad789b6c35d2700cf1b737b`**；已实际完整流式核验长度／哈希，**7-Zip 26.03 全量 CRC PASS**（**11 文件夹、30 文件、解压后 1,566,268,285 字节**）。记录见 [../build/device-download/37373137157/release-fetch-7627271e-b249-4686-a7e1-68b4c23d24f8.json](../build/device-download/37373137157/release-fetch-7627271e-b249-4686-a7e1-68b4c23d24f8.json)；原包校验不验证 Sideloadly 重签包或手机安装。
+
+[CI 37373137157](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37373137157)／[job 111975016644](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37373137157/job/111975016644)，最终源码 **`f873b2c77ac03c9ca65e2126de1790f24de6ff3b`**：**本功能第三次整体验证 SUCCESS，新 run attempt 1，不是本功能首轮成功；DELIVERED／PENDING-DEVICE**。首次仅新增测试夹具类型推断编译失败；第二次仅新增最大字体滚动测试（**1 项测试／2 个断言**）和新增 UI 阈值测试失败。第三次包含**生产整数刻度 90…99／100 阈值映射修复**、UI 实际拖动及测试惰性内容捕获／底部 offset 修正；**三轮分组算法与删除逻辑不变，不能说全是测试修复**。未删除／跳过断言或新增跳过。
+
+核心 **79**；App **1066＝1065 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败**（**272.777 秒，wall 282.346 秒**）；新增 **92 项**已计入 App 总数；真实模型 **8／143.619 秒**，完整 **CPU／`.all`／20 actor** 门槛保留。UI **14 全通过／922.270 秒**（导航 **9／662.589**、键盘 **5／259.681 秒**），覆盖入口、无 Photos 授权、开始禁用、不自动扫描、阈值 **0.96 → 0.99** 与原查询保留，**不是实际系统 Photos 删除确认 E2E**。既有 **104 项 Node、30 项静态、12 项品牌检查全通过**，门槛不变。
+
+设备小型元数据为 **0.8.0 / 26、arm64 Release、未签名、最低 iOS 17、SDK 18.5／Xcode 16.4、LaunchScreen**，Photos 使用说明已明确照片删除；同一 **SigLIP 768 模型／地点身份**沿用，**未再次全量比较模型权重字节**。已实际查看 [../build/ui-review/37373137157/similar-cleanup-contact.jpg](../build/ui-review/37373137157/similar-cleanup-contact.jpg)（**1008×758，3 张原生合成图**）：分组／选择各 **393×852**，红／蓝合成对比 **1179×2556、fit 展示**；只看见首组部分，其余须滚动，不是真实 Photos 分组或删除证据。最大字体实测宽 **320**、视口高 **766**、内容高 **2744 → 2817**、纵向 offset **−44 → 2211.333 pt**，稳定后返回测试通过，不等于真机验收。
+
+首次本地下载因**本地文件名校验遗漏版本化名称**失败；仅修复本地下载器、通过回归并从**同一成功 run**重新下载，**未重触发 CI，不是用户操作或远端交付失败**。完整三次 SHA／run／job、第二次失败 draft 的 GET-only 取证、分套件耗时、UI 资产及地点哈希见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+以下 build 25 及更早正文与安装历史全部保留；旧“当前／本轮”、旧包和操作要求不替代页首 build 26 及下方现行第 1–5 节。
+
+## 历史：0.7.0（build 25）— 可选照片文字搜索，已交付
 
 **[LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa](../build/device-download/37295461425/LocalImageIQ-0.7.0-build25-iphoneos-unsigned.ipa)** · [公开 Release ci-37295461425-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37295461425-1)。Release **403616561**，**2026-10-05T10:55:25Z** 发布，**9 项资产、prerelease、非 draft**；本机无需重下，另一台电脑可从该 Release 下载。
 
