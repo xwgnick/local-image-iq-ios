@@ -589,7 +589,24 @@ final class PresentationNavigationTests: XCTestCase {
                       let number = Double(text.replacingOccurrences(of: ",", with: ".")) else { return false }
                 return abs(number - expected) < 0.0001
             }, object: threshold)
-            XCTAssertEqual(XCTWaiter.wait(for: [value], timeout: 5), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [value], timeout: 5), .completed,
+                           "Expected \(expected), got \(threshold.value ?? "nil"); frame=\(threshold.frame)")
+        }
+
+        func dragThreshold(from startValue: Double, to endValue: Double) {
+            // The native thumb's center stays half its height inside the AX
+            // rectangle. The recorded gesture starting at x == frame.maxX
+            // left the value at .99; use the inset center instead of that edge.
+            let frame = threshold.frame
+            let radius = frame.height / 2
+            let travel = frame.width - 2 * radius
+            let origin = threshold.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            func thumbCenter(_ value: Double) -> XCUICoordinate {
+                let fraction = CGFloat((value * 100 - 50) / 49)
+                return origin.withOffset(CGVector(dx: radius + fraction * travel,
+                                                   dy: frame.height / 2))
+            }
+            thumbCenter(startValue).press(forDuration: 0.1, thenDragTo: thumbCenter(endValue))
         }
 
         expectThreshold(0.96)
@@ -597,15 +614,12 @@ final class PresentationNavigationTests: XCTestCase {
         assertNoWorkOrPrompt()
         expectHittable(threshold)
         // This slider's accessibilityValue is COSINE (0.96), not a normalized
-        // thumb position (46/49). XCUI's normalized adjust interpreted the custom
-        // value incorrectly and stopped at 0.98 in the captured failure. Move
-        // the real thumb from its known default tick to the end of its track.
-        threshold.coordinate(withNormalizedOffset: CGVector(dx: 46.0 / 49.0, dy: 0.5))
-            .press(forDuration: 0.1, thenDragTo: threshold.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)))
+        // thumb position (46/49). Use the actual frame's inset thumb travel,
+        // rather than normalized adjust or either outside edge of the AX box.
+        dragThreshold(from: 0.96, to: 0.99)
         expectThreshold(0.99)
         assertNoWorkOrPrompt()
-        threshold.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
-            .press(forDuration: 0.1, thenDragTo: threshold.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)))
+        dragThreshold(from: 0.99, to: 0.50)
         expectThreshold(0.50)
         expectHittable(app.staticTexts["similar-cleanup-broad-threshold-note"])
         assertNoWorkOrPrompt()
