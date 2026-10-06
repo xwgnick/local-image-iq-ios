@@ -72,23 +72,29 @@ struct ResidentSearchIndex: Sendable {
         }
 
         try Task.checkCancellation() // Before allocating/building the matrix.
-        var matrix: [Double] = []
-        matrix.reserveCapacity(photos.count * (dimension ?? 0))
+        let rowWidth = dimension ?? 0
+        let error = Self.errorConstants(dimension: rowWidth)
+        var matrix = [Double](repeating: 0, count: photos.count * rowWidth)
         var norms: [Double] = []
         var rowPlaces: [Int] = []
         norms.reserveCapacity(photos.count)
         rowPlaces.reserveCapacity(photos.count)
-        for photo in photos {
-            try Task.checkCancellation()
-            norms.append(try Self.appendWideRow(photo.imageEmbedding, to: &matrix))
-            if let location = photo.location {
-                rowPlaces.append(placeIndices[Array(location.text.utf8)]!)
-            } else {
-                rowPlaces.append(-1)
+        // Borrow the destination once: no per-component append, capacity check,
+        // or copy-on-write access. Nonempty photos have validated nonempty rows.
+        try matrix.withUnsafeMutableBufferPointer { output in
+            for (row, photo) in photos.enumerated() {
+                norms.append(try Self.packWideRow(
+                    photo.imageEmbedding,
+                    into: output.baseAddress!.advanced(by: row * rowWidth), error: error
+                ))
+                if let location = photo.location {
+                    rowPlaces.append(placeIndices[Array(location.text.utf8)]!)
+                } else {
+                    rowPlaces.append(-1)
+                }
             }
         }
         try Task.checkCancellation()
-        let error = Self.errorConstants(dimension: dimension ?? 0)
         self.photos = photos
         self.dimension = dimension
         self.imageMatrix = matrix
@@ -139,9 +145,11 @@ struct ResidentSearchIndex: Sendable {
         try Task.checkCancellation()
         guard capacity > 0 else { return ([], 0) }
 
-        var wideQuery: [Double] = []
-        wideQuery.reserveCapacity(query.count)
-        let queryNormUpper = try Self.appendWideRow(query, to: &wideQuery)
+        var wideQuery = [Double](repeating: 0, count: query.count)
+        let queryNormUpper = try wideQuery.withUnsafeMutableBufferPointer { output in
+            try Self.packWideRow(query, into: output.baseAddress!,
+                                 error: (factor: dotErrorFactor, underflow: dotUnderflowAllowance))
+        }
         var imageScores = [Double](repeating: 0, count: photos.count)
         try Task.checkCancellation()
         imageMatrix.withUnsafeBufferPointer { matrix in
@@ -204,7 +212,8 @@ struct ResidentSearchIndex: Sendable {
     /// Comparing native and sequential reductions therefore needs
     /// 2*gamma(D)*A <= gamma(2D)*A, not just one reduction's error bound.
     /// Cauchy-Schwarz gives A <= ||q||2 * ||row||2. Both norms are upper bounds
-    /// from outward-rounded square sums and sqrt, not nominal computed norms.
+    /// from packWideRow's error-corrected native square sums and outward sqrt,
+    /// not nominal computed norms. The Float certification below is unchanged.
     ///
     /// Every positive bound operation rounds outward with nextUp; the denominator
     /// rounds downward. Add 2D*eta/(1-2D*u), eta = Double.leastNonzeroMagnitude,
@@ -254,18 +263,45 @@ struct ResidentSearchIndex: Sendable {
         return (factor, underflow)
     }
 
-    /// Packs once; exact Float squares plus upward rounding at every addition
-    /// and at sqrt make this an upper bound even for nonunit/extreme vectors.
-    private static func appendWideRow(_ values: [Float], to output: inout [Double]) throws -> Double {
-        var squares: Double = 0
-        for index in values.indices {
-            // Cooperative cadence, not a dimension/resource limit.
-            if index.isMultiple(of: 256) { try Task.checkCancellation() }
-            let value = Double(values[index])
-            output.append(value)
-            if value != 0 { squares = (squares + value * value).nextUp }
+    /// Writes a validated, nonempty row into values.count preallocated Doubles.
+    /// vDSP_vspdp widens exactly, including Float subnormals and signed zeros;
+    /// the original Float buffer is borrowed read-only, never normalized/mutated.
+    /// Native calls cannot be interrupted; check cancellation on either side.
+    ///
+    /// Let S = sum(Double(values[j])^2) in exact arithmetic and s be the native
+    /// square reduction. Each product is exact (<= 48 significant bits); every
+    /// nonzero square lies in [2^-298, 2^256), inside Double's normal range.
+    /// Even Int.max such squares sum to < 2^319 on a 64-bit platform, so neither
+    /// the squares nor any nonnegative partial sum can overflow Double.
+    ///
+    /// Reuse errorConstants: g >= gamma(2D), a >= 2D*eta/(1-2D*u). These already
+    /// conservatively bound one D-term square reduction (ordinary adds or FMA):
+    /// |s-S| <= g*S + a, hence S <= (s+a)/(1-g) when g < 1. Round the numerator
+    /// and quotient upward, denominator downward, then sqrt upward. Thus the
+    /// returned value bounds the ORIGINAL row's Euclidean norm, so using its
+    /// product with the query bound in Cauchy-Schwarz remains valid. No empirical
+    /// epsilon, unit-vector assumption, or max-component looseness is involved.
+    /// A vacuous denominator/nonfinite result gives infinity and exact fallback,
+    /// not a new size limit. A zero reduction means all inputs were zero: positive
+    /// squares cannot underflow Double and the reduction has no cancellation.
+    private static func packWideRow(
+        _ values: [Float], into output: UnsafeMutablePointer<Double>,
+        error: (factor: Double, underflow: Double)
+    ) throws -> Double {
+        try Task.checkCancellation()
+        let count = vDSP_Length(values.count)
+        values.withUnsafeBufferPointer { input in
+            vDSP_vspdp(input.baseAddress!, 1, output, 1, count)
         }
-        return squares == 0 ? 0 : squares.squareRoot().nextUp
+        var squares: Double = 0
+        vDSP_svesqD(output, 1, &squares, count)
+        try Task.checkCancellation()
+        if squares == 0 { return 0 }
+        let denominator = (1 - error.factor).nextDown
+        guard squares.isFinite, denominator > 0 else { return .infinity }
+        let numerator = (squares + error.underflow).nextUp
+        let upperSquares = (numerator / denominator).nextUp
+        return upperSquares.squareRoot().nextUp
     }
 
     // Core's helpers are module-internal. Mirror their exact validation/errors

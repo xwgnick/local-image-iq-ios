@@ -444,6 +444,103 @@ final class ResidentSearchIndexTests: XCTestCase {
         assertHits(try index.search(query: [1, 0], limit: Int.max, locationWeight: 0.2), first.hits)
     }
 
+    func testBulkPackedRowOffsetsAndExtremePayloadsStayExact() throws {
+        let minusZero = Float(bitPattern: 0x80000000)
+        let values: [Float] = [Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude,
+                               Float.greatestFiniteMagnitude.nextDown, Float(1).nextUp, -1,
+                               Float.leastNormalMagnitude, -Float.leastNormalMagnitude,
+                               Float.leastNonzeroMagnitude, -Float.leastNonzeroMagnitude,
+                               0, minusZero]
+        // Odd lengths exercise native tails and successive unaligned row starts.
+        for dimension in [1, 7, 257, 768, 769] {
+            var photos: [IndexedPhoto] = []
+            for (row, value) in values.enumerated() {
+                var vector = [Float](repeating: value, count: dimension)
+                for column in vector.indices where column % 2 == 1 { vector[column] = -value }
+                photos.append(photo("packed-\(row)", vector, revision: Double(row)))
+            }
+            let originalBits = photos.map { $0.imageEmbedding.map(\.bitPattern) }
+            let index = try ResidentSearchIndex(photos: photos)
+            XCTAssertEqual(index.packedImageElementCount, values.count * dimension)
+            XCTAssertEqual(index.uniquePlaceCount, 0)
+            for position in Set([0, dimension / 2, dimension - 1]).sorted() {
+                for sign in [Float(1), Float(-1)] {
+                    var query = [Float](repeating: minusZero, count: dimension)
+                    query[position] = sign
+                    let queryBits = query.map(\.bitPattern)
+                    let result = try assertOracle(index, query: query, weight: 0)
+                    // Nonzero extreme/subnormal scores must actually be certified,
+                    // not silently rescued by scalar dots masking a packing bug.
+                    XCTAssertEqual(result.fallbacks, 2, "Only the two zero rows need signed-zero fallback.")
+                    XCTAssertEqual(query.map(\.bitPattern), queryBits)
+                }
+            }
+            XCTAssertEqual(index.photos.map { $0.imageEmbedding.map(\.bitPattern) }, originalBits)
+            XCTAssertEqual(photos.map { $0.imageEmbedding.map(\.bitPattern) }, originalBits)
+        }
+    }
+
+    func testBulkPackedExtremeQueriesUseTheSameExactWideningAndNormBound() throws {
+        let minusZero = Float(bitPattern: 0x80000000)
+        let coefficients: [Float] = [1, -1, 0.75, -0.75, 0, minusZero]
+        let magnitudes: [Float] = [Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude,
+                                   Float.leastNormalMagnitude, -Float.leastNormalMagnitude,
+                                   Float.leastNonzeroMagnitude, -Float.leastNonzeroMagnitude]
+        for dimension in [7, 768, 769] {
+            var photos: [IndexedPhoto] = []
+            for (row, coefficient) in coefficients.enumerated() {
+                photos.append(photo("query-\(row)", [Float](repeating: coefficient, count: dimension)))
+            }
+            let index = try ResidentSearchIndex(photos: photos)
+            XCTAssertEqual(index.packedImageElementCount, coefficients.count * dimension)
+            for position in [0, dimension - 1] {
+                for magnitude in magnitudes {
+                    var query = [Float](repeating: minusZero, count: dimension)
+                    query[position] = magnitude
+                    let queryBits = query.map(\.bitPattern)
+                    let result = try assertOracle(index, query: query, weight: 0)
+                    XCTAssertEqual(result.fallbacks, 2, "Nonzero scores lie inside Float rounding cells.")
+                    XCTAssertEqual(query.map(\.bitPattern), queryBits)
+                }
+            }
+        }
+    }
+
+    func testBulkPackedDenseExtremeCancellationAndFloatBoundariesTakeExactFallback() throws {
+        let dimension = 769
+        let big = Float.greatestFiniteMagnitude
+        let halfULP = Float(sign: .plus, exponent: -24, significand: 1)
+        let small = Float(sign: .plus, exponent: -50, significand: 1)
+        var cancelling = [Float](repeating: 0, count: dimension)
+        for column in 0..<(dimension - 1) { cancelling[column] = column % 2 == 0 ? big : -big }
+        cancelling[dimension - 1] = 2
+        var photos = [photo("cancel-positive", cancelling),
+                      photo("cancel-negative", cancelling.map { -$0 })]
+        let tails: [Float] = [0, small, -small]
+        for (row, tail) in tails.enumerated() {
+            var vector = [Float](repeating: -0.0, count: dimension)
+            vector[dimension - 3] = 1
+            vector[dimension - 2] = halfULP
+            vector[dimension - 1] = tail
+            photos.append(photo("boundary-\(row)", vector))
+        }
+        photos.append(photo("interior", [Float](repeating: 1 / 1024, count: dimension)))
+        let originalBits = photos.map { $0.imageEmbedding.map(\.bitPattern) }
+        let index = try ResidentSearchIndex(photos: photos)
+        XCTAssertEqual(index.packedImageElementCount, 6 * dimension)
+        for sign in [Float(1), Float(-1)] {
+            let query = [Float](repeating: sign, count: dimension)
+            let result = try assertOracle(index, query: query, weight: 0)
+            XCTAssertEqual(result.fallbacks, 5, "Two cancellations and three Float-boundary rows, not the interior row.")
+            XCTAssertEqual(result.hits.first { $0.id == "cancel-positive" }?.score.bitPattern,
+                           (2 * sign).bitPattern)
+            XCTAssertEqual(result.hits.first { $0.id == "cancel-negative" }?.score.bitPattern,
+                           (-2 * sign).bitPattern)
+            for weight in weights { try assertOracle(index, query: query, weight: weight) }
+        }
+        XCTAssertEqual(index.photos.map { $0.imageEmbedding.map(\.bitPattern) }, originalBits)
+    }
+
     func testCancelledConstructionNeverPublishesEvenAnEmptyIndex() async {
         let inputs: [[IndexedPhoto]] = [[], [photo("a", [1, 0])]]
         for input in inputs {
@@ -528,6 +625,9 @@ final class ResidentSearchIndexTests: XCTestCase {
             "scope": "synthetic resident search only; not SQLite or end-to-end",
             "rows": rowCount, "dimension": dimension, "distinct_queries": queries.count,
             "limit": "all", "location_weight": 0.6,
+            "matrix_packing": "preallocated Double matrix; per-row vDSP_vspdp",
+            "norm_upper_bound": "vDSP_svesqD; outward (sum + allowance) / (1 - gamma(2D)), then outward sqrt",
+            "build_includes": "validation, place metadata, allocation, bulk widening and certified norm bounds",
             "packed_matrix_bytes": index.packedImageElementCount * MemoryLayout<Double>.stride,
             "retained_image_float32_payload_bytes": rowCount * dimension * MemoryLayout<Float>.stride,
             "unique_places": index.uniquePlaceCount, "build_ms": buildMS,

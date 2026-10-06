@@ -624,6 +624,261 @@ final class SearchIndexCacheTests: XCTestCase {
         }
     }
 
+    func testBulkFloatBytesMatchV1AndRoundTripZerosSubnormalsAndComplexUnits() async throws {
+        for dimension in [512, 768] {
+            let c = try await context()
+            let sourceBefore = try Data(contentsOf: c.database)
+            let image = variedUnitVector(dimension: dimension)
+            let location = Array(image.reversed())
+            try EmbeddingValidation.validateUnit(image, dimension: dimension)
+            try EmbeddingValidation.validateUnit(location, dimension: dimension)
+            let row = CachedPhoto(photo: IndexedPhoto(id: "a", modificationTime: 123, modelVersion: "test-model",
+                                                       imageEmbedding: image,
+                                                       location: PlaceEmbedding(text: "Synthetic", vector: location)),
+                                  geographyVersion: "test-places")
+            // Supply exact bits, not a JSON round-trip of subnormals or -0.
+            let first = try await c.cache.records(modelVersion: "test-model", accessibleIDs: ["a"]) { [row] }
+            XCTAssertEqual(first.source, .sqlite)
+            let bytes = try Data(contentsOf: c.binary)
+            XCTAssertEqual(Data(bytes.prefix(8)), Data("bplist00".utf8))
+            let outer = try envelope(bytes)
+            XCTAssertEqual(outer["magic"] as? String, "LocalImageIQ.SearchVectors")
+            XCTAssertEqual(outer["schema"] as? Int, 1)
+            let stored = try XCTUnwrap(binaryRows(bytes).first)
+            XCTAssertEqual(stored["image"] as? Data, v1FloatBytes(image))
+            XCTAssertEqual(stored["locationVector"] as? Data, v1FloatBytes(location))
+
+            let result = try await c.read(using: reopened(c))
+            XCTAssertEqual(result.source, .binary)
+            XCTAssertEqual(result.signature, first.signature)
+            let decoded = try XCTUnwrap(result.records.first?.photo)
+            XCTAssertEqual(decoded.imageEmbedding.map(\.bitPattern), image.map(\.bitPattern))
+            XCTAssertEqual(try XCTUnwrap(decoded.location).vector.map(\.bitPattern), location.map(\.bitPattern))
+            XCTAssertEqual(try Data(contentsOf: c.database), sourceBefore)
+            XCTAssertEqual(try Data(contentsOf: c.binary), bytes)
+            await assertCalls(c.loader, 0)
+        }
+    }
+
+    func testLegacyScalarPackedPayloadReadsWithoutMigrationOrRewrite() async throws {
+        let c = try await context(rows: [TestFixtures.photo(id: "a", location: PlaceEmbedding(
+            text: "Synthetic", vector: TestFixtures.vector()))])
+        let first = try await c.read()
+        let good = try Data(contentsOf: c.binary)
+        let sourceBefore = try Data(contentsOf: c.database)
+        for dimension in [512, 768] {
+            let image = variedUnitVector(dimension: dimension)
+            let location = Array(image.reversed())
+            // Independent scalar v1 encoder: exercising read compatibility must
+            // not depend on the new writer producing matching wrong bytes.
+            let legacy = try corruptRows(good) { rows in
+                rows[0]["image"] = v1FloatBytes(image)
+                rows[0]["locationVector"] = v1FloatBytes(location)
+            }
+            try legacy.write(to: c.binary)
+            let decoded = try await c.read(using: reopened(c))
+            XCTAssertEqual(decoded.source, .binary)
+            XCTAssertEqual(decoded.signature, first.signature)
+            let photo = try XCTUnwrap(decoded.records.first?.photo)
+            XCTAssertEqual(photo.imageEmbedding.map(\.bitPattern), image.map(\.bitPattern))
+            XCTAssertEqual(try XCTUnwrap(photo.location).vector.map(\.bitPattern), location.map(\.bitPattern))
+            XCTAssertEqual(try Data(contentsOf: c.binary), legacy)
+        }
+        XCTAssertEqual(try Data(contentsOf: c.database), sourceBefore)
+        await assertCalls(c.loader, 1)
+    }
+
+    func testSharedPlacesKeepCanonicalUnicodeByteIdentityAndSearchResults() async throws {
+        let composed = "caf\u{00E9}"
+        let decomposed = "cafe\u{0301}"
+        XCTAssertEqual(composed, decomposed) // Swift String equality is NOT the cache key.
+        XCTAssertNotEqual(Data(composed.utf8), Data(decomposed.utf8))
+        let texts = [composed, composed, decomposed, decomposed, "Other", "Other"]
+        let vectors = [TestFixtures.vector(axis: 2), TestFixtures.vector(axis: 3)]
+        let rows: [CachedPhoto] = texts.enumerated().map { index, text in
+            TestFixtures.photo(id: String(index), location: PlaceEmbedding(
+                text: text, vector: vectors[index == 2 || index == 3 ? 1 : 0]))
+        }
+        let ids = Set(rows.map(\.photo.id))
+        let c = try await context(rows: rows)
+        _ = try await c.cache.records(modelVersion: "test-model", accessibleIDs: ids) { rows }
+        let bytes = try Data(contentsOf: c.binary)
+        let stored = try binaryRows(bytes)
+        let result = try await c.read(using: reopened(c), ids: ids)
+        XCTAssertEqual(result.source, .binary)
+        XCTAssertEqual(result.records.count, rows.count)
+        for (index, cached) in result.records.enumerated() {
+            let actual = try XCTUnwrap(cached.photo.location)
+            let expected = try XCTUnwrap(rows[index].photo.location)
+            XCTAssertEqual(Data(actual.text.utf8), Data(expected.text.utf8))
+            XCTAssertEqual(actual.vector.map(\.bitPattern), expected.vector.map(\.bitPattern))
+            XCTAssertEqual(stored[index]["locationVector"] as? Data, v1FloatBytes(expected.vector))
+        }
+        let photos = result.records.map(\.photo)
+        XCTAssertEqual(try ResidentSearchIndex(photos: photos).uniquePlaceCount, 3)
+        let expected = try VectorSearch.search(query: vectors[0], photos: rows.map(\.photo), limit: rows.count,
+                                               locationWeight: 0.6)
+        let actual = try VectorSearch.search(query: vectors[0], photos: photos, limit: rows.count, locationWeight: 0.6)
+        XCTAssertEqual(actual.map(\.photo.id), expected.map(\.photo.id))
+        XCTAssertEqual(actual.map { $0.score.bitPattern }, expected.map { $0.score.bitPattern })
+        await assertCalls(c.loader, 0)
+    }
+
+    func testSamePlaceTextWithDifferentValidVectorsStillReachesCoreInconsistencyCheck() async throws {
+        let first = TestFixtures.vector(axis: 2)
+        let different = TestFixtures.vector(axis: 3)
+        let rows = [first, first, different].enumerated().map { index, vector in
+            TestFixtures.photo(id: String(index), location: PlaceEmbedding(text: "Same", vector: vector))
+        }
+        let c = try await context(rows: rows)
+        let ids = Set(rows.map(\.photo.id))
+        // SQLite's places table coalesces text; this deliberately supplied
+        // snapshot checks that the derived cache never repairs inconsistencies.
+        _ = try await c.cache.records(modelVersion: "test-model", accessibleIDs: ids) { rows }
+        let result = try await c.read(using: reopened(c), ids: ids)
+        XCTAssertEqual(result.source, .binary)
+        XCTAssertEqual(result.records.count, rows.count)
+        for (index, cached) in result.records.enumerated() {
+            XCTAssertEqual(try XCTUnwrap(cached.photo.location).vector.map(\.bitPattern),
+                           try XCTUnwrap(rows[index].photo.location).vector.map(\.bitPattern))
+        }
+        for photos in [rows.map(\.photo), result.records.map(\.photo)] {
+            XCTAssertThrowsError(try VectorSearch.search(query: first, photos: photos, limit: 3, locationWeight: 0.6)) {
+                XCTAssertEqual($0 as? VectorSearchError, .inconsistentPlaceVector(text: "Same"))
+            }
+            XCTAssertThrowsError(try ResidentSearchIndex(photos: photos)) {
+                XCTAssertEqual($0 as? VectorSearchError, .inconsistentPlaceVector(text: "Same"))
+            }
+        }
+        await assertCalls(c.loader, 0)
+    }
+
+    func testSharedPlacePackingAndReadMemoDoNotMergeSignedZeroBits() async throws {
+        let positive = TestFixtures.vector()
+        var negative = positive
+        negative[1] = Float(bitPattern: 0x80000000)
+        XCTAssertEqual(positive, negative) // Float equality must not key byte reuse.
+        let rows = [positive, negative, positive, negative].enumerated().map { index, vector in
+            TestFixtures.photo(id: String(index), location: PlaceEmbedding(text: "Same", vector: vector))
+        }
+        let c = try await context(rows: rows)
+        let ids = Set(rows.map(\.photo.id))
+        _ = try await c.cache.records(modelVersion: "test-model", accessibleIDs: ids) { rows }
+        let stored = try binaryRows(Data(contentsOf: c.binary))
+        let result = try await c.read(using: reopened(c), ids: ids)
+        XCTAssertEqual(result.source, .binary)
+        XCTAssertEqual(result.records.count, rows.count)
+        for (index, cached) in result.records.enumerated() {
+            let expected = try XCTUnwrap(rows[index].photo.location).vector
+            XCTAssertEqual(stored[index]["locationVector"] as? Data, v1FloatBytes(expected))
+            XCTAssertEqual(try XCTUnwrap(cached.photo.location).vector.map(\.bitPattern), expected.map(\.bitPattern))
+        }
+        // Core intentionally treats the two zeros as equal even though storage
+        // must retain them: this is not an inconsistent-place failure.
+        XCTAssertEqual(try ResidentSearchIndex(photos: result.records.map(\.photo)).uniquePlaceCount, 1)
+        await assertCalls(c.loader, 0)
+    }
+
+    func testSharedPlaceMemoNeverMasksChecksummedCorruptLocationBytes() async throws {
+        let place = PlaceEmbedding(text: "Same", vector: TestFixtures.vector())
+        let rows = ["a", "b", "c"].map { TestFixtures.photo(id: $0, location: place) }
+        let c = try await context(rows: rows)
+        let ids: Set<String> = ["a", "b", "c"]
+        _ = try await c.read(ids: ids)
+        let good = try Data(contentsOf: c.binary)
+        let sourceBefore = try Data(contentsOf: c.database)
+        var nan = place.vector
+        nan[1] = Float(bitPattern: 0x7FC00001)
+        var infinity = place.vector
+        infinity[1] = .infinity
+        var nonunit = place.vector
+        nonunit[0] = 2
+        let invalid = [Data([0, 0, 0]), Data(repeating: 0, count: 768 * 4),
+                       v1FloatBytes(nan), v1FloatBytes(infinity), v1FloatBytes(nonunit)]
+        var calls = 1
+        for bad in invalid {
+            for allRows in [false, true] {
+                let corruption = try corruptRows(good) { records in
+                    // First cache a valid same-text vector, then encounter bad
+                    // bytes; also reject identical corrupt bytes in every row.
+                    for index in records.indices where allRows || index == 1 {
+                        records[index]["locationVector"] = bad
+                    }
+                }
+                try corruption.write(to: c.binary)
+                await c.cache.invalidate()
+                let rebuilt = try await c.read(ids: ids)
+                XCTAssertEqual(rebuilt.source, .sqlite)
+                XCTAssertEqual(rebuilt.records.map(\.photo.id), ["a", "b", "c"])
+                for row in rebuilt.records { XCTAssertEqual(row.photo.location?.vector, place.vector) }
+                calls += 1
+                await assertCalls(c.loader, calls)
+                let verified = try await c.read(using: reopened(c), ids: ids)
+                XCTAssertEqual(verified.source, .binary)
+                await assertCalls(c.loader, calls)
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: c.database), sourceBefore)
+    }
+
+    func testRepeatedPlaceStillValidatesEveryRowsScopeMetadataAndImage() async throws {
+        let place = PlaceEmbedding(text: "Same", vector: TestFixtures.vector())
+        let rows = ["a", "b"].map { TestFixtures.photo(id: $0, location: place) }
+        let c = try await context(rows: rows)
+        let ids: Set<String> = ["a", "b"]
+        _ = try await c.read(ids: ids)
+        let good = try Data(contentsOf: c.binary)
+        let edits: [(inout [[String: Any]]) -> Void] = [
+            { $0[1]["modelVersion"] = "other-model" },
+            { $0[1]["id"] = "inaccessible" },
+            { $0[1]["id"] = "a" },
+            { $0[1]["modificationTime"] = Double.infinity },
+            { $0[1]["creationTime"] = Double.infinity },
+            { $0[1].removeValue(forKey: "locationText") },
+            { $0[1]["image"] = Data(repeating: 0, count: 768 * 4) }
+        ]
+        for (index, edit) in edits.enumerated() {
+            try corruptRows(good, edit: edit).write(to: c.binary)
+            let result = try await c.read(using: reopened(c), ids: ids)
+            XCTAssertEqual(result.source, .sqlite)
+            XCTAssertEqual(result.records.map(\.photo.id), ["a", "b"])
+            XCTAssertEqual(result.records.last?.photo.imageEmbedding, TestFixtures.vector())
+            XCTAssertEqual(result.records.last?.photo.location?.vector, place.vector)
+            await assertCalls(c.loader, index + 2)
+        }
+    }
+
+    private func variedUnitVector(dimension: Int) -> [Float] {
+        // Both signs of zero, smallest/largest subnormal and smallest normal,
+        // followed by a dense, non-axis-aligned normalized vector of both signs.
+        let edgeBits: [UInt32] = [0, 0x80000000, 1, 0x80000001, 0x007FFFFF, 0x807FFFFF, 0x00800000, 0x80800000]
+        var values = (0..<dimension).map { index -> Float in
+            index < edgeBits.count ? 0 : Float((index * 37) % 101 - 50)
+        }
+        let norm = sqrt(values.reduce(0.0) { $0 + Double($1) * Double($1) })
+        values = values.map { Float(Double($0) / norm) }
+        for (index, bits) in edgeBits.enumerated() { values[index] = Float(bitPattern: bits) }
+        return values
+    }
+
+    private func v1FloatBytes(_ vector: [Float]) -> Data {
+        // Deliberately scalar/host-independent reference, not the bulk codec.
+        var bytes = Data()
+        for value in vector {
+            let bits = value.bitPattern
+            for shift in stride(from: 0, to: 32, by: 8) {
+                bytes.append(UInt8(truncatingIfNeeded: bits >> shift))
+            }
+        }
+        return bytes
+    }
+
+    private func binaryRows(_ data: Data) throws -> [[String: Any]] {
+        let outer = try envelope(data)
+        let payload = try XCTUnwrap(outer["payload"] as? Data)
+        return try XCTUnwrap(PropertyListSerialization.propertyList(from: payload, options: [], format: nil) as? [[String: Any]])
+    }
+
     // Test-only corruption of the documented v1 binary-plist envelope. Recompute
     // both checksums to test structural/vector validation, not just bit rot.
     private func envelope(_ data: Data) throws -> [String: Any] {

@@ -300,11 +300,14 @@ actor SearchIndexCache {
             let rows = try decoder.decode([SearchCacheRow].self, from: envelope.payload)
             var seen: Set<Data> = []
             var result: [CachedPhoto] = []
+            // Per-read, location-only memo: exact vector bytes, not String or
+            // Float equality. Text/metadata and scope are still checked per row.
+            var validatedLocationVectors: [Data: [Float]] = [:]
             for row in rows {
                 try Task.checkCancellation()
                 guard ids.contains(row.id), Data(row.modelVersion.utf8) == key.scope.modelUTF8,
                       seen.insert(Data(row.id.utf8)).inserted else { return nil }
-                result.append(try row.record())
+                result.append(try row.record(validatedLocationVectors: &validatedLocationVectors))
             }
             try Task.checkCancellation()
             return result
@@ -318,9 +321,16 @@ actor SearchIndexCache {
         do {
             let encoder = PropertyListEncoder()
             encoder.outputFormat = .binary
+            var packedLocations: [Data: Data] = [:]
             let rows = try records.map { cached -> SearchCacheRow in
                 try Task.checkCancellation()
-                return SearchCacheRow(cached)
+                let locationData = cached.photo.location.map { place -> Data in
+                    let bytes = SearchCacheRow.pack(place.vector)
+                    if let packed = packedLocations[bytes] { return packed }
+                    packedLocations[bytes] = bytes
+                    return bytes
+                }
+                return SearchCacheRow(cached, locationData: locationData)
             }
             let payload = try encoder.encode(rows)
             try Task.checkCancellation()
@@ -603,7 +613,7 @@ private struct SearchCacheRow: Codable {
     let locationText: String?
     let locationVector: Data?
 
-    init(_ cached: CachedPhoto) {
+    init(_ cached: CachedPhoto, locationData: Data? = nil) {
         let photo = cached.photo
         id = photo.id
         modificationTime = photo.modificationTime
@@ -612,16 +622,26 @@ private struct SearchCacheRow: Codable {
         geographyVersion = cached.geographyVersion
         image = Self.pack(photo.imageEmbedding)
         locationText = photo.location?.text
-        locationVector = photo.location.map { Self.pack($0.vector) }
+        locationVector = locationData ?? photo.location.map { Self.pack($0.vector) }
     }
 
-    func record() throws -> CachedPhoto {
+    func record(validatedLocationVectors: inout [Data: [Float]]) throws -> CachedPhoto {
         try Self.validateMetadata(id: id, revision: modificationTime, creation: creationTime)
         guard (locationText == nil) == (locationVector == nil) else { throw SearchCacheFailure.invalidRecords }
         let vector = try Self.unpack(image)
         var place: PlaceEmbedding?
         if let text = locationText, let data = locationVector {
-            place = PlaceEmbedding(text: text, vector: try Self.unpack(data))
+            let location: [Float]
+            if let validated = validatedLocationVectors[data] {
+                location = validated
+            } else {
+                location = try Self.unpack(data)
+                validatedLocationVectors[data] = location
+            }
+            // Cache only the vector, never the text-bearing PlaceEmbedding.
+            // Same text with different bytes must reach Core unchanged so its
+            // inconsistent-place check can still reject different vectors.
+            place = PlaceEmbedding(text: text, vector: location)
         }
         return CachedPhoto(photo: IndexedPhoto(id: id, modificationTime: modificationTime,
                                                modelVersion: modelVersion, imageEmbedding: vector,
@@ -638,23 +658,31 @@ private struct SearchCacheRow: Codable {
         try EmbeddingValidation.validateUnit(vector, dimension: vector.count)
     }
 
-    private static func pack(_ vector: [Float]) -> Data {
-        var data = Data(capacity: vector.count * 4)
-        for value in vector {
-            var bits = value.bitPattern.littleEndian
-            Swift.withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) }
+    private static let isLittleEndian = UInt32(1).littleEndian == 1
+
+    static func pack(_ vector: [Float]) -> Data {
+        if isLittleEndian {
+            return vector.withUnsafeBufferPointer { Data(buffer: $0) }
         }
-        return data
+        // Retain the v1 little-endian representation on a big-endian host too.
+        let bits = vector.map { $0.bitPattern.littleEndian }
+        return bits.withUnsafeBufferPointer { Data(buffer: $0) }
     }
 
     private static func unpack(_ bytes: Data) throws -> [Float] {
         // Shape bounds are the existing decoder contract, not a file/row cap.
         guard bytes.count == 512 * 4 || bytes.count == 768 * 4 else { throw SearchCacheFailure.invalidRecords }
-        let vector: [Float] = bytes.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-            stride(from: 0, to: raw.count, by: 4).map { offset in
-                let bits = UInt32(raw[offset]) | UInt32(raw[offset + 1]) << 8
-                    | UInt32(raw[offset + 2]) << 16 | UInt32(raw[offset + 3]) << 24
-                return Float(bitPattern: bits)
+        var vector = [Float](repeating: 0, count: bytes.count / MemoryLayout<Float>.size)
+        // Plist Data need not be Float-aligned. Copy bytes into allocated Float
+        // storage; never bind or load native words from the source Data pointer.
+        vector.withUnsafeMutableBytes { destination in
+            bytes.withUnsafeBytes { (source: UnsafeRawBufferPointer) in
+                destination.baseAddress!.copyMemory(from: source.baseAddress!, byteCount: source.count)
+            }
+        }
+        if !isLittleEndian {
+            for index in vector.indices {
+                vector[index] = Float(bitPattern: vector[index].bitPattern.littleEndian)
             }
         }
         try validateVector(vector)
