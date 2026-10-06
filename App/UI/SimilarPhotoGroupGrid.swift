@@ -78,9 +78,8 @@ struct SimilarPhotoThumbnailCapture {
     let frame: CGRect
 }
 
-/// One reference per keyed request bridges the separate UIHostingConfiguration
-/// graph directly to UIKit. Readiness deliberately does not publish a SwiftUI
-/// update: loading pixels must not reconfigure/recreate the thumbnail's task.
+/// One reference per request, bound directly to UIKit. Readiness deliberately
+/// does not publish a SwiftUI update or restart the producer's task.
 @MainActor
 final class SimilarPhotoPreviewReadiness: ObservableObject {
     private(set) var isReady = false
@@ -96,9 +95,37 @@ final class SimilarPhotoPreviewReadiness: ObservableObject {
     }
 }
 
-/// Readiness belongs to one exact thumbnail request, not to a recycled cover.
-/// The keyed child resets its relay and PhotoThumbnailView's task together,
-/// including on rotation/display-scale changes, without an onChange/load race.
+/// Value identity belongs to the producer, not to SwiftUI view identity. Pixel
+/// rounding is the same as PhotoThumbnailView; scale remains part of identity
+/// even when two point-size/scale combinations produce the same pixel target.
+struct SimilarPhotoPreviewRequest: Hashable, Sendable {
+    let photoID: String
+    let revision: Double
+    let creationTime: Double?
+    let cacheIdentity: ObjectIdentifier
+    let pixelWidth: CGFloat
+    let pixelHeight: CGFloat
+    let displayScale: CGFloat
+    let networkAllowed: Bool
+
+    var targetSize: CGSize { CGSize(width: pixelWidth, height: pixelHeight) }
+
+    init?(photo: IndexedPhoto, cache: PhotoThumbnailCache, size: CGSize,
+          displayScale: CGFloat, networkAllowed: Bool) {
+        guard let pixels = DisplayThumbnailLoader.targetSize(points: size, displayScale: displayScale) else { return nil }
+        photoID = photo.id
+        revision = photo.modificationTime
+        creationTime = photo.creationTime
+        cacheIdentity = ObjectIdentifier(cache)
+        pixelWidth = pixels.width
+        pixelHeight = pixels.height
+        self.displayScale = displayScale
+        self.networkAllowed = networkAllowed
+    }
+}
+
+/// Only the tiny production cover uses native pixels. Geometry supplies the
+/// request size directly; intermediate UIKit bounds never start a second load.
 @MainActor
 struct SimilarPhotoLoadedPreviewTile: View {
     let photo: IndexedPhoto
@@ -111,50 +138,47 @@ struct SimilarPhotoLoadedPreviewTile: View {
     let open: (SimilarPhotoThumbnailCapture?) -> Void
     @Environment(\.displayScale) private var displayScale
 
-    private struct Request: Hashable {
-        let photoID: String
-        let revision: Double
-        let creationTime: Double?
-        let cache: ObjectIdentifier
-        let networkAllowed: Bool
-        let width: CGFloat
-        let height: CGFloat
-        let displayScale: CGFloat
-    }
-
     var body: some View {
         GeometryReader { geometry in
-            ReadyTile(preview: self, size: geometry.size, displayScale: displayScale)
-                .id(Request(photoID: photo.id, revision: photo.modificationTime,
-                            creationTime: photo.creationTime, cache: ObjectIdentifier(cache),
-                            networkAllowed: networkAllowed, width: geometry.size.width,
-                            height: geometry.size.height, displayScale: displayScale))
+            SimilarPhotoNativePreviewTile(photoID: photo.id,
+                request: SimilarPhotoPreviewRequest(photo: photo, cache: cache, size: geometry.size,
+                    displayScale: displayScale, networkAllowed: networkAllowed),
+                cache: cache, label: label, identifier: identifier, selected: selected,
+                enabled: enabled, open: open)
+                .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .clipped()
     }
+}
 
-    @MainActor
-    private struct ReadyTile: View {
-        let preview: SimilarPhotoLoadedPreviewTile
-        let size: CGSize
-        let displayScale: CGFloat
-        @StateObject private var readiness = SimilarPhotoPreviewReadiness()
+@MainActor
+struct SimilarPhotoNativePreviewTile: UIViewRepresentable {
+    let photoID: String
+    let request: SimilarPhotoPreviewRequest?
+    let cache: PhotoThumbnailCache
+    let label: String
+    let identifier: String
+    let selected: Bool
+    let enabled: Bool
+    let open: (SimilarPhotoThumbnailCapture?) -> Void
 
-        var body: some View {
-            // Capture the installed reference, not a State/StateObject wrapper
-            // to be resolved later from the separately hosted callback graph.
-            let relay = readiness
-            return SimilarPhotoPreviewTile(photoID: preview.photo.id, label: preview.label,
-                identifier: preview.identifier, selected: preview.selected, enabled: preview.enabled,
-                content: AnyView(PhotoThumbnailView(photo: preview.photo, cache: preview.cache,
-                    networkAllowed: preview.networkAllowed, onLoaded: { relay.didLoad() })
-                    // Pin the hosted request to the same geometry/scale as its
-                    // readiness identity. There is only one thumbnail loader.
-                    .environment(\.displayScale, displayScale)
-                    .frame(width: size.width, height: size.height)),
-                readiness: relay, open: preview.open)
-                .frame(width: size.width, height: size.height)
-        }
+    func makeUIView(context: Context) -> SimilarPhotoPreviewControl { SimilarPhotoPreviewControl() }
+
+    func updateUIView(_ view: SimilarPhotoPreviewControl, context: Context) {
+        // These inputs always update, even when the pixel request is unchanged.
+        view.photoID = photoID
+        view.isEnabled = enabled
+        view.accessibilityLabel = label
+        view.accessibilityIdentifier = identifier
+        view.accessibilityValue = selected ? "已勾选待删除" : "未勾选"
+        view.accessibilityTraits = selected ? [.button, .selected] : [.button]
+        view.accessibilityHint = "打开本组并定位这张照片，不改变选择"
+        view.open = open
+        view.configureNative(request: request, cache: cache, selected: selected)
+    }
+
+    static func dismantleUIView(_ view: SimilarPhotoPreviewControl, coordinator: ()) {
+        view.dismantlePreview()
     }
 }
 
@@ -168,8 +192,7 @@ struct SimilarPhotoPreviewTile: UIViewRepresentable {
     let selected: Bool
     let enabled: Bool
     let content: AnyView
-    // Injected synthetic content is immediately available. Production supplies
-    // the request-scoped PhotoThumbnailView readiness above explicitly.
+    // Injected synthetic content remains on the existing hosting path.
     var canCapture = true
     var readiness: SimilarPhotoPreviewReadiness? = nil
     let open: (SimilarPhotoThumbnailCapture?) -> Void
@@ -191,7 +214,7 @@ struct SimilarPhotoPreviewTile: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ view: SimilarPhotoPreviewControl, coordinator: ()) {
-        view.bindReadiness(nil, fallback: false)
+        view.dismantlePreview()
     }
 }
 
@@ -204,11 +227,38 @@ final class SimilarPhotoPreviewControl: UIControl {
     private var hosted: (UIView & UIContentView)?
     private var contentIdentity: ObjectIdentifier?
     private let selectionMark = UIImageView()
+    private let nativeImageView = UIImageView()
+    private let loadingIndicator = UIActivityIndicatorView(style: .medium)
+    private let issueImageView = UIImageView()
+    private let issueLabel = UILabel()
+    private var usesNativeContent = false
+    private var nativeRequest: SimilarPhotoPreviewRequest?
+    private var nativeTask: Task<Void, Never>?
+    private var nativeToken: UUID?
+    private var readyNativeToken: UUID?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         clipsToBounds = true
         isAccessibilityElement = true
+        nativeImageView.contentMode = .scaleAspectFill
+        nativeImageView.clipsToBounds = true
+        loadingIndicator.color = UIColor(IQStyle.secondary)
+        loadingIndicator.hidesWhenStopped = true
+        issueImageView.contentMode = .scaleAspectFit
+        issueImageView.tintColor = UIColor(IQStyle.secondary)
+        issueLabel.font = .preferredFont(forTextStyle: .caption2)
+        issueLabel.adjustsFontForContentSizeCategory = true
+        issueLabel.textColor = UIColor(IQStyle.secondary)
+        issueLabel.textAlignment = .center
+        issueLabel.numberOfLines = 1
+        for view in [nativeImageView, loadingIndicator, issueImageView, issueLabel] as [UIView] {
+            view.isHidden = true
+            view.isUserInteractionEnabled = false
+            view.isAccessibilityElement = false
+            view.accessibilityElementsHidden = true
+            addSubview(view)
+        }
         selectionMark.image = UIImage(systemName: "checkmark.circle.fill",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .bold))
         selectionMark.tintColor = UIColor(IQStyle.accent)
@@ -223,6 +273,7 @@ final class SimilarPhotoPreviewControl: UIControl {
         addTarget(self, action: #selector(activate), for: .touchUpInside)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { nativeTask?.cancel() }
 
     func bindReadiness(_ next: SimilarPhotoPreviewReadiness?, fallback: Bool) {
         if readiness !== next {
@@ -235,13 +286,87 @@ final class SimilarPhotoPreviewControl: UIControl {
         canCapture = next?.isReady ?? fallback
     }
 
+    func configureNative(request: SimilarPhotoPreviewRequest?, cache: PhotoThumbnailCache, selected: Bool) {
+        selectionMark.isHidden = !selected
+        let changedContent = !usesNativeContent
+        usesNativeContent = true
+        hosted?.removeFromSuperview()
+        hosted = nil
+        contentIdentity = nil
+        backgroundColor = UIColor(IQStyle.muted)
+        nativeImageView.isHidden = false
+        setNeedsLayout()
+        // Selection, accessibility and repeated parent updates must never
+        // recreate this producer, including for non-reusable cache results.
+        guard changedContent || nativeRequest != request else { return }
+        cancelNativeWork()
+        nativeRequest = request
+        // Invalid/zero geometry is a placeholder, not an error or default load.
+        guard let request else { return }
+        let token = UUID()
+        nativeToken = token
+        let relay = SimilarPhotoPreviewReadiness()
+        bindReadiness(relay, fallback: false)
+        loadingIndicator.startAnimating()
+        nativeTask = Task { @MainActor [weak self] in
+            defer {
+                if self?.nativeToken == token { self?.nativeTask = nil }
+            }
+            guard !Task.isCancelled, self?.nativeToken == token, self?.nativeRequest == request else { return }
+            do {
+                // The same cache owns all permission/revision/generation/HQ
+                // guards. There is no direct Photos access or second fetch.
+                let loaded = try await cache.thumbnail(id: request.photoID, revision: request.revision,
+                    targetSize: request.targetSize, networkAllowed: request.networkAllowed)
+                try Task.checkCancellation()
+                guard let self, self.nativeToken == token, self.nativeRequest == request,
+                      self.readiness === relay else { return }
+                self.nativeImageView.image = loaded.result.image
+                self.loadingIndicator.stopAnimating()
+                self.readyNativeToken = token
+                relay.didLoad()
+                self.setNeedsLayout()
+            } catch {
+                guard !Task.isCancelled, !(error is CancellationError), let self,
+                      self.nativeToken == token, self.nativeRequest == request,
+                      self.readiness === relay else { return }
+                let issue = PhotoPreviewIssue(error: error)
+                self.loadingIndicator.stopAnimating()
+                self.issueImageView.image = UIImage(systemName: issue.symbol,
+                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .regular))
+                self.issueImageView.isHidden = false
+                self.issueLabel.text = issue.localizedCaption
+                self.setNeedsLayout()
+            }
+        }
+    }
+
+    private func cancelNativeWork() {
+        nativeTask?.cancel()
+        nativeTask = nil
+        nativeToken = nil
+        readyNativeToken = nil
+        nativeRequest = nil
+        bindReadiness(nil, fallback: false)
+        nativeImageView.image = nil
+        loadingIndicator.stopAnimating()
+        issueImageView.image = nil
+        issueImageView.isHidden = true
+        issueLabel.text = nil
+        issueLabel.isHidden = true
+    }
+
+    func dismantlePreview() {
+        cancelNativeWork()
+        open = nil
+    }
+
     func configure(content: AnyView, selected: Bool, contentIdentity: ObjectIdentifier? = nil) {
         // Selection is UIKit-only: rebuilding a hosting configuration can
         // restart the thumbnail task even when its request has not changed.
         selectionMark.isHidden = !selected
         if hosted == nil || contentIdentity == nil || self.contentIdentity != contentIdentity {
-            // Production's relay already keys photo/revision/cache/network/
-            // geometry/scale. Nil identity keeps synthetic content updatable.
+            // Nil identity keeps injected synthetic content updatable.
             let configuration = UIHostingConfiguration {
                 content
             }.margins(.all, 0).minSize(width: 0, height: 0)
@@ -261,30 +386,65 @@ final class SimilarPhotoPreviewControl: UIControl {
     override func layoutSubviews() {
         super.layoutSubviews()
         hosted?.frame = bounds
+        nativeImageView.frame = bounds
+        if usesNativeContent {
+            let availableSide = max(0, min(bounds.width, bounds.height))
+            let spinnerSide = loadingIndicator.intrinsicContentSize.width
+            loadingIndicator.bounds = CGRect(x: 0, y: 0, width: spinnerSide, height: spinnerSide)
+            let spinnerScale = spinnerSide > 0 ? min(1, availableSide / spinnerSide) : 1
+            loadingIndicator.transform = CGAffineTransform(scaleX: spinnerScale, y: spinnerScale)
+            loadingIndicator.center = CGPoint(x: bounds.midX, y: bounds.midY)
+            let symbolSide = min(16, availableSide)
+            let caption = issueLabel.intrinsicContentSize
+            let showsCaption = issueLabel.text != nil && caption.width + 8 <= bounds.width
+                && symbolSide + 4 + caption.height + 8 <= bounds.height
+            issueLabel.isHidden = !showsCaption
+            let statusHeight = symbolSide + (showsCaption ? 4 + caption.height : 0)
+            issueImageView.frame = CGRect(x: bounds.midX - symbolSide / 2,
+                y: bounds.midY - statusHeight / 2, width: symbolSide, height: symbolSide)
+            issueLabel.frame = showsCaption
+                ? CGRect(x: bounds.midX - caption.width / 2, y: issueImageView.frame.maxY + 4,
+                         width: caption.width, height: caption.height) : .zero
+        }
         let size = selectionMark.intrinsicContentSize
         selectionMark.frame = CGRect(x: bounds.maxX - size.width, y: bounds.maxY - size.height,
                                      width: size.width, height: size.height)
         selectionMark.layer.cornerRadius = min(size.width, size.height) / 2
     }
 
+    private var isReadyForCapture: Bool {
+        guard canCapture else { return false }
+        guard usesNativeContent else { return true } // Existing synthetic path.
+        return nativeToken != nil && readyNativeToken == nativeToken
+            && nativeRequest?.photoID == photoID && readiness?.isReady == true
+            && nativeImageView.image != nil
+    }
+
     func capture() -> SimilarPhotoThumbnailCapture? {
-        guard canCapture, let window, !bounds.isEmpty else { return nil }
+        guard isReadyForCapture, let window, !bounds.isEmpty else { return nil }
         let capturedID = photoID
         let capturedBounds = bounds
         let capturedReadiness = readiness
+        let capturedRequest = nativeRequest
+        let capturedToken = nativeToken
         layoutIfNeeded()
         let format = UIGraphicsImageRendererFormat()
         format.scale = window.screen.scale
         var drawn = false
         let image = UIGraphicsImageRenderer(bounds: capturedBounds, format: format).image { _ in
-            // onLoaded updates image state before drawing. Include that pending
-            // update rather than capturing the previous spinner/error raster.
+            // Include pending native drawing (and the injected synthetic host)
+            // without fetching pixels or snapshotting the full collection.
             drawn = drawHierarchy(in: capturedBounds, afterScreenUpdates: true)
         }
-        // A layout/identity change during drawing, or an incomplete hierarchy,
-        // falls back to exact-ID navigation, never a stale layer snapshot.
-        guard drawn, canCapture, photoID == capturedID, bounds == capturedBounds,
-              readiness === capturedReadiness, self.window === window else { return nil }
+          // Recheck identity after drawing; a change falls back to exact-ID navigation.
+          guard drawn,
+              isReadyForCapture,
+              photoID == capturedID,
+              bounds == capturedBounds,
+              readiness === capturedReadiness,
+              nativeRequest == capturedRequest,
+              nativeToken == capturedToken,
+              self.window === window else { return nil }
         return SimilarPhotoThumbnailCapture(photoID: capturedID, image: image, frame: convert(capturedBounds, to: window))
     }
 
