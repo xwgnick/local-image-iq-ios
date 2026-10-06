@@ -452,7 +452,7 @@ final class PhotoSearchSnapshotTests: XCTestCase {
             XCTAssertThrowsError(try snapshot.validate()) { XCTAssertTrue($0 is CancellationError) }
             XCTAssertThrowsError(try snapshot.validatePhotos([id])) { XCTAssertTrue($0 is CancellationError) }
         }
-        await task.value
+        try await task.value
         XCTAssertTrue(fixture.read { $0.batches.isEmpty })
         XCTAssertTrue(try fixture.capture().reused)
     }
