@@ -606,7 +606,13 @@ final class PresentationNavigationTests: XCTestCase {
                 return origin.withOffset(CGVector(dx: radius + fraction * travel,
                                                    dy: frame.height / 2))
             }
-            thumbCenter(startValue).press(forDuration: 0.1, thenDragTo: thumbCenter(endValue))
+            // Once the thumb is captured, end at the track's outside edge so
+            // the native touch-to-thumb offset cannot leave it one tick short.
+            // An inset-to-inset drag reached .51 rather than the asserted .50.
+            let end = endValue == 0.50
+                ? origin.withOffset(CGVector(dx: 0, dy: frame.height / 2))
+                : origin.withOffset(CGVector(dx: frame.width, dy: frame.height / 2))
+            thumbCenter(startValue).press(forDuration: 0.1, thenDragTo: end)
         }
 
         expectThreshold(0.96)
@@ -614,8 +620,8 @@ final class PresentationNavigationTests: XCTestCase {
         assertNoWorkOrPrompt()
         expectHittable(threshold)
         // This slider's accessibilityValue is COSINE (0.96), not a normalized
-        // thumb position (46/49). Use the actual frame's inset thumb travel,
-        // rather than normalized adjust or either outside edge of the AX box.
+        // thumb position (46/49). Capture inside the thumb; only the gesture's
+        // destination uses the outer endpoint to fully saturate native travel.
         dragThreshold(from: 0.96, to: 0.99)
         expectThreshold(0.99)
         assertNoWorkOrPrompt()
