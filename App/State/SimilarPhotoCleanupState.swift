@@ -27,6 +27,8 @@ final class SimilarPhotoCleanupState: ObservableObject {
     @Published private(set) var isGrouping = false
     @Published private(set) var isValidating = false
     @Published private(set) var isDeleting = false
+    @Published private(set) var isSelecting = false
+    @Published private(set) var isValidatingSelection = false
     @Published private(set) var selectedIDs: Set<String> = []
     @Published private(set) var message: String?
     @Published private(set) var hasScanned = false
@@ -36,6 +38,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
     @Published private(set) var pendingDeletion: SimilarPhotoDeletionIntent?
 
     var selectedCount: Int { selectedIDs.count }
+    var selectionSessionID: UUID? { sessionID }
     var orderedSelectedPhotos: [IndexedPhoto] {
         groups.flatMap(\.photos).filter { selectedIDs.contains($0.id) }
     }
@@ -49,7 +52,21 @@ final class SimilarPhotoCleanupState: ObservableObject {
     private var groupingTaskID: UUID?
     private var groupingTask: Task<Void, Never>?
     private var mutationTask: Task<Void, Never>?
+    private var rangeSelection: RangeSelectionCapture?
+    private var selectionTaskID: UUID?
+    private var selectionTask: Task<Void, Never>?
     private var isForeground = true
+
+    private struct RangeSelectionCapture {
+        let token: UUID
+        let sessionID: UUID
+        let generation: UUID
+        let groupID: String
+        let photoIDs: [String]
+        let members: Set<String>
+        let baseSelectedIDs: Set<String>
+        let result: SimilarPhotoGroupingResult
+    }
 
     init(grouping: any SimilarPhotoGrouping, deletion: any PhotoDeleting) {
         self.grouping = grouping
@@ -58,6 +75,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
 
     deinit {
         groupingTask?.cancel()
+        selectionTask?.cancel()
         // Never cancel mutationTask: it retains its service independently and
         // awaits the real outcome, including after this controller is released.
     }
@@ -146,7 +164,76 @@ final class SimilarPhotoCleanupState: ObservableObject {
         } catch { selectionAccessFailed() }
     }
 
+    /// Captures committed state only. Hover/drag updates stay in the pure UI
+    /// model; this entry performs only an epoch check, never a PhotoKit batch.
+    func beginRangeSelection(groupID: String) -> UUID? {
+        guard canSelect, let result, let sessionID,
+              let group = groups.first(where: { $0.id == groupID }) else { return nil }
+        do {
+            try result.validatePublicationEpoch()
+        } catch {
+            selectionAccessFailed()
+            return nil
+        }
+        let token = UUID()
+        let ids = group.photos.map(\.id)
+        rangeSelection = RangeSelectionCapture(token: token, sessionID: sessionID,
+            generation: generation, groupID: groupID, photoIDs: ids, members: Set(ids),
+            baseSelectedIDs: selectedIDs, result: result)
+        pendingDeletion = nil
+        isSelecting = true
+        return token
+    }
+
+    /// EXACT desired membership inside the captured group, not a toggle list.
+    /// Reject foreign IDs rather than silently selecting them or filtering them.
+    /// All additions AND removals are validated together off MainActor, then
+    /// published once behind the result's cheap synchronous epoch fence.
+    func finishRangeSelection(token: UUID, selectedInGroup: Set<String>) {
+        guard let capture = rangeSelection, capture.token == token,
+              selectionTaskID != token, isCurrentSelection(capture) else { return }
+        guard selectedInGroup.isSubset(of: capture.members) else {
+            cancelRangeSelection()
+            return
+        }
+        let desired = capture.baseSelectedIDs.subtracting(capture.members).union(selectedInGroup)
+        let changed = capture.baseSelectedIDs.symmetricDifference(desired)
+        let changedIDs = capture.photoIDs.filter { changed.contains($0) }
+        let predecessor = selectionTask
+        isValidatingSelection = true
+        selectionTaskID = token
+        selectionTask = Task { @MainActor [weak self] in
+            defer { self?.finishSelectionTask(token) }
+            // Retain cancelled predecessors, even queued ones. New actions may
+            // invalidate them immediately, but cannot lose their drain handles.
+            await predecessor?.value
+            guard !Task.isCancelled, self?.isCurrentSelection(capture) == true else { return }
+            do {
+                try await Self.validateSelectionPhotos(changedIDs, result: capture.result)
+                try Task.checkCancellation()
+                guard let self, self.isCurrentSelection(capture) else { return }
+                try capture.result.validatePublicationEpoch()
+                // No suspension between the last fence and the single publish.
+                self.selectedIDs = desired
+                self.pendingDeletion = nil
+            } catch {
+                guard let self, !Task.isCancelled, self.isCurrentSelection(capture) else { return }
+                self.selectionAccessFailed()
+            }
+        }
+    }
+
+    /// Cancellation never changes committed selection or writes to Photos.
+    /// The handle remains joinable until even an uncooperative validator drains.
+    func cancelRangeSelection() {
+        rangeSelection = nil
+        selectionTask?.cancel()
+        isValidatingSelection = false
+        isSelecting = false
+    }
+
     func clearSelection() {
+        cancelRangeSelection()
         guard !isDeleting else { return }
         selectedIDs = []
         pendingDeletion = nil
@@ -204,7 +291,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
             // after success. Only the service knows the actual mutation outcome.
             do {
                 try await deletion.delete(revisions: revisions)
-                self?.finishDeletion(message: "已删除\(revisions.count)张照片，照片可能位于系统“最近删除”中。请手动重新分组。")
+                self?.finishDeletion(message: PhotoDeletionRecoveryNotice.success(count: revisions.count))
             } catch {
                 let text: String
                 if error is CancellationError {
@@ -229,17 +316,48 @@ final class SimilarPhotoCleanupState: ObservableObject {
     func resume() { isForeground = true }
     func dismissMessage() { message = nil }
 
-    /// Joins cancelled predecessors, replacements, and the independent mutation.
+    /// Joins cancelled read/selection tails, replacements and independent mutation.
     func waitUntilIdle() async {
-        while groupingTask != nil || mutationTask != nil {
+        while groupingTask != nil || selectionTask != nil || mutationTask != nil {
             let read = groupingTask
+            let selection = selectionTask
             let write = mutationTask
             await read?.value
+            await selection?.value
             await write?.value
         }
     }
 
-    private var canSelect: Bool { isForeground && !isGrouping && !isDeleting && result != nil }
+    private var canSelect: Bool { isForeground && !isGrouping && !isDeleting && !isSelecting && result != nil }
+
+    private func isCurrentSelection(_ capture: RangeSelectionCapture) -> Bool {
+        isForeground && !isGrouping && !isDeleting && isSelecting
+            && rangeSelection?.token == capture.token
+            && sessionID == capture.sessionID && generation == capture.generation
+            && selectedIDs == capture.baseSelectedIDs
+    }
+
+    private func finishSelectionTask(_ token: UUID) {
+        if rangeSelection?.token == token {
+            rangeSelection = nil
+            isValidatingSelection = false
+            isSelecting = false
+        }
+        if selectionTaskID == token {
+            selectionTask = nil
+            selectionTaskID = nil
+        }
+    }
+
+    /// Like prepareForPublication, non-actor async runs on the Swift 5 generic
+    /// executor. Never call the synchronous metadata closure from a hover event.
+    private nonisolated static func validateSelectionPhotos(
+        _ ids: [String], result: SimilarPhotoGroupingResult
+    ) async throws {
+        try Task.checkCancellation()
+        if !ids.isEmpty { try result.validatePhotos(ids) }
+        try Task.checkCancellation()
+    }
 
     private func isCurrent(_ token: UUID) -> Bool { isForeground && generation == token }
 
@@ -249,6 +367,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     private func invalidateRead() {
+        cancelRangeSelection()
         generation = UUID()
         groupingTask?.cancel()
         // Retain the tail until finishGrouping; later explicit scans must drain it.

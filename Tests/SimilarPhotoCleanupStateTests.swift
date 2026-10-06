@@ -471,7 +471,7 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
         await f.state.waitUntilIdle()
         assertEmpty(f.state)
         XCTAssertFalse(f.state.isDeleting)
-        XCTAssertEqual(f.state.message, "已删除5张照片，照片可能位于系统“最近删除”中。请手动重新分组。")
+        XCTAssertEqual(f.state.message, PhotoDeletionRecoveryNotice.success(count: 5))
         f.state.confirmDeletion(intent)
         await f.state.waitUntilIdle()
         XCTAssertEqual(deletion.calls.count, 1)
@@ -495,7 +495,7 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
         await f.state.waitUntilIdle()
         XCTAssertFalse(f.state.isDeleting)
         let success = f.state.message
-        XCTAssertEqual(success, "已删除1张照片，照片可能位于系统“最近删除”中。请手动重新分组。")
+        XCTAssertEqual(success, PhotoDeletionRecoveryNotice.success(count: 1))
         f.state.invalidateAccess() // A second notification must retain that outcome.
         XCTAssertEqual(f.state.message, success)
         XCTAssertEqual(f.grouping.calls.thresholds.count, 1)
@@ -522,7 +522,7 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
             gate.open()
             await f.state.waitUntilIdle()
             XCTAssertFalse(f.state.isDeleting)
-            XCTAssertEqual(f.state.message, "已删除1张照片，照片可能位于系统“最近删除”中。请手动重新分组。")
+            XCTAssertEqual(f.state.message, PhotoDeletionRecoveryNotice.success(count: 1))
             f.state.resume()
             await f.state.waitUntilIdle()
             XCTAssertEqual(f.grouping.calls.thresholds.count, 1)

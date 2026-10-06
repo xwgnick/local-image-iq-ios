@@ -61,8 +61,8 @@ final class SimilarCleanupPresentationTests: XCTestCase {
         XCTAssertFalse(c.cleanup.isDeleting)
         assertServices(c, scans: 1)
         // No pixel-perfect round trip: navigation/thumbnail layout is not a golden.
-        // Some selected photos can be below the fold; their state is not a claim
-        // that all nine lazy tiles were captured or their AX controls were tested.
+        // The covers are visual previews. This does not assert that every
+        // thumbnail/control was captured or that thumbnail taps select photos.
     }
 
     func testExplicitEmptyResultRendersWithoutAutomaticScanOrDeletion() async throws {
@@ -93,7 +93,9 @@ final class SimilarCleanupPresentationTests: XCTestCase {
     }
 
     func testMaximumFontKeepsRealSheetVerticallyScrollableWithoutHorizontalContentOverflow() async throws {
-        let c = try await context()
+        // Compact covers intentionally no longer create one long grid per
+        // group. Many groups exercise real overview scrolling at maximum font.
+        let c = try await context(groupSizes: Array(repeating: 3, count: 12))
         let size = CGSize(width: 320, height: 852)
         let host = try await mount(c, size: size, dynamicType: .accessibility5)
         defer { host.close() }
@@ -218,16 +220,17 @@ final class SimilarCleanupPresentationTests: XCTestCase {
 
     // MARK: Synthetic services, genuine unauthorized thumbnail path
 
-    private func context(empty: Bool = false) async throws -> SimilarCleanupReviewContext {
+    private func context(empty: Bool = false, groupSizes: [Int] = [4, 3, 2]) async throws -> SimilarCleanupReviewContext {
         let permission = PhotoLibraryClient.authorization
         guard !PhotoLibraryClient.canRead else {
             XCTFail("Use an unauthorized test host; never reset/request Photos permission here")
             throw SimilarCleanupReviewFailure.readablePhotos
         }
-        let worker = SimilarCleanupReviewWorker()
+        let candidateCount = groupSizes.reduce(0, +)
+        let worker = SimilarCleanupReviewWorker(candidateCount: candidateCount)
         let translator = SimilarCleanupReviewTranslator()
         let appState = AppState(worker: worker, authorizationStatus: { .authorized }, queryTranslator: translator)
-        let grouping = SimilarCleanupReviewGrouping(empty: empty)
+        let grouping = SimilarCleanupReviewGrouping(empty: empty, sizes: groupSizes)
         let deletion = SimilarCleanupReviewDeletion()
         let cleanup = SimilarPhotoCleanupState(grouping: grouping, deletion: deletion)
         let c = SimilarCleanupReviewContext(appState: appState, cleanup: cleanup, worker: worker,
@@ -253,7 +256,7 @@ final class SimilarCleanupPresentationTests: XCTestCase {
         XCTAssertTrue(appState.canRead, "Only the injected AppState permission is authorized")
         XCTAssertTrue(appState.modelsReady)
         XCTAssertTrue(appState.summary.indexStatisticsKnown)
-        XCTAssertEqual(appState.summary.indexedCount, 9)
+        XCTAssertEqual(appState.summary.indexedCount, candidateCount)
 
         // Confirm the real cache cannot obtain even a synthetic-ID thumbnail.
         // PhotoThumbnailView will render its production 'No access' placeholder;
@@ -445,16 +448,19 @@ private struct SimilarCleanupReviewRoot: View {
 @MainActor
 private final class SimilarCleanupReviewGrouping: SimilarPhotoGrouping {
     let groups: [SimilarPhotoGroup]
+    let candidateCount: Int
     private(set) var thresholds: [Float] = []
     private(set) var cancelledReturns = 0
     var gate: SimilarCleanupReviewGate?
 
-    init(empty: Bool) { groups = empty ? [] : Self.fixtureGroups() }
+    init(empty: Bool, sizes: [Int] = [4, 3, 2]) {
+        candidateCount = sizes.reduce(0, +)
+        groups = empty ? [] : Self.fixtureGroups(sizes: sizes)
+    }
 
-    static func fixtureGroups() -> [SimilarPhotoGroup] {
+    static func fixtureGroups(sizes: [Int] = [4, 3, 2]) -> [SimilarPhotoGroup] {
         // Already ordered like the real grouping result: sizes 4, 3, 2. No
         // attempt to retest grouping math here (covered by the pure-state suite).
-        let sizes: [Int] = [4, 3, 2]
         var result: [SimilarPhotoGroup] = []
         for (groupIndex, count) in sizes.enumerated() {
             var vector = [Float](repeating: 0, count: 768)
@@ -483,8 +489,8 @@ private final class SimilarCleanupReviewGrouping: SimilarPhotoGrouping {
         let revisions = Dictionary(uniqueKeysWithValues: photos.map {
             ($0.id, PhotoRevision(id: $0.id, modificationTime: $0.modificationTime, creationTime: $0.creationTime))
         })
-        await progress(SimilarPhotoGroupingProgress(total: 9, completed: 9, groupCount: groups.count))
-        return SimilarPhotoGroupingResult(groups: groups, candidateCount: 9,
+        await progress(SimilarPhotoGroupingProgress(total: candidateCount, completed: candidateCount, groupCount: groups.count))
+        return SimilarPhotoGroupingResult(groups: groups, candidateCount: candidateCount,
             staleCount: 0, unindexedCount: 0, threshold: threshold,
             validatePhotos: { ids in
                 guard ids.allSatisfy({ revisions[$0] != nil }) else { throw PhotoDeletionError.accessChanged }
@@ -528,11 +534,13 @@ private final class SimilarCleanupReviewDeletion: PhotoDeleting {
 
 @MainActor
 private final class SimilarCleanupReviewWorker: PhotoWorkServicing {
+    let candidateCount: Int
+    init(candidateCount: Int = 9) { self.candidateCount = candidateCount }
     private(set) var refreshCount = 0
     private(set) var unexpectedCalls = 0
     func refresh() async throws -> LibrarySummary {
         refreshCount += 1
-        return LibrarySummary(indexedCount: 9, modelVersion: "TEST-cleanup-presentation")
+        return LibrarySummary(indexedCount: candidateCount, modelVersion: "TEST-cleanup-presentation")
     }
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary {
         throw unexpected()

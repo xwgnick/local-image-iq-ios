@@ -9,27 +9,37 @@ struct SimilarPhotoCleanupSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var browser: SimilarPhotoGroupBrowser
+    private let thumbnailContent: ((IndexedPhoto) -> AnyView)?
+    private let comparisonImageSource: SimilarComparisonImageSource?
     @State private var hasRequestedGrouping = false
-    @State private var comparisonGroup: SimilarPhotoGroup?
     @State private var confirmationIntent: SimilarPhotoDeletionIntent?
     @State private var showsConfirmation = false
 
-    init(state: SimilarPhotoCleanupState, appState: AppState) {
+    init(state: SimilarPhotoCleanupState, appState: AppState,
+         browser: SimilarPhotoGroupBrowser? = nil,
+         thumbnailContent: ((IndexedPhoto) -> AnyView)? = nil,
+         comparisonImageSource: SimilarComparisonImageSource? = nil) {
         self.state = state
         self.appState = appState
+        _browser = StateObject(wrappedValue: browser ?? SimilarPhotoGroupBrowser())
+        // Native-host tests may supply synthetic pixels. Production always uses
+        // the existing revision/network-aware HQ224-fallback thumbnail cache.
+        self.thumbnailContent = thumbnailContent
+        self.comparisonImageSource = comparisonImageSource
     }
 
     private var canScan: Bool {
         scenePhase == .active && appState.canRead && appState.modelsReady
             && appState.summary.indexStatisticsKnown && appState.summary.indexedCount > 0 && !appState.isBusy
-            && !state.isGrouping && !state.isDeleting
+            && !state.isGrouping && !state.isDeleting && !state.isSelecting
     }
 
     private var thresholdBinding: Binding<Double> {
         // Integer slider ticks avoid Float-to-Double roundoff at decimal steps.
         Binding(get: { (Double(state.threshold) * 100).rounded() }, set: { value in
-            guard !state.isDeleting else { return }
+            guard !state.isDeleting, !state.isSelecting else { return }
             // The controller cancels/invalidates the old read; never regroup here.
             state.threshold = Float(value.rounded()) / 100
         })
@@ -43,24 +53,39 @@ struct SimilarPhotoCleanupSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
-                    controls
-                    if state.isGrouping { groupingProgress }
-                    if state.hasScanned { summary }
-                    if scenePhase != .background {
-                        ForEach(Array(state.groups.enumerated()), id: \.element.id) { index, group in
-                            groupCard(group, number: index + 1)
-                        }
-                    }
+            ZStack {
+                // Keep this exact ScrollView alive and at its original offset
+                // under the detail overlay, including comparison/gallery covers.
+                overview
+                    .opacity(browser.detailRoute == nil ? 1 : 0)
+                    .allowsHitTesting(browser.detailRoute == nil)
+                    .accessibilityHidden(browser.detailRoute != nil)
+                if let route = browser.detailRoute,
+                   route.sessionID == state.selectionSessionID,
+                   let index = state.groups.firstIndex(where: { $0.id == route.groupID }) {
+                    SimilarPhotoGroupDetail(group: state.groups[index], number: index + 1,
+                                            route: route, state: state, browser: browser, thumbnail: thumbnail)
+                        .id(route.id)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                SimilarPhotoZoomOverlay(flight: browser.zoomFlight, reduceMotion: reduceMotion,
+                                        completion: browser.finishZoom)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
             .background(IQStyle.background.ignoresSafeArea())
             .navigationTitle("相似照片清理")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if browser.detailRoute != nil {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("所有分组", systemImage: "chevron.left") {
+                            state.cancelRangeSelection()
+                            browser.closeDetail()
+                        }
+                        .disabled(state.isDeleting)
+                        .accessibilityIdentifier("similar-cleanup-all-groups")
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
                         .disabled(state.isDeleting)
@@ -79,7 +104,7 @@ struct SimilarPhotoCleanupSheet: View {
                     .padding(16)
                     .background(IQStyle.surface)
                     .accessibilityElement(children: .combine)
-                } else if state.selectedCount > 0 {
+                } else if state.selectedCount > 0 || state.isSelecting {
                     selectionToolbar
                 }
             }
@@ -87,8 +112,15 @@ struct SimilarPhotoCleanupSheet: View {
         .foregroundStyle(IQStyle.text)
         .tint(IQStyle.accent)
         .interactiveDismissDisabled(state.isDeleting)
-        .sheet(item: $comparisonGroup) { group in
-            SimilarPhotoComparisonSheet(group: group, cleanup: state, appState: appState)
+        .sheet(item: $browser.comparisonGroup) { group in
+            SimilarPhotoComparisonSheet(group: group, cleanup: state, appState: appState,
+                                        imageSource: comparisonImageSource)
+        }
+        .fullScreenCover(item: $browser.viewer) { selection in
+            // ID-based normal viewer: no synthetic SearchHit, no search action,
+            // and only its current page requests the full photo.
+            PhotoGalleryViewer(ids: selection.ids, initialID: selection.id, library: appState.library,
+                               networkAllowed: appState.allowICloudDownload)
         }
         .confirmationDialog(
             "删除选中的\(confirmationIntent?.count ?? 0)张照片？",
@@ -100,7 +132,7 @@ struct SimilarPhotoCleanupSheet: View {
                 // already have dismissed. Only the controller validates/submits.
                 state.confirmDeletion(intent)
             }
-            .disabled(state.isDeleting || state.pendingDeletion?.id != intent.id)
+            .disabled(state.isDeleting || state.isSelecting || state.pendingDeletion?.id != intent.id)
             Button("取消", role: .cancel) {
                 state.cancelDeletionConfirmation()
             }
@@ -119,17 +151,20 @@ struct SimilarPhotoCleanupSheet: View {
             if id == nil { showsConfirmation = false }
         }
         .onChange(of: state.groups.map(\.id)) { _, ids in
-            if let comparisonGroup, !ids.contains(comparisonGroup.id) {
-                self.comparisonGroup = nil
+            if let comparisonGroup = browser.comparisonGroup, !ids.contains(comparisonGroup.id) {
+                browser.comparisonGroup = nil
             }
+            if let route = browser.detailRoute, !ids.contains(route.groupID) { browser.closeDetail() }
         }
+        .onChange(of: state.selectionSessionID) { _, session in browser.invalidate(sessionID: session) }
         .onChange(of: appState.photoLibraryEpoch) { _, _ in invalidateAccess() }
         .onChange(of: appState.authorization) { _, _ in invalidateAccess() }
         .onChange(of: scenePhase, initial: true) { _, phase in
             switch phase {
             case .background:
-                comparisonGroup = nil
+                browser.closeDetail()
                 showsConfirmation = false
+                state.cancelRangeSelection()
                 state.pause()
             case .active:
                 state.resume()
@@ -141,11 +176,25 @@ struct SimilarPhotoCleanupSheet: View {
         .onAppear {
             if scenePhase == .active { state.resume() }
         }
-        .onDisappear {
-            // A compact full-screen comparison can cover this sheet. Its groups
-            // must survive; the presenting owner's onDismiss handles actual dismissal.
-            // Read cancellation never cancels a submitted deletion.
-            if comparisonGroup == nil { state.pause() }
+        // Do not pause onDisappear: a gallery/comparison cover can disappear
+        // this root without dismissing cleanup. ContentView.sheet's onDismiss
+        // owns actual dismissal; background above remains an explicit pause.
+    }
+
+    private var overview: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 20) {
+                controls
+                if state.isGrouping { groupingProgress }
+                if state.hasScanned { summary }
+                if scenePhase != .background {
+                    ForEach(Array(state.groups.enumerated()), id: \.element.id) { index, group in
+                        groupCard(group, number: index + 1)
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -161,7 +210,7 @@ struct SimilarPhotoCleanupSheet: View {
                     .monospacedDigit()
                     .fixedSize(horizontal: false, vertical: true)
                 Slider(value: thresholdBinding, in: SimilarPhotoGroupingPolicy.sliderTicks, step: 1)
-                    .disabled(state.isDeleting)
+                    .disabled(state.isDeleting || state.isSelecting)
                     .accessibilityLabel("相似度阈值，越高越严格")
                     .accessibilityValue(String(format: "%.2f", Double(state.threshold)))
                     .accessibilityIdentifier("similar-cleanup-threshold")
@@ -250,91 +299,94 @@ struct SimilarPhotoCleanupSheet: View {
     }
 
     private func groupCard(_ group: SimilarPhotoGroup, number: Int) -> some View {
-        let columns = horizontalSizeClass == .regular && !dynamicTypeSize.isAccessibilitySize ? 3 : 2
+        let indices = SimilarPhotoGroupGeometry.previewIndices(count: group.photos.count)
+        let selected = group.photos.filter { state.selectedIDs.contains($0.id) }.count
         return VStack(alignment: .leading, spacing: 12) {
-            actionLayout {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("第\(number)组 · \(group.photos.count)张").font(.headline)
-                    Text("最低相似度 \(String(format: "%.3f", Double(group.minimumSimilarity)))")
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(IQStyle.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("similar-cleanup-group-\(number)-header")
-                Button("全选本组") { state.selectGroup(group.id) }
-                    .frame(minHeight: 44)
-                    .disabled(state.isGrouping || state.isDeleting)
-                    .accessibilityLabel("全选第\(number)组的\(group.photos.count)张照片")
-                    .accessibilityIdentifier("similar-cleanup-group-\(number)-select-group")
-            }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 8), count: columns), spacing: 8) {
-                ForEach(Array(group.photos.enumerated()), id: \.element.id) { index, photo in
-                    selectionTile(photo, number: index + 1, groupNumber: number)
-                }
-            }
             Button {
-                guard !state.isDeleting, !state.isGrouping else { return }
-                comparisonGroup = group
+                if let first = group.photos.first { open(group, photoID: first.id) }
             } label: {
-                Label("对比本组照片", systemImage: "rectangle.split.2x1")
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("第\(number)组 · \(group.photos.count)张").font(.headline)
+                        Text("最低相似度 \(String(format: "%.3f", Double(group.minimumSimilarity)))")
+                            .font(.caption).monospacedDigit().foregroundStyle(IQStyle.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "chevron.right").foregroundStyle(IQStyle.secondary)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
-            .disabled(state.isDeleting || state.isGrouping || group.photos.count < 2)
-            .accessibilityLabel("对比第\(number)组照片")
-            .accessibilityIdentifier("similar-cleanup-group-\(number)-compare")
+            .buttonStyle(.plain)
+            .disabled(state.isGrouping || state.isDeleting || state.isSelecting)
+            .accessibilityIdentifier("similar-cleanup-group-\(number)-header")
+            .accessibilityHint("打开本组全部照片，定位第一张，不改变选择")
+            SimilarPhotoMosaicLayout {
+                ForEach(indices, id: \.self) { index in
+                    let photo = group.photos[index]
+                    previewTile(photo, in: group, number: number, index: index)
+                }
+            }
+            .clipped()
+            VStack(alignment: .leading, spacing: 4) {
+                Text("预览\(indices.count)张，查看全部\(group.photos.count)张")
+                    .font(.subheadline)
+                Text("已选\(selected)张 · 未选\(group.photos.count - selected)张")
+                    .font(.caption).foregroundStyle(IQStyle.secondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
         .background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(IQStyle.line, lineWidth: 1))
     }
 
-    private func selectionTile(_ photo: IndexedPhoto, number: Int, groupNumber: Int) -> some View {
+    @ViewBuilder
+    private func previewTile(_ photo: IndexedPhoto, in group: SimilarPhotoGroup, number: Int, index: Int) -> some View {
+        let label = "第\(number)组，照片\(index + 1)"
+        let identifier = "similar-cleanup-group-\(number)-photo-\(index + 1)"
         let selected = state.selectedIDs.contains(photo.id)
-        let shape = RoundedRectangle(cornerRadius: 8)
-        return Button { state.toggleSelection(photo.id) } label: {
-            shape.fill(IQStyle.muted)
-                .aspectRatio(4.0 / 5.0, contentMode: .fit)
-                .overlay {
-                    PhotoThumbnailView(photo: photo, cache: appState.thumbnails,
-                                       networkAllowed: appState.allowICloudDownload)
-                }
-                .clipShape(shape)
-                .overlay(shape.strokeBorder(selected ? IQStyle.accent : IQStyle.line, lineWidth: selected ? 2 : 1))
-                .overlay(alignment: .topTrailing) {
-                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .font(.title2.weight(.semibold))
-                        .foregroundStyle(selected ? IQStyle.accent : .white)
-                        .background(.black.opacity(0.65), in: Circle())
-                        .padding(8)
-                }
-                .contentShape(shape)
+        let enabled = !state.isGrouping && !state.isDeleting && !state.isSelecting
+        if let thumbnailContent {
+            SimilarPhotoPreviewTile(photoID: photo.id, label: label, identifier: identifier,
+                selected: selected, enabled: enabled, content: thumbnailContent(photo),
+                open: { capture in open(group, photoID: photo.id, capture: capture) })
+        } else {
+            SimilarPhotoLoadedPreviewTile(photo: photo, cache: appState.thumbnails,
+                networkAllowed: appState.allowICloudDownload, label: label, identifier: identifier,
+                selected: selected, enabled: enabled,
+                open: { capture in open(group, photoID: photo.id, capture: capture) })
         }
-        .buttonStyle(.plain)
-        .disabled(state.isGrouping || state.isDeleting)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("第\(groupNumber)组，照片\(number)，待删除选择")
-        .accessibilityValue(selected ? "已勾选" : "未勾选")
-        .accessibilityAddTraits(selected ? [.isSelected] : [])
-        .accessibilityIdentifier("similar-cleanup-group-\(groupNumber)-photo-\(number)")
+    }
+
+    private func thumbnail(_ photo: IndexedPhoto) -> AnyView {
+        thumbnailContent?(photo) ?? AnyView(PhotoThumbnailView(photo: photo, cache: appState.thumbnails,
+                                                              networkAllowed: appState.allowICloudDownload))
+    }
+
+    private func open(_ group: SimilarPhotoGroup, photoID: String, capture: SimilarPhotoThumbnailCapture? = nil) {
+        guard !state.isDeleting, !state.isGrouping, !state.isSelecting,
+              let session = state.selectionSessionID else { return }
+        browser.open(group: group, photoID: photoID, sessionID: session, capture: capture)
     }
 
     private var selectionToolbar: some View {
         actionLayout {
-            Text("已选\(state.selectedCount)张")
+            Text(state.isValidatingSelection ? "正在核验选择…" : state.isSelecting ? "正在选择…" : "已选\(state.selectedCount)张")
                 .font(.subheadline.weight(.medium))
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button("清空") { state.clearSelection() }
+                .accessibilityIdentifier("similar-cleanup-selection-status")
+            Button("清空") { state.cancelRangeSelection(); state.clearSelection() }
                 .frame(minHeight: 44)
             Button("删除\(state.selectedCount)张", role: .destructive) {
+                guard canDelete else { return }
                 state.prepareDeletion()
                 guard let intent = state.pendingDeletion else { return }
                 confirmationIntent = intent
                 showsConfirmation = true
             }
             .frame(minHeight: 44)
+            .disabled(!canDelete)
             .accessibilityIdentifier("prepare-similar-deletion")
         }
         .padding(.horizontal, 16)
@@ -346,15 +398,18 @@ struct SimilarPhotoCleanupSheet: View {
     }
 
     private func deletionWarning(_ intent: SimilarPhotoDeletionIntent) -> String {
-        let warning = "将从系统照片图库删除，可能同步到 iCloud 和其他设备。通常可在系统“最近删除”中恢复。"
-        return intent.emptiedGroupCount > 0
-            ? warning + "\n其中\(intent.emptiedGroupCount)组全部照片已被选中，不会保留照片。"
-            : warning
+        PhotoDeletionRecoveryNotice.warning(emptiedGroupCount: intent.emptiedGroupCount)
+    }
+
+    private var canDelete: Bool {
+        SimilarPhotoGroupBrowser.canDelete(selectedCount: state.selectedCount, isSelecting: state.isSelecting,
+                                          isDeleting: state.isDeleting, isGrouping: state.isGrouping)
     }
 
     private func invalidateAccess() {
-        comparisonGroup = nil
+        browser.closeDetail()
         showsConfirmation = false
+        state.cancelRangeSelection()
         state.invalidateAccess()
     }
 }
