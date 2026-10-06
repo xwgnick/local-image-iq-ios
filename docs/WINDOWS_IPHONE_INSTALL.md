@@ -5,7 +5,33 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.8.0（build 26）— 相似照片清理，已交付
+## 当前：0.9.0（build 27）— 搜索加速与耗时诊断，已交付
+
+**[../build/device-download/37468042819/LocalImageIQ-0.9.0-build27-iphoneos-unsigned.ipa](../build/device-download/37468042819/LocalImageIQ-0.9.0-build27-iphoneos-unsigned.ipa)** · [公开 Release ci-37468042819-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37468042819-1)。本机已完整下载校验，无需重下；另一台电脑从该 Release 下载。
+
+**首次搜索可能不快反慢：最终 Debug 模拟器同一查询，首次建缓存 19.863360 秒，旧路径 11.943925 秒，耗时约为旧路径的 1.66 倍（增加约 66%）。67.6006× 只代表常驻热搜索组件，不是手机端到端提速；没有证明手机全搜索 10×，不能把首次变慢算成目标已达成。**
+
+1. 用**同一 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**，签名沿用下方第 1–5 节。**不卸载、不清索引、不重建索引**；当前有效的旧向量直接复用，不重新编码照片。
+2. **默认已启用加速，正常输入不同查询使用即可，无需调试。**首次实际搜索才按需建缓存，没有把这项工作暗藏到启动阶段。原始中文输入、翻译／文字增强、筛选、全量精确结果、首批 **12／追加 12** 与 HQ 策略保留；不改为 FP16／ANN／GPU。
+3. 后台排空任务后会释放常驻资源；回前台可能重新加载二进制缓存，**不承诺每次打开都有约 0.2 秒的热路径表现**。
+
+**可选诊断，不是安装要求：**设置 → **显示调试工具 → 展开“诊断信息” → 搜索耗时**；“**使用原搜索作对照**”开关也在“诊断信息”中。以**同一原始查询及相同筛选／文字增强／网络设置**做 A/B，并区分首次建缓存、二进制加载和常驻热状态。关闭调试会重置原搜索对照选择、恢复默认加速；**没有单独清除计时记录的按钮，不要为测速清索引**。“到首张缩略图”记录可用图片回调，**不保证最终 HQ 已上屏**。真实 iPhone 安装、全搜索耗时、内存／发热与画质仍待确认。
+
+### build 27 包与验证摘要
+
+Release **404761088**，**2026-10-06T13:40:41Z** 发布，**9 项资产、prerelease、非 draft**。IPA asset **615633249**，**1,419,250,307 字节**，SHA-256 **`71e72cc990d46f396e310d1e8db255a5deb0b2654381408a7daf02ebfa0b0637`**；已完整流式核验长度／哈希，**7-Zip 26.03 全量 CRC PASS**（**11 文件夹、30 文件、解压后 1,566,761,261 字节**）。记录见 [../build/device-download/37468042819/release-fetch-28779eb8-f29e-45c4-a6b6-3524e3414cd1.json](../build/device-download/37468042819/release-fetch-28779eb8-f29e-45c4-a6b6-3524e3414cd1.json)；原包校验不验证重签包或手机安装。
+
+[CI 37468042819](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37468042819)／[job 112283955268](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37468042819/job/112283955268)，最终源码 **`ca5422c9473fed58a938120e3643c6de4f19e47c`**：**第四次整体验证 SUCCESS；第三次也 SUCCESS，只有前两次失败；DELIVERED／PENDING-DEVICE**。前两次分别是测试缺少 `try await`、同一缓存测试的时间戳精度导致 **2 个断言失败**，均仅修测试；第三次成功后又优化生产冷路径，第四次才是最终交付。
+
+核心 **79 全通过**；App **1215＝1214 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败**（**324.087 秒，wall 349.439 秒**），新增 **149 项**已计入；真实模型 **8／121.399 秒**，完整 **CPU／`.all`／20 actor** 门槛保留；UI **14 全通过／945.081 秒**，**没有新增实时耗时 UI 测试或导航新诊断界面的 E2E**。工作流、runner、104 项 Node 门槛未改，未实施 CI 缓存优化。
+
+小型 IPA 元数据为 **0.9.0 / 27、arm64 Release、未签名、最低 iOS 17、SDK 18.5／Xcode 16.4、LaunchScreen**；同一 SigLIP 768 模型与 **2,943 项地点身份**保留，**未再次全量比较模型权重字节**。实际查看的 [../build/ui-review/37468042819/search-performance-review.jpg](../build/ui-review/37468042819/search-performance-review.jpg) 为 **370×758** 联系图，仅 **1 张 393×852 原生合成截图**；**0.300／0.400 秒是假定夹具值，不是测速**，底部需滚动，未验证全部内容可见。
+
+最终基准只测 **Debug 模拟器 8000×768、实际 SQLite＋伪 Photos 元数据＋合成查询编码器**，不含真实 ML／翻译／OCR／图片／UI 发布及分页检查；全部 8000 个 ID、顺序和 Float 分数逐位一致。热路径中位数 **0.197506 秒**；已有二进制缓存的新 worker **5.712518 秒／2.0908×**，是**同进程新 worker，不是实际重启**，均不能当作手机承诺。完整四次账本、最终三次样本、矩阵／内存边界、UI 资产与地点哈希见 [BUILD_STATUS.md](BUILD_STATUS.md)。
+
+以下 build 26 及更早正文与安装历史全部保留；旧“当前／本轮”、旧包和操作要求不替代页首 build 27 及下方现行第 1–5 节。
+
+## 历史：0.8.0（build 26）— 相似照片清理，已交付
 
 **[../build/device-download/37373137157/LocalImageIQ-0.8.0-build26-iphoneos-unsigned.ipa](../build/device-download/37373137157/LocalImageIQ-0.8.0-build26-iphoneos-unsigned.ipa)** · [公开 Release ci-37373137157-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37373137157-1)。本机已完整下载校验，无需重下；另一台电脑可从该 Release 下载。这是**首个实际远端发布的版本化 IPA 名称**，不是 build 25 的本地改名副本。
 
