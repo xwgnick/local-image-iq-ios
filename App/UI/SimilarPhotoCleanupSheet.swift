@@ -160,12 +160,18 @@ struct SimilarPhotoCleanupSheet: View {
                     .font(.subheadline.weight(.medium))
                     .monospacedDigit()
                     .fixedSize(horizontal: false, vertical: true)
-                Slider(value: thresholdBinding, in: 90...99, step: 1)
+                Slider(value: thresholdBinding, in: SimilarPhotoGroupingPolicy.sliderTicks, step: 1)
                     .disabled(state.isDeleting)
                     .accessibilityLabel("相似度阈值，越高越严格")
                     .accessibilityValue(String(format: "%.2f", Double(state.threshold)))
                     .accessibilityIdentifier("similar-cleanup-threshold")
             }
+                    if state.threshold < 0.90 {
+                    Text("已放宽相似范围，可能包含仅场景相近的照片。请逐张核对后再勾选删除。")
+                        .font(.footnote).foregroundStyle(IQStyle.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("similar-cleanup-broad-threshold-note")
+                    }
             Button(hasRequestedGrouping || state.hasScanned ? "重新分组" : "开始分组") {
                 guard canScan else { return }
                 hasRequestedGrouping = true
@@ -197,6 +203,12 @@ struct SimilarPhotoCleanupSheet: View {
 
     private var groupingProgress: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if state.isValidating || (state.progress.total > 0 && state.progress.completed == state.progress.total) {
+                Text("分组计算已完成，正在核验照片访问…")
+                    .font(.subheadline).foregroundStyle(IQStyle.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("similar-cleanup-validating")
+            }
             // total==0 is not a completed scan while metadata is being read.
             ProgressView(value: state.progress.total > 0 ? state.progress.fraction : 0, total: 1)
                 .tint(IQStyle.accent)
@@ -228,7 +240,7 @@ struct SimilarPhotoCleanupSheet: View {
                 .font(.footnote)
                 .foregroundStyle(IQStyle.secondary)
             if state.groups.isEmpty {
-                Text("当前阈值下没有相似照片组。")
+                Text("当前阈值下没有相似照片组。可调低阈值后点“重新分组”。")
                     .font(.subheadline)
                     .padding(.top, 4)
             }

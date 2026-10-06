@@ -25,6 +25,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
     @Published private(set) var groups: [SimilarPhotoGroup] = []
     @Published private(set) var progress = SimilarPhotoGroupingProgress()
     @Published private(set) var isGrouping = false
+    @Published private(set) var isValidating = false
     @Published private(set) var isDeleting = false
     @Published private(set) var selectedIDs: Set<String> = []
     @Published private(set) var message: String?
@@ -95,9 +96,15 @@ final class SimilarPhotoCleanupState: ObservableObject {
                     self.message = Self.groupingFailureMessage
                     return
                 }
-                // Synchronous final access/revision check directly before
-                // publication; no await between validation and the stored result.
-                try snapshot.validateAccess()
+                // Keep the costly full-member metadata check off MainActor.
+                // A completed comparison counter is not yet a published result.
+                self.isValidating = true
+                try await snapshot.prepareForPublication()
+                try Task.checkCancellation()
+                guard self.isCurrent(token), self.threshold == requestedThreshold else { return }
+                // Only the cheap epoch fence runs synchronously on MainActor.
+                // No await separates this fence from publishing the result.
+                try snapshot.validatePublicationEpoch()
                 self.result = snapshot
                 self.sessionID = token
                 self.groups = snapshot.groups
@@ -256,10 +263,14 @@ final class SimilarPhotoCleanupState: ObservableObject {
         staleCount = 0
         unindexedCount = 0
         isGrouping = false
+        isValidating = false
     }
 
     private func finishGrouping(_ token: UUID) {
-        if generation == token { isGrouping = false }
+        if generation == token {
+            isGrouping = false
+            isValidating = false
+        }
         if groupingTaskID == token {
             groupingTask = nil
             groupingTaskID = nil

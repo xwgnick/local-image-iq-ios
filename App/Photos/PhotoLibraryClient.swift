@@ -483,6 +483,35 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
     }
 }
 
+/// Fresh selected-ID metadata only: no retained full snapshot, pixels, or prompt.
+extension PhotoLibraryClient: PhotoRevisionBatchReading {
+    func currentRevisions(ids: [String]) throws -> [PhotoRevision] {
+        try Task.checkCancellation()
+        let authorization = Self.authorization
+        let generation = changeGeneration
+        func validateEpoch() throws {
+            try Task.checkCancellation()
+            guard Self.canRead else { throw AppFailure.permission }
+            guard Self.authorization == authorization, changeGeneration == generation else {
+                throw AppFailure.photo("Photo access changed. Try again.")
+            }
+        }
+        try validateEpoch()
+        let requested = Set(ids)
+        let uniqueIDs = requested.sorted()
+        guard !uniqueIDs.isEmpty else {
+            try validateEpoch()
+            return []
+        }
+        try validateEpoch()
+        // Match full enumeration's hidden/burst scope, but fetch only these IDs.
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: uniqueIDs, options: Self.searchFetchOptions())
+        let revisions = try Self.searchRevisions(in: fetched).filter { requested.contains($0.id) }
+        try validateEpoch()
+        return revisions
+    }
+}
+
 /// Production metadata reuse. Worker still performs a fresh full final check,
 /// and AppState invalidates the retained source on background/foreground. Fresh
 /// batch page checks remain independent of observer notification delivery.

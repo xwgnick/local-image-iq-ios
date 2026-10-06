@@ -66,10 +66,10 @@ final class SimilarPhotoGroupingTests: XCTestCase {
 
     func testPolicyInclusiveEndpointsFiniteValuesAndProgressFraction() throws {
         XCTAssertEqual(SimilarPhotoGroupingPolicy.defaultThreshold, 0.96)
-        XCTAssertEqual(SimilarPhotoGroupingPolicy.thresholdRange, Float(0.90)...Float(0.99))
-        let valid: [Float] = [0.90, 0.96, 0.99]
+        XCTAssertEqual(SimilarPhotoGroupingPolicy.thresholdRange, Float(0.50)...Float(0.99))
+        let valid: [Float] = [0.50, 0.75, 0.90, 0.96, 0.99]
         for value in valid { XCTAssertNoThrow(try SimilarPhotoGroupingPolicy.validate(threshold: value)) }
-        let invalid: [Float] = [Float(0.90).nextDown, Float(0.99).nextUp, 0, 1, .nan, .infinity, -.infinity]
+        let invalid: [Float] = [Float(0.50).nextDown, Float(0.99).nextUp, 0, 1, .nan, .infinity, -.infinity]
         for value in invalid {
             XCTAssertThrowsError(try SimilarPhotoGroupingPolicy.validate(threshold: value)) { error in
                 XCTAssertEqual(error.localizedDescription, "相似度设置无效，请重新选择。")
@@ -81,6 +81,63 @@ final class SimilarPhotoGroupingTests: XCTestCase {
         let fixture = SimilarPhotoGroupingResult(groups: [], candidateCount: 0, staleCount: 0, unindexedCount: 0, threshold: 0.96)
         try fixture.validateAccess()
         try fixture.validatePhotos([])
+    }
+
+    func testSliderPolicyBoundsAndDefaultThumbPositionMatchThresholds() throws {
+        let ticks: ClosedRange<Double> = SimilarPhotoGroupingPolicy.sliderTicks
+        XCTAssertEqual(ticks, 50.0...99.0)
+        XCTAssertEqual(Float(ticks.lowerBound.rounded()) / 100, SimilarPhotoGroupingPolicy.thresholdRange.lowerBound)
+        XCTAssertEqual(Float(ticks.upperBound.rounded()) / 100, SimilarPhotoGroupingPolicy.thresholdRange.upperBound)
+        for tick in stride(from: ticks.lowerBound, through: ticks.upperBound, by: 1.0) {
+            // Match the real slider binding: round Double ticks, then convert to Float.
+            let threshold = Float(tick.rounded()) / 100
+            XCTAssertNoThrow(try SimilarPhotoGroupingPolicy.validate(threshold: threshold))
+            XCTAssertEqual((Double(threshold) * 100).rounded(), tick)
+        }
+        let defaultTick = (Double(SimilarPhotoGroupingPolicy.defaultThreshold) * 100).rounded()
+        XCTAssertEqual(defaultTick, 96)
+        XCTAssertEqual(Float(defaultTick) / 100, SimilarPhotoGroupingPolicy.defaultThreshold)
+        let position = (defaultTick - ticks.lowerBound) / (ticks.upperBound - ticks.lowerBound)
+        XCTAssertEqual(position, 46.0 / 49.0, accuracy: 0.000000000001)
+    }
+
+    func testCosinePointEightIsAbsentAtPointNineAndPresentAtPointSevenFive() async throws {
+        let a = photo("a"), b = photo("b", angle: acos(0.8))
+        let similarity = referenceCosine(a, b)
+        XCTAssertGreaterThan(similarity, 0.75)
+        XCTAssertLessThan(similarity, 0.90)
+        let strict = try await SimilarPhotoGrouper.group(photos: [b, a], threshold: 0.90)
+        XCTAssertTrue(strict.isEmpty)
+        let broad = try await SimilarPhotoGrouper.group(photos: [b, a], threshold: 0.75)
+        XCTAssertEqual(ids(broad), [["a", "b"]])
+        XCTAssertEqual(try XCTUnwrap(broad.first).minimumSimilarity, similarity, accuracy: 0.0000002)
+    }
+
+    func testLowestThresholdStillRequiresEveryPairAndRejectsSimilarityChains() async throws {
+        let threshold: Float = 0.50
+        // Cosine 0.6 leaves a clear margin above the physical Float boundary.
+        let angle = acos(0.6)
+        let a = photo("a"), b = photo("b", angle: angle), c = photo("c", angle: 2 * angle)
+        XCTAssertGreaterThan(referenceCosine(a, b), threshold)
+        XCTAssertGreaterThan(referenceCosine(b, c), threshold)
+        XCTAssertLessThan(referenceCosine(a, c), threshold)
+        // Mirroring c makes both candidates pass the seed but fail each other,
+        // so checking only the seed is also insufficient at the lower endpoint.
+        let mirroredC = photo("c", angle: -angle)
+        XCTAssertGreaterThan(referenceCosine(a, mirroredC), threshold)
+        XCTAssertLessThan(referenceCosine(b, mirroredC), threshold)
+        for input in [[c, b, a], [mirroredC, b, a]] {
+            let groups = try await SimilarPhotoGrouper.group(photos: input, threshold: threshold)
+            XCTAssertEqual(ids(groups), [["a", "b"]])
+            for group in groups {
+                XCTAssertGreaterThanOrEqual(group.minimumSimilarity, threshold)
+                for i in group.photos.indices {
+                    for j in group.photos.indices where j > i {
+                        XCTAssertGreaterThanOrEqual(referenceCosine(group.photos[i], group.photos[j]), threshold)
+                    }
+                }
+            }
+        }
     }
 
     func testStaticGroupingInvalidThresholdUsesGenericChineseMessage() async {
@@ -399,7 +456,7 @@ final class SimilarPhotoGroupingTests: XCTestCase {
         do { _ = try await c.service.group(threshold: 0.96) { _ in }; XCTFail("Permission must be required.") }
         catch AppFailure.permission { }
         c.library.setReadable(true)
-        await failure { _ = try await c.service.group(threshold: Float(0.90).nextDown) { _ in } }
+        await failure { _ = try await c.service.group(threshold: Float(0.50).nextDown) { _ in } }
         XCTAssertEqual(c.library.enumerationCount, 0)
         await assertMetadataOnly(c, inspections: 0)
     }

@@ -2,6 +2,11 @@ import Accelerate
 import Foundation
 import ImageIQCore
 
+/// Optional metadata-only batch access; legacy injected libraries keep per-ID reads.
+protocol PhotoRevisionBatchReading: Sendable {
+    func currentRevisions(ids: [String]) throws -> [PhotoRevision]
+}
+
 struct SimilarPhotoGroup: Identifiable, Sendable {
     let id: String
     let photos: [IndexedPhoto]
@@ -23,11 +28,13 @@ struct SimilarPhotoGroupingResult: Sendable {
     let threshold: Float
     let validateAccess: @Sendable () throws -> Void
     let validatePhotos: @Sendable ([String]) throws -> Void
+    let validatePublicationEpoch: @Sendable () throws -> Void
 
     init(groups: [SimilarPhotoGroup], candidateCount: Int, staleCount: Int,
          unindexedCount: Int, threshold: Float,
          validateAccess: @escaping @Sendable () throws -> Void = {},
-         validatePhotos: @escaping @Sendable ([String]) throws -> Void = { _ in }) {
+         validatePhotos: @escaping @Sendable ([String]) throws -> Void = { _ in },
+         validatePublicationEpoch: @escaping @Sendable () throws -> Void = {}) {
         self.groups = groups
         self.candidateCount = candidateCount
         self.staleCount = staleCount
@@ -35,6 +42,16 @@ struct SimilarPhotoGroupingResult: Sendable {
         self.threshold = threshold
         self.validateAccess = validateAccess
         self.validatePhotos = validatePhotos
+        self.validatePublicationEpoch = validatePublicationEpoch
+    }
+
+    /// This non-actor async method runs on Swift 5's generic executor, including
+    /// when called from MainActor. The caller must recheck its publication state
+    /// and validatePublicationEpoch immediately before publishing, without awaiting.
+    func prepareForPublication() async throws {
+        try Task.checkCancellation()
+        try validateAccess()
+        try Task.checkCancellation()
     }
 }
 
@@ -45,7 +62,9 @@ protocol SimilarPhotoGrouping: Sendable {
 
 enum SimilarPhotoGroupingPolicy {
     static let defaultThreshold: Float = 0.96
-    static let thresholdRange: ClosedRange<Float> = 0.90...0.99
+    static let thresholdRange: ClosedRange<Float> = 0.50...0.99
+    /// Exact integer ticks; shared by the slider and its boundary tests.
+    static let sliderTicks: ClosedRange<Double> = 50...99
 
     private struct InvalidThreshold: LocalizedError {
         var errorDescription: String? { "相似度设置无效，请重新选择。" }
@@ -261,21 +280,48 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
         let returnedIDs = returned.keys.sorted()
         let validatePhotos: @Sendable ([String]) throws -> Void = { ids in
             try access.validateEpoch()
+            var requestedIDs: [String] = []
+            var requested = Set<String>()
             for id in ids {
                 try Task.checkCancellation()
-                guard let expected = returnedRevisions[id], access.library.currentRevision(id: id) == expected else {
+                guard !id.isEmpty, returnedRevisions[id] != nil else {
                     throw SimilarGroupingAccess.changed()
+                }
+                if requested.insert(id).inserted { requestedIDs.append(id) }
+            }
+            if !requestedIDs.isEmpty {
+                if let batch = access.library as? any PhotoRevisionBatchReading {
+                    let revisions = try batch.currentRevisions(ids: requestedIDs)
+                    try access.validateEpoch()
+                    guard revisions.count == requestedIDs.count else { throw SimilarGroupingAccess.changed() }
+                    var remaining = requested
+                    for revision in revisions {
+                        try Task.checkCancellation()
+                        guard remaining.remove(revision.id) != nil,
+                              returnedRevisions[revision.id] == revision else {
+                            throw SimilarGroupingAccess.changed()
+                        }
+                    }
+                    guard remaining.isEmpty else { throw SimilarGroupingAccess.changed() }
+                } else {
+                    for id in ids {
+                        try Task.checkCancellation()
+                        guard access.library.currentRevision(id: id) == returnedRevisions[id] else {
+                            throw SimilarGroupingAccess.changed()
+                        }
+                    }
                 }
             }
             // PhotoKit notifications may change the epoch during synchronous
-            // currentRevision reads. Nil generations still check actual revisions.
+            // metadata reads. Nil generations still check actual full revisions.
             try access.validateEpoch()
         }
         try access.validateEpoch()
         return SimilarPhotoGroupingResult(groups: groups, candidateCount: eligible.count,
                                           staleCount: indexed.count - eligible.count,
                                           unindexedCount: initial.count - indexed.count, threshold: threshold,
-                                          validateAccess: { try validatePhotos(returnedIDs) }, validatePhotos: validatePhotos)
+                                          validateAccess: { try validatePhotos(returnedIDs) }, validatePhotos: validatePhotos,
+                                          validatePublicationEpoch: { try access.validateEpoch() })
     }
 }
 

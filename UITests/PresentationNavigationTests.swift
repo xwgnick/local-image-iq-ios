@@ -597,12 +597,17 @@ final class PresentationNavigationTests: XCTestCase {
         assertNoWorkOrPrompt()
         expectHittable(threshold)
         // This slider's accessibilityValue is COSINE (0.96), not a normalized
-        // thumb position (2/3). XCUI's normalized adjust interpreted the custom
+        // thumb position (46/49). XCUI's normalized adjust interpreted the custom
         // value incorrectly and stopped at 0.98 in the captured failure. Move
         // the real thumb from its known default tick to the end of its track.
-        threshold.coordinate(withNormalizedOffset: CGVector(dx: 2.0 / 3.0, dy: 0.5))
+        threshold.coordinate(withNormalizedOffset: CGVector(dx: 46.0 / 49.0, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: threshold.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)))
         expectThreshold(0.99)
+        assertNoWorkOrPrompt()
+        threshold.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: threshold.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)))
+        expectThreshold(0.50)
+        expectHittable(app.staticTexts["similar-cleanup-broad-threshold-note"])
         assertNoWorkOrPrompt()
         // Do not tap Start, prepare/confirm deletion, grant Photos access or add
         // a third review screenshot. This is navigation of the real empty sheet.

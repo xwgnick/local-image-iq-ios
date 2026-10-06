@@ -74,7 +74,7 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
 
     func testInvalidThresholdsFailBeforeServiceEntryWithoutLazyCorrection() async {
         let f = fixture()
-        let invalid: [Float] = [.nan, .infinity, -.infinity, Float(0.90).nextDown, Float(0.99).nextUp]
+        let invalid: [Float] = [.nan, .infinity, -.infinity, Float(0.50).nextDown, Float(0.99).nextUp]
         for threshold in invalid {
             f.state.threshold = threshold
             XCTAssertTrue(f.grouping.calls.thresholds.isEmpty)
