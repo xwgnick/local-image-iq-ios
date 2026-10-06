@@ -74,6 +74,7 @@ struct SearchResponse: Sendable {
 }
 
 protocol PhotoWorkServicing: Sendable {
+    func releaseSearchMemory() async
     func refresh() async throws -> LibrarySummary
     func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary
     func prepareForLaunch(timing: LaunchTimingRecorder?, progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary
@@ -82,12 +83,29 @@ protocol PhotoWorkServicing: Sendable {
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse
     func search(text: String, limit: Int, locationWeight: Float, filters: PhotoSearchFilters) async throws -> SearchResponse
     func search(text: String, originalText: String, limit: Int, locationWeight: Float, filters: PhotoSearchFilters, textSearchEnabled: Bool) async throws -> SearchResponse
+    func search(text: String, originalText: String, limit: Int, locationWeight: Float, filters: PhotoSearchFilters, textSearchEnabled: Bool, timing: SearchTimingRecorder?, referenceSearch: Bool) async throws -> SearchResponse
     func searchSimilar(photoID: String, limit: Int, filters: PhotoSearchFilters) async throws -> SearchResponse
+    func searchSimilar(photoID: String, limit: Int, filters: PhotoSearchFilters, timing: SearchTimingRecorder?, referenceSearch: Bool) async throws -> SearchResponse
     func checkPhoto(id: String, query: String, locationWeight: Float) async throws -> PhotoDiagnosticReport
     func clear() async throws -> LibrarySummary
 }
 
 extension PhotoWorkServicing {
+    func releaseSearchMemory() async { }
+    /// Requirements, rather than extension-only overloads, preserve dynamic
+    /// dispatch to production while leaving older injected services unchanged.
+    func search(text: String, originalText: String, limit: Int, locationWeight: Float,
+                filters: PhotoSearchFilters, textSearchEnabled: Bool,
+                timing: SearchTimingRecorder?, referenceSearch: Bool) async throws -> SearchResponse {
+        try await search(text: text, originalText: originalText, limit: limit,
+                         locationWeight: locationWeight, filters: filters, textSearchEnabled: textSearchEnabled)
+    }
+
+    func searchSimilar(photoID: String, limit: Int, filters: PhotoSearchFilters,
+                       timing: SearchTimingRecorder?, referenceSearch: Bool) async throws -> SearchResponse {
+        try await searchSimilar(photoID: photoID, limit: limit, filters: filters)
+    }
+
     func indexText(networkAllowed: Bool, progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
         try Task.checkCancellation()
         throw AppFailure.photo("此服务不支持照片文字索引。")
@@ -139,6 +157,13 @@ extension PhotoWorkServicing {
 actor PhotoIndexWorker: PhotoWorkServicing {
     static let indexingWorkerCount = 20
 
+    /// AppState calls only after its cancelled predecessor has drained. The
+    /// derived disk file survives; source/authorization checks still run on reuse.
+    func releaseSearchMemory() async {
+        residentSearchIndex = nil
+        await searchIndexCache?.invalidate()
+    }
+
     private let library: any PhotoLibraryIndexing
     private let encoders: any PhotoEncoding
     private let textRecognizer: (any PhotoTextRecognizing)?
@@ -150,6 +175,9 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     private let loadPlaceMetadata: @Sendable () -> PlacePackMetadata
     private let loadBoundaries: @Sendable () -> OfflinePlaceResolver
     private var placeVectors: [Data: [Float]] = [:]
+    // Created only by an explicit search, never by init/readiness/refresh.
+    private var searchIndexCache: SearchIndexCache?
+    private var residentSearchIndex: (signature: String, geoVersion: String, index: ResidentSearchIndex)?
 
     init(library: any PhotoLibraryIndexing, encoders: any PhotoEncoding = CoreMLEncoders(), directory: URL? = nil,
          resolver: OfflinePlaceResolver? = nil,
@@ -198,6 +226,50 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     private func reader() throws -> SQLitePhotoStore {
         let directory = try suppliedDirectory ?? SQLitePhotoStore.defaultDirectory(create: false)
         return SQLitePhotoStore(directory: directory, readOnly: true)
+    }
+
+    private func searchCache() throws -> SearchIndexCache {
+        if let searchIndexCache { return searchIndexCache }
+        let directory = try suppliedDirectory ?? SQLitePhotoStore.defaultDirectory(create: false)
+        let cache = SearchIndexCache(directory: directory)
+        searchIndexCache = cache
+        return cache
+    }
+
+    /// The optional cache sanitizes its own failures. Keep a source-loader error
+    /// separately so a SQLite/model/permission failure retains its original type
+    /// and is never treated as an optional-cache miss or retried silently.
+    private actor SearchRecordLoad {
+        private(set) var failure: Error?
+
+        func read(_ reader: SQLitePhotoStore, modelVersion: String, ids: Set<String>) async throws -> [CachedPhoto] {
+            do { return try await reader.searchRecords(modelVersion: modelVersion, accessibleIDs: ids) }
+            catch { failure = error; throw error }
+        }
+    }
+
+    private func searchRecords(modelVersion: String, accessibleIDs: Set<String>) async throws -> SearchIndexCacheResult {
+        let readonly = try reader()
+        let load = SearchRecordLoad()
+        do {
+            return try await searchCache().records(modelVersion: modelVersion, accessibleIDs: accessibleIDs) {
+                try await load.read(readonly, modelVersion: modelVersion, ids: accessibleIDs)
+            }
+        } catch {
+            try Task.checkCancellation()
+            if let sourceError = await load.failure { throw sourceError }
+            throw error
+        }
+    }
+
+    private static func searchPhotos(_ cached: [CachedPhoto], geographyVersion: String) -> [IndexedPhoto] {
+        cached.map { item in
+            let photo = item.photo
+            return IndexedPhoto(id: photo.id, modificationTime: photo.modificationTime,
+                                modelVersion: photo.modelVersion, imageEmbedding: photo.imageEmbedding,
+                                location: item.geographyVersion == geographyVersion ? photo.location : nil,
+                                creationTime: photo.creationTime)
+        }
     }
 
     private func textStorage(readOnly: Bool) throws -> SQLiteTextStore {
@@ -301,6 +373,10 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     }
 
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary {
+        try Task.checkCancellation()
+        residentSearchIndex = nil
+        if let searchIndexCache { await searchIndexCache.invalidate() }
+        try Task.checkCancellation()
         let snapshot = try await reconcile()
         guard library.canReadImages else { throw AppFailure.permission }
         let manifest = try await encoders.prepare()
@@ -705,15 +781,26 @@ actor PhotoIndexWorker: PhotoWorkServicing {
 
     func search(text: String, originalText: String, limit: Int, locationWeight: Float,
                 filters: PhotoSearchFilters, textSearchEnabled: Bool) async throws -> SearchResponse {
-        if !textSearchEnabled {
-            return try await search(text: text, limit: limit, locationWeight: locationWeight, filters: filters)
-        }
+        try await search(text: text, originalText: originalText, limit: limit, locationWeight: locationWeight,
+                         filters: filters, textSearchEnabled: textSearchEnabled, timing: nil, referenceSearch: false)
+    }
+
+    func search(text: String, originalText: String, limit: Int, locationWeight: Float,
+                filters: PhotoSearchFilters, textSearchEnabled: Bool,
+                timing: SearchTimingRecorder?, referenceSearch: Bool) async throws -> SearchResponse {
         return try await search(query: .text(text), limit: limit, locationWeight: locationWeight,
-                                filters: filters, originalText: originalText)
+                                filters: filters, originalText: textSearchEnabled ? originalText : nil,
+                                timing: timing, referenceSearch: referenceSearch)
     }
 
     func searchSimilar(photoID: String, limit: Int, filters: PhotoSearchFilters) async throws -> SearchResponse {
-        try await search(query: .seed(photoID), limit: limit, locationWeight: 0, filters: filters)
+        try await searchSimilar(photoID: photoID, limit: limit, filters: filters, timing: nil, referenceSearch: false)
+    }
+
+    func searchSimilar(photoID: String, limit: Int, filters: PhotoSearchFilters,
+                       timing: SearchTimingRecorder?, referenceSearch: Bool) async throws -> SearchResponse {
+        try await search(query: .seed(photoID), limit: limit, locationWeight: 0, filters: filters,
+                         timing: timing, referenceSearch: referenceSearch)
     }
 
     private enum SearchQuery {
@@ -721,15 +808,27 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     }
 
     private func search(query source: SearchQuery, limit: Int, locationWeight: Float,
-                        filters: PhotoSearchFilters, originalText: String? = nil) async throws -> SearchResponse {
+                        filters: PhotoSearchFilters, originalText: String? = nil,
+                        timing: SearchTimingRecorder? = nil, referenceSearch: Bool = false) async throws -> SearchResponse {
         try Task.checkCancellation()
         try filters.validate()
         guard filters.isEmpty || filtering != nil else { throw AppFailure.photo("此搜索服务不支持筛选。") }
         guard library.canReadImages else { throw AppFailure.permission }
-        let authorization = library.authorizationStatusRawValue
-        let generation = library.changeGeneration
-        let snapshot = try library.enumerateAuthorizedImages()
+        timing?.mark(.snapshot)
+        // Legacy libraries retain the complete old, disk-read-only path and its
+        // three enumerations. Reference mode never touches either derived cache.
+        let snapshotting = referenceSearch ? nil : library as? any PhotoSearchSnapshotting
+        let initialAuthorization = library.authorizationStatusRawValue
+        let initialGeneration = library.changeGeneration
+        let searchSnapshot = try snapshotting?.searchSnapshot()
+        let snapshot = try searchSnapshot?.revisions ?? library.enumerateAuthorizedImages()
+        // Capture may itself synchronize authorization and advance generation.
+        // Never bind a newly captured snapshot to the pre-capture epoch.
+        let authorization = searchSnapshot == nil ? initialAuthorization : library.authorizationStatusRawValue
+        let generation = searchSnapshot == nil ? initialGeneration : library.changeGeneration
+        timing?.setSnapshotReused(searchSnapshot?.reused ?? false)
         try Task.checkCancellation()
+        try searchSnapshot?.validate()
         let seedRevision: PhotoRevision?
         switch source {
         case .text: seedRevision = nil
@@ -740,23 +839,53 @@ actor PhotoIndexWorker: PhotoWorkServicing {
             }
             seedRevision = revision
         }
+        timing?.mark(.models)
         let manifest = try await encoders.prepare()
-        if originalText != nil { try validateSearchEpoch(authorization: authorization, generation: generation) }
+        if originalText != nil || searchSnapshot != nil { try validateSearchEpoch(authorization: authorization, generation: generation) }
         let metadata = geography()
         let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
         // Filter by current access BEFORE decoding/scoring/location centering.
         // Edited but still accessible photos intentionally retain their last
         // manually indexed content until the user updates the index.
-        let cached = try await reader().searchRecords(modelVersion: cacheVersion,
-                                                      accessibleIDs: Set(snapshot.map(\.id)))
-        if originalText != nil { try validateSearchEpoch(authorization: authorization, generation: generation) }
-        let photos = cached.map { item in
-            let photo = item.photo
-            return IndexedPhoto(id: photo.id, modificationTime: photo.modificationTime,
-                                modelVersion: photo.modelVersion, imageEmbedding: photo.imageEmbedding,
-                                location: item.geographyVersion == metadata.version ? photo.location : nil,
-                                creationTime: photo.creationTime)
+        timing?.mark(.indexRead)
+        let cached: [CachedPhoto]
+        let photos: [IndexedPhoto]
+        let scoringIndex: ResidentSearchIndex?
+        if searchSnapshot != nil {
+            let records = try await searchRecords(modelVersion: cacheVersion, accessibleIDs: Set(snapshot.map(\.id)))
+            try validateSearchEpoch(authorization: authorization, generation: generation)
+            try searchSnapshot?.validate()
+            cached = records.records
+            let reused: Bool
+            if let resident = residentSearchIndex, resident.signature == records.signature,
+               resident.geoVersion == metadata.version {
+                scoringIndex = resident.index
+                photos = resident.index.photos
+                reused = true
+            } else {
+                residentSearchIndex = nil
+                photos = Self.searchPhotos(cached, geographyVersion: metadata.version)
+                // SQLite intentionally accepts legacy dimensions. Unusual active
+                // shapes still go through Core at the old scoring boundary, so
+                // query/weight/limit and dimension-error precedence is unchanged.
+                // Stale geography has already been removed before this test.
+                if photos.allSatisfy({ $0.imageEmbedding.count == manifest.dimension &&
+                    ($0.location == nil || $0.location?.vector.count == manifest.dimension) }) {
+                    let index = try ResidentSearchIndex(photos: photos)
+                    residentSearchIndex = (records.signature, metadata.version, index)
+                    scoringIndex = index
+                } else { scoringIndex = nil }
+                reused = false
+            }
+            timing?.setIndex(source: records.source.rawValue, count: photos.count, matrixReused: reused)
+        } else {
+            cached = try await reader().searchRecords(modelVersion: cacheVersion, accessibleIDs: Set(snapshot.map(\.id)))
+            photos = Self.searchPhotos(cached, geographyVersion: metadata.version)
+            scoringIndex = nil
+            timing?.setIndex(source: referenceSearch ? "reference" : "sqlite", count: photos.count, matrixReused: false)
         }
+        if originalText != nil { try validateSearchEpoch(authorization: authorization, generation: generation) }
+        timing?.mark(.queryEncoding)
         let query: [Float]
         switch source {
         case .text(let text): query = try await encoders.text(text)
@@ -771,22 +900,37 @@ actor PhotoIndexWorker: PhotoWorkServicing {
             // satisfy the active manifest even when it is the only cached photo.
             try EmbeddingValidation.validateUnit(query, dimension: manifest.dimension)
         }
-        if originalText != nil { try validateSearchEpoch(authorization: authorization, generation: generation) }
+        if originalText != nil || searchSnapshot != nil { try validateSearchEpoch(authorization: authorization, generation: generation) }
         // Fetch display-only stored counts before the final access checks so no
         // suspended database operation can invalidate an already checked result.
+        timing?.mark(.counts)
         let counts = try await reader().storedCounts(modelVersion: cacheVersion, geographyVersion: metadata.version)
         try Task.checkCancellation()
-        try validateSearchAccess(snapshot, authorization: authorization, generation: generation)
+        timing?.mark(.accessCheck)
+        if let searchSnapshot {
+            try validateSearchEpoch(authorization: authorization, generation: generation)
+            try searchSnapshot.validate()
+            try validateSearchEpoch(authorization: authorization, generation: generation)
+        } else {
+            try validateSearchAccess(snapshot, authorization: authorization, generation: generation)
+        }
         // Core owns exact scoring, distinct-place mean, missing-place neutrality
         // and deterministic ties. Metadata must NOT shrink its reference library.
         // Preserve the old bounded top-K path when no output filtering is needed.
         // Pass zero/negative limits through Core, including its vector validation.
         let filterOutput = !filters.isEmpty || seedRevision != nil || originalText != nil
         let rankingLimit = filterOutput && limit > 0 ? Int.max : limit
-        var ranked = try VectorSearch.search(query: query, photos: photos, limit: rankingLimit, locationWeight: locationWeight)
+        timing?.mark(.scoring)
+        var ranked: [SearchHit]
+        if let scoringIndex {
+            ranked = try scoringIndex.search(query: query, limit: rankingLimit, locationWeight: locationWeight)
+        } else {
+            ranked = try VectorSearch.search(query: query, photos: photos, limit: rankingLimit, locationWeight: locationWeight)
+        }
         var textMatchIDs = Set<String>()
         var textCounts = TextIndexCounts()
         if let originalText {
+            timing?.mark(.textMatch)
             let currentRevisions = Dictionary(snapshot.map { ($0.id, $0.modificationTime) }, uniquingKeysWith: { _, last in last })
             let eligible = Dictionary(photos.filter { currentRevisions[$0.id] == $0.modificationTime }
                 .map { ($0.id, $0.modificationTime) }, uniquingKeysWith: { _, last in last })
@@ -795,12 +939,14 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                 try validateSearchEpoch(authorization: authorization, generation: generation)
                 let matches = try await textReader.matches(query: originalText, revisions: eligible)
                 try validateSearchEpoch(authorization: authorization, generation: generation)
+                timing?.mark(.counts)
                 textCounts = try await textReader.counts()
                 try validateSearchEpoch(authorization: authorization, generation: generation)
                 await textReader.close()
                 try validateSearchEpoch(authorization: authorization, generation: generation)
                 // Both full rankings use the same authorized active-image universe.
                 // Fusion keeps each original visual diagnostic score unchanged.
+                timing?.mark(.textMatch)
                 ranked = PhotoTextRanking.fuse(visual: ranked, text: matches)
                 textMatchIDs = Set(matches.map(\.id))
             } catch {
@@ -808,6 +954,7 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                 throw error // Opt-in storage errors are explicit, never hidden fallback.
             }
         }
+        timing?.mark(.filtering)
         let matchingIDs: Set<String>?
         if !filters.isEmpty, let filtering {
             matchingIDs = try filtering.matchingPhotoIDs(filters: filters, snapshot: snapshot)
@@ -822,7 +969,15 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         try Task.checkCancellation()
         // Also catch edits/access changes whose PhotoKit observer callback has not
         // yet reached MainActor. Never publish scores centered on a stale library.
-        try validateSearchAccess(snapshot, authorization: authorization, generation: generation)
+        timing?.mark(.finalAccess)
+        do {
+            // ALWAYS a fresh full enumeration, including optimized queries and
+            // unreturned rows that contribute to the distinct-place center.
+            try validateSearchAccess(snapshot, authorization: authorization, generation: generation)
+        } catch {
+            snapshotting?.invalidateSearchSnapshot()
+            throw error
+        }
         let library = self.library
         let returnedIDs = Set(hits.map(\.id))
         // The seed may be outside the filter and is always excluded from hits,
@@ -830,21 +985,34 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         let returnedRevisions = Dictionary(snapshot.filter { returnedIDs.contains($0.id) || $0.id == seedRevision?.id }
             .map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         let validatePage: @Sendable ([String]) throws -> Void = { ids in
+            try Task.checkCancellation()
             guard library.canReadImages else { throw AppFailure.permission }
             let validationIDs = ids + (seedRevision.map { [$0.id] } ?? [])
             guard library.authorizationStatusRawValue == authorization,
                   library.changeGeneration == generation,
-                  ids.allSatisfy({ returnedIDs.contains($0) }),
-                  validationIDs.allSatisfy({ id in
+                  ids.allSatisfy({ returnedIDs.contains($0) }) else {
+                throw AppFailure.photo("Photo access changed before results could be displayed. Search again.")
+            }
+            if let searchSnapshot {
+                // One fresh selected-ID batch, including the similarity seed;
+                // never N separate PhotoKit fetches on MainActor publication.
+                try searchSnapshot.validatePhotos(validationIDs)
+            } else {
+                guard validationIDs.allSatisfy({ id in
                       guard let expected = returnedRevisions[id] else { return false }
                       return library.currentRevision(id: id) == expected
-                  }),
-                  library.canReadImages, library.authorizationStatusRawValue == authorization,
+                }) else {
+                    throw AppFailure.photo("Photo access changed before results could be displayed. Search again.")
+                }
+            }
+            guard library.canReadImages, library.authorizationStatusRawValue == authorization,
                   library.changeGeneration == generation else {
                 throw AppFailure.photo("Photo access changed before results could be displayed. Search again.")
             }
+            try Task.checkCancellation()
         }
         try Task.checkCancellation()
+        timing?.mark(.publication)
         return SearchResponse(summary: LibrarySummary(authorizedCount: snapshot.count, authorizedCountKnown: true,
                                                        indexedCount: counts.indexed, locatedCount: counts.located,
                                                        modelVersion: cacheVersion, placesDescription: metadata.coverageDescription,
@@ -856,10 +1024,9 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                               textSearchUsed: !textMatchIDs.intersection(returnedIDs).isEmpty)
     }
 
-    /// Cheap checks at additional OCR suspension boundaries. Keep the original
-    /// initial/pre-scoring/final full snapshots rather than enumerating the whole
-    /// library for every optional database await. The final full comparison also
-    /// catches edits whose PhotoKit notification has not yet arrived.
+    /// Cheap checks at suspension boundaries. Legacy/reference searches retain
+    /// all three full snapshots; snapshot-capable searches still make a fresh
+    /// final full comparison, including edits whose notification has not arrived.
     private func validateSearchEpoch(authorization: Int?, generation: UInt64?) throws {
         try Task.checkCancellation()
         guard library.canReadImages else { throw AppFailure.permission }
@@ -1000,6 +1167,16 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     }
 
     func clear() async throws -> LibrarySummary {
+        try Task.checkCancellation()
+        residentSearchIndex = nil
+        // Also remove a previous worker's derived file. A cache-only failure must
+        // not prevent the user's image/OCR clear, but cancellation still aborts.
+        do { try await searchCache().clear() }
+        catch {
+            try Task.checkCancellation()
+            if PhotoImageRequestInfo.isCancellation(error) { throw CancellationError() }
+        }
+        try Task.checkCancellation()
         try await storage().clear()
         try Task.checkCancellation()
         let textStore = try textStorage(readOnly: false)

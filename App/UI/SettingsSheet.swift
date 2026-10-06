@@ -205,6 +205,15 @@ struct SettingsSheet: View {
         Section {
             DisclosureGroup(isExpanded: $diagnosticsExpanded) {
                 NavigationLink {
+                    SearchTimingView(state: state)
+                } label: { Text("搜索耗时") }
+                .accessibilityIdentifier("debug-search-timing")
+                Toggle("使用原搜索作对照", isOn: $state.referenceSearchEnabled)
+                    .accessibilityIdentifier("reference-search-enabled")
+                    .disabled(state.isBusy)
+                Text("仅用于测速：开启后走原读取和评分路径，下次显式搜索生效。关闭调试工具会恢复加速搜索，不改变模型、照片范围或清晰度。")
+                    .font(.caption).foregroundStyle(IQStyle.secondary)
+                NavigationLink {
                     LaunchTimingView(state: state)
                 } label: {
                     Text("启动耗时")

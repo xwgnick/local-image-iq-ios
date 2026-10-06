@@ -34,12 +34,20 @@ final class AppState: ObservableObject {
     @Published var debugToolsEnabled = false {
         didSet {
             guard oldValue != debugToolsEnabled, !debugToolsEnabled else { return }
+            referenceSearchEnabled = false
             dismissPhotoCheck()
             debugPreviewState?.cancelAndClear()
             debugPreviewState = nil
         }
     }
     private weak var debugPreviewState: LocalPreviewComparisonState?
+
+    /// Diagnostic A/B mode only; default accelerated on every process launch.
+    @Published var referenceSearchEnabled = false {
+        didSet { if oldValue != referenceSearchEnabled { searchSettingsChanged() } }
+    }
+    @Published private(set) var searchTimingReport: SearchTimingReport?
+    private var searchTiming: SearchTimingRecorder?
 
     @Published private(set) var authorization = PhotoLibraryClient.authorization
     /// Sheet-local read sessions observe Photos changes even if a search result
@@ -304,20 +312,35 @@ final class AppState: ObservableObject {
         // Immediately invalidate visible/search state before waiting for an old job.
         photoLibraryEpoch = UUID()
         thumbnails.clear()
+        // Startup has no resident vectors yet and must not be restarted merely
+        // because authorization changes during model preparation.
+        if activity != .starting { drainAndReleaseSearchMemory() }
         refresh()
     }
 
     func enterBackground() {
         isForeground = false
+        library.invalidateSearchSnapshot()
         translationAvailabilityID = UUID()
         if launchWasRequested, activity == .starting {
             finishLaunchTiming(launchTiming, outcome: .interrupted)
             launchPhase = .pending
         }
-        operationTask?.cancel()
+        drainAndReleaseSearchMemory()
         invalidateDisplayedPhotos()
         thumbnails.clear()
         status = "Foreground work paused. Return to the app, then index to resume."
+    }
+
+    private func drainAndReleaseSearchMemory() {
+        let predecessor = operationTask
+        predecessor?.cancel()
+        // New reads join this tail; cancellation of the tail does not skip the
+        // cleanup. No withdrawn-scope resident vectors survive an idle refresh.
+        operationTask = Task { [worker] in
+            await predecessor?.value
+            await worker.releaseSearchMemory()
+        }
     }
 
     func enterForeground() {
@@ -325,6 +348,7 @@ final class AppState: ObservableObject {
         // without backgrounding. Do not cancel preparation on that transition.
         guard !isForeground else { return }
         isForeground = true
+        library.invalidateSearchSnapshot()
         if launchWasRequested, launchPhase != .ready {
             if launchPhase == .pending { beginLaunch(kind: .foreground) }
             return
@@ -398,14 +422,18 @@ final class AppState: ObservableObject {
         let translate = chineseSearchEnabled && !useOriginal
         let includeText = textSearchEnabled
         invalidateDisplayedPhotos()
-        schedule(.searching) { [worker, queryTranslator] _ in
+        let reference = referenceSearchEnabled
+        let measurement = beginSearchTiming(reference: reference)
+        schedule(.searching, searchMeasurement: measurement) { [worker, queryTranslator] _ in
+            measurement.mark(.translation)
             let resolved = try await Self.resolve(text, translate: translate, using: queryTranslator)
             try Task.checkCancellation()
             // Rank the complete accessible snapshot once. Subsequent pages only
             // expose a prefix; they never rerun translation, encoding or centering.
             let response = try await worker.search(text: resolved.effective, originalText: resolved.original,
                                                   limit: Int.max, locationWeight: weight, filters: filters,
-                                                  textSearchEnabled: includeText)
+                                                  textSearchEnabled: includeText, timing: measurement,
+                                                  referenceSearch: reference)
             try Task.checkCancellation()
             return .search(response, resolved, nil)
         }
@@ -416,8 +444,11 @@ final class AppState: ObservableObject {
               results.contains(where: { $0.id == photoID }) else { return }
         let filters = searchFilters
         invalidateDisplayedPhotos()
-        schedule(.searching) { [worker] _ in
-            let response = try await worker.searchSimilar(photoID: photoID, limit: Int.max, filters: filters)
+        let reference = referenceSearchEnabled
+        let measurement = beginSearchTiming(reference: reference)
+        schedule(.searching, searchMeasurement: measurement) { [worker] _ in
+            let response = try await worker.searchSimilar(photoID: photoID, limit: Int.max, filters: filters,
+                                                          timing: measurement, referenceSearch: reference)
             try Task.checkCancellation()
             let description = SearchQueryResolution(original: "相似照片", effective: "相似照片",
                                                     translated: false, notice: nil)
@@ -436,8 +467,11 @@ final class AppState: ObservableObject {
         searchFilters = filters
         if canRepeat, let seed, isForeground, canRead, modelsReady {
             invalidateDisplayedPhotos()
-            schedule(.searching) { [worker] _ in
-                let response = try await worker.searchSimilar(photoID: seed, limit: Int.max, filters: filters)
+            let reference = referenceSearchEnabled
+            let measurement = beginSearchTiming(reference: reference)
+            schedule(.searching, searchMeasurement: measurement) { [worker] _ in
+                let response = try await worker.searchSimilar(photoID: seed, limit: Int.max, filters: filters,
+                                                              timing: measurement, referenceSearch: reference)
                 return .search(response, SearchQueryResolution(original: "相似照片", effective: "相似照片",
                                                                translated: false, notice: nil), seed)
             }
@@ -445,10 +479,13 @@ final class AppState: ObservableObject {
             let weight = Float(locationWeight)
             let includeText = textSearchEnabled
             invalidateDisplayedPhotos()
-            schedule(.searching) { [worker] _ in
+            let reference = referenceSearchEnabled
+            let measurement = beginSearchTiming(reference: reference)
+            schedule(.searching, searchMeasurement: measurement) { [worker] _ in
                 let response = try await worker.search(text: resolution.effective, originalText: resolution.original,
                                                        limit: Int.max, locationWeight: weight, filters: filters,
-                                                       textSearchEnabled: includeText)
+                                                       textSearchEnabled: includeText, timing: measurement,
+                                                       referenceSearch: reference)
                 return .search(response, resolution, nil)
             }
         }
@@ -616,6 +653,10 @@ final class AppState: ObservableObject {
     }
 
     private func invalidateDisplayedPhotos() {
+        if let searchTiming {
+            searchTimingReport = searchTiming.finish(.cancelled)
+            self.searchTiming = nil
+        }
         dismissPhotoCheck()
         textSearchUsed = false
         textMatchedIDs.removeAll()
@@ -644,7 +685,24 @@ final class AppState: ObservableObject {
         case translationPrepared(QueryTranslationLanguage, QueryTranslationAvailability)
     }
 
+    private func beginSearchTiming(reference: Bool) -> SearchTimingRecorder {
+        let recorder = SearchTimingRecorder(mode: reference ? "reference" : "accelerated")
+        searchTiming = recorder
+        searchTimingReport = nil
+        return recorder
+    }
+
+    /// First usable result thumbnail, not a promise of original/HQ quality or
+    /// exact display scan-out time. A stale cell cannot enrich another search.
+    func resultThumbnailLoaded(sessionID: UUID, photoID: String) {
+        guard isForeground, resultSessionID == sessionID,
+              results.contains(where: { $0.id == photoID }), let searchTiming,
+              let report = searchTiming.firstImage() else { return }
+        searchTimingReport = report
+    }
+
     private func schedule(_ activity: Activity, timing: LaunchTimingRecorder? = nil,
+                          searchMeasurement: SearchTimingRecorder? = nil,
                           operation: @escaping @MainActor (UUID) async throws -> Outcome) {
         let predecessor = operationTask
         predecessor?.cancel()
@@ -679,6 +737,7 @@ final class AppState: ObservableObject {
                     self.finishLaunchTiming(timing, outcome: summary.modelIssue == nil ? .ready : .failed)
                 case .summary(let summary, let message): self.summary = summary; self.status = message
                 case .search(let response, let query, let seed):
+                    searchMeasurement?.mark(.publication)
                     self.authorization = self.authorizationStatus()
                     guard self.canRead else { throw AppFailure.permission }
                     let pageSize = max(1, self.resultLimit)
@@ -706,6 +765,9 @@ final class AppState: ObservableObject {
                     self.status = response.textSearchUsed
                         ? "\(response.hits.count) results · visual and OCR ranks combined; displayed scores remain visual only."
                         : "\(response.hits.count) results · exact local scores, not probabilities."
+                    if self.searchTiming?.id == searchMeasurement?.id, let searchMeasurement {
+                        self.searchTimingReport = searchMeasurement.finish(.ready)
+                    }
                 case .translationPrepared(let language, let availability):
                     if self.translationLanguage == language {
                         self.translationAvailability = availability
@@ -720,7 +782,12 @@ final class AppState: ObservableObject {
                 }
                 self.activity = nil
             } catch {
+                let searchReport = searchMeasurement?.finish(
+                    error is CancellationError || Task.isCancelled ? .cancelled : .failed)
                 guard let self, self.operationID == token else { return }
+                if self.searchTiming?.id == searchMeasurement?.id, let searchReport {
+                    self.searchTimingReport = searchReport
+                }
                 self.activity = nil
                 if activity == .starting {
                     self.finishLaunchTiming(timing, outcome: !self.isForeground || error is CancellationError || Task.isCancelled ? .interrupted : .failed)

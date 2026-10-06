@@ -84,41 +84,50 @@ final class PhotoRequestGate<Value>: @unchecked Sendable {
     }
 }
 
-/// Only the change callback is mutable, protected by callbackLock. PhotoKit's
-/// thread-safe manager is shared, while PHAsset instances stay within each call.
+/// The callback uses callbackLock; the independent search-cache lock owns its
+/// generation, authorization, registration and retained immutable fetch result.
+/// PhotoKit's thread-safe manager is shared; individual assets remain call-local.
 final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLibraryIndexing, PhotoThumbnailProviding, @unchecked Sendable {
     private let manager = PHImageManager.default()
     private let callbackLock = NSLock()
     private var changeHandler: (@Sendable () -> Void)?
-    private var observing = false
-    private var generation: UInt64 = 0
+    private let searchCache = PhotoSearchSnapshotCache<SearchFetch>()
 
-    var changeGeneration: UInt64? {
-        callbackLock.lock()
-        defer { callbackLock.unlock() }
-        return generation
+    /// PHFetchResult is an immutable PhotoKit snapshot, shared for enumeration
+    /// and changeDetails only. Its replacement is serialized by searchCache.
+    private struct SearchFetch: @unchecked Sendable {
+        let result: PHFetchResult<PHAsset>
     }
+
+    var changeGeneration: UInt64? { searchCache.changeGeneration }
 
     override init() {
         super.init()
     }
 
     deinit {
-        if observing { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
+        if searchCache.isObserving { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
     }
 
     /// Registering before authorization can trigger an implicit system prompt.
     /// Refresh runs after the user's explicit choice and on foreground/access changes.
     @MainActor
     func synchronizeObservation() {
-        let shouldObserve = Self.canRead
-        callbackLock.lock()
-        let changed = observing != shouldObserve
-        observing = shouldObserve
-        callbackLock.unlock()
-        guard changed else { return }
-        if shouldObserve { PHPhotoLibrary.shared().register(self) }
-        else { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
+        let access = Self.searchAccess
+        let wasObserving = searchCache.isObserving
+        // Invalidate full/limited transitions even when registration stays true.
+        // Do not invalidate an ordinary refresh with unchanged authorization.
+        searchCache.synchronizeObservation(isRegistered: wasObserving && access.canRead, access: access)
+        guard wasObserving != access.canRead else { return }
+        if access.canRead {
+            // Warm reuse is allowed only AFTER actual registration completes.
+            PHPhotoLibrary.shared().register(self)
+            let current = Self.searchAccess
+            if !current.canRead { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
+            searchCache.synchronizeObservation(isRegistered: current.canRead, access: current)
+        } else {
+            PHPhotoLibrary.shared().unregisterChangeObserver(self)
+        }
     }
 
     func observe(_ handler: @escaping @Sendable () -> Void) {
@@ -128,8 +137,14 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
     }
 
     func photoLibraryDidChange(_ changeInstance: PHChange) {
+        // Synchronous invalidation precedes notification, even for unrelated
+        // changes. Rebuild sorted revisions lazily from the updated fetch result,
+        // not a new whole-library fetch. No claim of per-row incremental work.
+        searchCache.libraryDidChange { source in
+            guard let details = changeInstance.changeDetails(for: source.result) else { return source }
+            return SearchFetch(result: details.fetchResultAfterChanges)
+        }
         callbackLock.lock()
-        generation &+= 1
         let callback = changeHandler
         callbackLock.unlock()
         callback?()
@@ -465,6 +480,52 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
 
     private static func flag(_ key: String, _ info: [AnyHashable: Any]?) -> Bool {
         (info?[key] as? NSNumber)?.boolValue ?? false
+    }
+}
+
+/// Production metadata reuse. Worker still performs a fresh full final check,
+/// and AppState invalidates the retained source on background/foreground. Fresh
+/// batch page checks remain independent of observer notification delivery.
+extension PhotoLibraryClient: PhotoSearchSnapshotting {
+    func searchSnapshot() throws -> PhotoSearchSnapshot {
+        try searchCache.capture(readAccess: { Self.searchAccess }, loadSource: {
+            SearchFetch(result: PHAsset.fetchAssets(with: .image, options: Self.searchFetchOptions()))
+        }, loadRevisions: { source in
+            try Self.searchRevisions(in: source.result)
+        }, loadPhotos: { ids in
+            // One fresh selected-ID query, including hidden and burst images just
+            // like the full capture. Exact IDs and all revision fields are checked
+            // by the core, between actual authorization/generation checks.
+            let fetched = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: Self.searchFetchOptions())
+            return try Self.searchRevisions(in: fetched)
+        })
+    }
+
+    func invalidateSearchSnapshot() { searchCache.invalidate() }
+
+    private static var searchAccess: PhotoSearchSnapshotCache<SearchFetch>.Access {
+        let status = authorization
+        return .init(authorization: status.rawValue, canRead: status == .authorized || status == .limited)
+    }
+
+    private static func searchFetchOptions() -> PHFetchOptions {
+        let options = PHFetchOptions()
+        options.includeHiddenAssets = true
+        options.includeAllBurstAssets = true
+        return options
+    }
+
+    private static func searchRevisions(in fetched: PHFetchResult<PHAsset>) throws -> [PhotoRevision] {
+        try Task.checkCancellation()
+        var revisions: [PhotoRevision] = []
+        var interrupted = false
+        fetched.enumerateObjects { asset, _, stop in
+            if Task.isCancelled { interrupted = true; stop.pointee = true; return }
+            if asset.mediaType == .image { revisions.append(PhotoRevision(asset: asset)) }
+        }
+        guard !interrupted else { throw CancellationError() }
+        try Task.checkCancellation()
+        return revisions
     }
 }
 

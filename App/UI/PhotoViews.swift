@@ -10,6 +10,7 @@ struct PhotoThumbnailView: View {
     let cache: PhotoThumbnailCache
     let networkAllowed: Bool
     var showDiagnostics = false
+    var onLoaded: (@MainActor () -> Void)? = nil
     @Environment(\.displayScale) private var displayScale
 
     private struct Request: Hashable {
@@ -80,6 +81,7 @@ struct PhotoThumbnailView: View {
                     guard resolvedRequest == requested else { return }
                     image = loaded.result.image
                     diagnostic = loaded
+                    onLoaded?()
                 } catch {
                     guard !Task.isCancelled, !(error is CancellationError), resolvedRequest == requested else { return }
                     issue = PhotoPreviewIssue(error: error)

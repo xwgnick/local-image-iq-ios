@@ -428,8 +428,12 @@ struct ContentView: View {
                 if state.isSelectingResults { state.toggleResultSelection(id) }
                 else { state.selection = AppState.Selection(id: id) }
             }, selectionMode: state.isSelectingResults, selectedIDs: state.selectedResultIDs) { photo in
+                let sessionID = state.resultSessionID
                 PhotoThumbnailView(photo: photo, cache: state.thumbnails, networkAllowed: state.allowICloudDownload,
-                                   showDiagnostics: state.debugToolsEnabled)
+                                   showDiagnostics: state.debugToolsEnabled, onLoaded: {
+                    if let sessionID { state.resultThumbnailLoaded(sessionID: sessionID, photoID: photo.id) }
+                })
+                .id(sessionID)
             }
         } else if state.completedQuery != nil {
             emptyCard(symbol: "magnifyingglass", title: "暂时没有可显示的照片",
