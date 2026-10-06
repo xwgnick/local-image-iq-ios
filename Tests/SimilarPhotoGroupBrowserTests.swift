@@ -85,7 +85,8 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         XCTAssertEqual(route.photoID, wanted)
         XCTAssertEqual(f.browser.zoomFlight?.photoID, wanted)
         XCTAssertEqual(f.browser.zoomFlight?.source, source)
-        XCTAssertEqual(f.browser.zoomFlight?.image.size, tile.bounds.size)
+        let flightImage = try XCTUnwrap(f.browser.zoomFlight?.image)
+        assertCapturePixels(flightImage, bounds: tile.bounds, scale: host.window.screen.scale)
         XCTAssertTrue(f.cleanup.selectedIDs.isEmpty, "Opening a cover is never selection or deletion")
         XCTAssertNil(f.cleanup.pendingDeletion)
 
@@ -191,11 +192,52 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         XCTAssertEqual(activations, 6)
     }
 
+    func testReferenceReadinessRejectsLateCallbackForReboundSamePhotoAndDismantledControl() {
+        let control = SimilarPhotoPreviewControl()
+        control.photoID = "TEST-same-photo"
+        let old = SimilarPhotoPreviewReadiness()
+        control.bindReadiness(old, fallback: true)
+        XCTAssertFalse(control.canCapture, "A production relay overrides the synthetic fallback")
+        old.didLoad()
+        XCTAssertTrue(control.canCapture)
+        XCTAssertEqual(old.loadedCallbackCount, 1)
+
+        // Exercise the bridge even if the real loader rejects cancellation
+        // before onLoaded: a reused control with the SAME photo ID must reset.
+        let current = SimilarPhotoPreviewReadiness()
+        control.bindReadiness(current, fallback: true)
+        XCTAssertFalse(control.canCapture)
+        old.didLoad()
+        XCTAssertEqual(old.loadedCallbackCount, 2)
+        XCTAssertTrue(control.readiness === current)
+        XCTAssertEqual(current.loadedCallbackCount, 0)
+        XCTAssertFalse(current.isReady)
+        XCTAssertFalse(control.canCapture, "The retired request cannot enable its replacement")
+
+        current.didLoad()
+        control.bindReadiness(current, fallback: false)
+        XCTAssertTrue(control.canCapture, "Selection reconfiguration retains this request's readiness")
+        XCTAssertEqual(current.loadedCallbackCount, 1)
+        SimilarPhotoPreviewTile.dismantleUIView(control, coordinator: ())
+        current.didLoad()
+        XCTAssertEqual(current.loadedCallbackCount, 2)
+        XCTAssertNil(control.readiness)
+        XCTAssertFalse(control.canCapture, "A callback after dismantling must be inert for UIKit")
+
+        let early = SimilarPhotoPreviewReadiness()
+        early.didLoad()
+        control.bindReadiness(early, fallback: false)
+        XCTAssertTrue(control.canCapture, "Binding replays a callback already delivered to this request")
+        XCTAssertTrue(control.readiness === early)
+        XCTAssertEqual(early.loadedCallbackCount, 1)
+    }
+
     func testRealThumbnailReadinessResetsForEveryRequestIdentityWithoutExtraPixelRequests() async throws {
         let f = BrowserPreviewFixture(requestCount: 8)
         addTeardownBlock { @MainActor in for gate in f.gates { await gate.release(false) } }
         let host = try await mount(UIHostingController(rootView: BrowserPreviewRoot(fixture: f)))
         defer { host.close() }
+        var previousReadiness: SimilarPhotoPreviewReadiness?
         for step in 0..<8 {
             switch step {
             case 1: f.size = CGSize(width: 96, height: 72) // Rotation/layout changes.
@@ -213,6 +255,10 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
             try await require(f.started[step])
             try await settle(host)
             let loading = try previewControl(host)
+            let readiness = try XCTUnwrap(loading.readiness)
+            XCTAssertFalse(readiness === previousReadiness, "Generation \(step) needs its own reference relay")
+            previousReadiness = readiness
+            XCTAssertEqual(readiness.loadedCallbackCount, 0)
             XCTAssertFalse(loading.canCapture, "Generation \(step) must not inherit previous readiness")
             XCTAssertNil(loading.capture())
             loading.sendActions(for: .touchUpInside)
@@ -224,21 +270,30 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
             if step == 7 {
                 try await settle(host)
                 let failed = try previewControl(host)
+                XCTAssertTrue(failed.readiness === readiness)
+                XCTAssertEqual(readiness.loadedCallbackCount, 0)
                 XCTAssertFalse(failed.canCapture, "An error never reports onLoaded")
                 XCTAssertNil(failed.capture())
                 XCTAssertTrue(failed.accessibilityActivate())
                 XCTAssertEqual(f.browser.detailRoute?.photoID, f.photo.id)
                 XCTAssertNil(f.browser.zoomFlight)
             } else {
-                let loaded = try await readyPreviewControl(host)
+                let loaded = try await readyPreviewControl(host, fixture: f)
+                XCTAssertTrue(loaded.readiness === readiness)
+                XCTAssertEqual(readiness.loadedCallbackCount, 1)
                 let snapshot = try XCTUnwrap(loaded.capture())
                 XCTAssertEqual(snapshot.photoID, f.photo.id)
-                XCTAssertEqual(snapshot.image.size, f.size)
+                XCTAssertEqual(loaded.bounds.size, f.size)
+                XCTAssertEqual(snapshot.frame, loaded.convert(loaded.bounds, to: host.window))
+                assertCapturePixels(snapshot.image, bounds: loaded.bounds, scale: host.window.screen.scale)
                 XCTAssertTrue(hasRedCenter(snapshot.image), "Capture must contain the loaded photo, not a spinner")
                 // Selection reconfiguration must retain the loaded child/task.
                 f.selected.toggle()
                 try await settle(host)
-                XCTAssertTrue(try previewControl(host).canCapture)
+                let selected = try previewControl(host)
+                XCTAssertTrue(selected.readiness === readiness)
+                XCTAssertTrue(selected.canCapture)
+                XCTAssertEqual(readiness.loadedCallbackCount, 1, "Selection must not reload the thumbnail")
             }
             XCTAssertEqual(f.provider.plans.count, step + 1, "Only the visible thumbnail requests pixels")
             let plan = try XCTUnwrap(f.provider.plans.last)
@@ -254,6 +309,7 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         let host = try await mount(UIHostingController(rootView: BrowserPreviewRoot(fixture: f)))
         defer { host.close() }
         try await require(f.started[0])
+        let oldReadiness = try XCTUnwrap(try previewControl(host).readiness)
         f.photo = f.group.photos[176]
         try await require(f.started[1])
         // Deliberately return after cancellation, like a late PhotoKit callback.
@@ -261,6 +317,9 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         try await require(f.returned[0])
         try await settle(host)
         let pending = try previewControl(host)
+        let currentReadiness = try XCTUnwrap(pending.readiness)
+        XCTAssertFalse(currentReadiness === oldReadiness)
+        XCTAssertEqual(currentReadiness.loadedCallbackCount, 0)
         XCTAssertEqual(pending.photoID, f.photo.id)
         XCTAssertFalse(pending.canCapture)
         XCTAssertNil(pending.capture())
@@ -269,7 +328,9 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         XCTAssertNil(f.browser.zoomFlight)
         await f.gates[1].release(true)
         try await require(f.returned[1])
-        let loaded = try await readyPreviewControl(host)
+        let loaded = try await readyPreviewControl(host, fixture: f)
+        XCTAssertTrue(loaded.readiness === currentReadiness)
+        XCTAssertEqual(currentReadiness.loadedCallbackCount, 1)
         XCTAssertTrue(hasRedCenter(try XCTUnwrap(loaded.capture()).image))
         loaded.sendActions(for: .touchUpInside)
         XCTAssertEqual(f.browser.zoomFlight?.photoID, f.photo.id)
@@ -582,7 +643,7 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         try XCTUnwrap(descendants(host.controller.view, SimilarPhotoPreviewControl.self).first)
     }
 
-    private func readyPreviewControl(_ host: BrowserHost) async throws -> SimilarPhotoPreviewControl {
+    private func readyPreviewControl(_ host: BrowserHost, fixture: BrowserPreviewFixture) async throws -> SimilarPhotoPreviewControl {
         let inspect: @MainActor () -> Bool = {
             self.descendants(host.controller.view, SimilarPhotoPreviewControl.self).first?.canCapture == true
         }
@@ -590,10 +651,56 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
             if Thread.isMainThread { return MainActor.assumeIsolated { inspect() } }
             return DispatchQueue.main.sync { inspect() }
         }
-        try await require(XCTNSPredicateExpectation(predicate: predicate, object: nil))
+        try await require(XCTNSPredicateExpectation(predicate: predicate, object: nil),
+                          diagnostics: { self.previewReadinessDiagnostics(host, fixture: fixture) })
         // Do not pre-capture/warm the image: the caller's first capture must
         // include the pending draw after the real onLoaded callback.
         return try previewControl(host)
+    }
+
+    private func previewReadinessDiagnostics(_ host: BrowserHost, fixture: BrowserPreviewFixture) -> String {
+        let controls = descendants(host.controller.view, SimilarPhotoPreviewControl.self)
+        let details = controls.enumerated().map { index, control in
+            let relay = control.readiness.map {
+                "identity=\(ObjectIdentifier($0)) ready=\($0.isReady) loadedCallbackCount=\($0.loadedCallbackCount)"
+            } ?? "nil (loaded callback count unavailable)"
+            let views = descendants(control, UIView.self).map { view in
+                let image: String
+                if let imageView = view as? UIImageView {
+                    image = imageView.image.map { "imageSize=\($0.size) imageScale=\($0.scale)" } ?? "image=nil"
+                } else {
+                    image = "image=n/a (SwiftUI-rendered pixels are not exposed as UIImageView)"
+                }
+                return "\(type(of: view)) bounds=\(view.bounds) hidden=\(view.isHidden) alpha=\(view.alpha) \(image)"
+            }.joined(separator: "\n    ")
+            return "control[\(index)] identity=\(ObjectIdentifier(control)) photoID=\(control.photoID) "
+                + "identifier=\(control.accessibilityIdentifier ?? "nil") canCapture=\(control.canCapture) "
+                + "enabled=\(control.isEnabled) bounds=\(control.bounds) windowAttached=\(control.window != nil) "
+                + "subviewCount=\(control.subviews.count) relay={\(relay)}\n    \(views)"
+        }.joined(separator: "\n")
+        let plans = fixture.provider.plans
+        let requests = plans.enumerated().map { index, plan in
+            "[\(index)] id=\(plan.id) targetSize=\(plan.targetSize) networkAllowed=\(plan.networkAllowed)"
+        }.joined(separator: "; ")
+        // No snapshot here: diagnostics must not warm or replace the first
+        // pixel capture. These IDs and plans belong only to synthetic fixtures.
+        return "expected photoID=\(fixture.photo.id) storedRevision=\(fixture.photo.modificationTime) "
+            + "creationTime=\(String(describing: fixture.photo.creationTime)) cache=\(ObjectIdentifier(fixture.cache)) "
+            + "size=\(fixture.size) requestScale=\(fixture.scale) screenScale=\(host.window.screen.scale) "
+            + "networkAllowed=\(fixture.networkAllowed) controls=\(controls.count)\n\(details)\n"
+            + "providerPlans(\(plans.count)): \(requests)"
+    }
+
+    private func assertCapturePixels(_ image: UIImage, bounds: CGRect, scale: CGFloat,
+                                     file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(image.scale, scale, file: file, line: line)
+        guard let pixels = image.cgImage else {
+            XCTFail("Capture has no CGImage backing", file: file, line: line); return
+        }
+        // UIKit rasterizes at the actual window scale; its point-size division
+        // need not be bit-identical to SwiftUI's fractional layout arithmetic.
+        XCTAssertEqual(pixels.width, Int((bounds.width * scale).rounded()), file: file, line: line)
+        XCTAssertEqual(pixels.height, Int((bounds.height * scale).rounded()), file: file, line: line)
     }
 
     private func hasRedCenter(_ image: UIImage) -> Bool {
@@ -709,9 +816,10 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         try await require(laidOut)
     }
 
-    private func require(_ expectation: XCTestExpectation) async throws {
+    private func require(_ expectation: XCTestExpectation, diagnostics: (() -> String)? = nil) async throws {
         guard await XCTWaiter.fulfillment(of: [expectation], timeout: 5) == .completed else {
-            XCTFail("Missing native event: \(expectation.expectationDescription)")
+            let details = diagnostics.map { "\n\($0())" } ?? ""
+            XCTFail("Missing native event: \(expectation.expectationDescription)\(details)")
             throw BrowserTestFailure.layout
         }
     }

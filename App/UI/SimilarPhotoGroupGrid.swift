@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 import ImageIQCore
 
 /// Geometry is independent of Dynamic Type and member count. Only text outside
@@ -77,8 +78,26 @@ struct SimilarPhotoThumbnailCapture {
     let frame: CGRect
 }
 
+/// One reference per keyed request bridges the separate UIHostingConfiguration
+/// graph directly to UIKit. Readiness deliberately does not publish a SwiftUI
+/// update: loading pixels must not reconfigure/recreate the thumbnail's task.
+@MainActor
+final class SimilarPhotoPreviewReadiness: ObservableObject {
+    private(set) var isReady = false
+    private(set) var loadedCallbackCount = 0
+    fileprivate weak var target: SimilarPhotoPreviewControl?
+
+    func didLoad() {
+        loadedCallbackCount += 1
+        isReady = true
+        // A late callback may update its old relay, never a replacement request.
+        guard let target, target.readiness === self else { return }
+        target.canCapture = true
+    }
+}
+
 /// Readiness belongs to one exact thumbnail request, not to a recycled cover.
-/// The keyed child resets both its flag and PhotoThumbnailView's task together,
+/// The keyed child resets its relay and PhotoThumbnailView's task together,
 /// including on rotation/display-scale changes, without an onChange/load race.
 @MainActor
 struct SimilarPhotoLoadedPreviewTile: View {
@@ -114,22 +133,26 @@ struct SimilarPhotoLoadedPreviewTile: View {
         .clipped()
     }
 
+    @MainActor
     private struct ReadyTile: View {
         let preview: SimilarPhotoLoadedPreviewTile
         let size: CGSize
         let displayScale: CGFloat
-        @State private var ready = false
+        @StateObject private var readiness = SimilarPhotoPreviewReadiness()
 
         var body: some View {
-            SimilarPhotoPreviewTile(photoID: preview.photo.id, label: preview.label,
+            // Capture the installed reference, not a State/StateObject wrapper
+            // to be resolved later from the separately hosted callback graph.
+            let relay = readiness
+            return SimilarPhotoPreviewTile(photoID: preview.photo.id, label: preview.label,
                 identifier: preview.identifier, selected: preview.selected, enabled: preview.enabled,
                 content: AnyView(PhotoThumbnailView(photo: preview.photo, cache: preview.cache,
-                    networkAllowed: preview.networkAllowed, onLoaded: { ready = true })
+                    networkAllowed: preview.networkAllowed, onLoaded: { relay.didLoad() })
                     // Pin the hosted request to the same geometry/scale as its
                     // readiness identity. There is only one thumbnail loader.
                     .environment(\.displayScale, displayScale)
                     .frame(width: size.width, height: size.height)),
-                canCapture: ready, open: preview.open)
+                readiness: relay, open: preview.open)
                 .frame(width: size.width, height: size.height)
         }
     }
@@ -148,13 +171,14 @@ struct SimilarPhotoPreviewTile: UIViewRepresentable {
     // Injected synthetic content is immediately available. Production supplies
     // the request-scoped PhotoThumbnailView readiness above explicitly.
     var canCapture = true
+    var readiness: SimilarPhotoPreviewReadiness? = nil
     let open: (SimilarPhotoThumbnailCapture?) -> Void
 
     func makeUIView(context: Context) -> SimilarPhotoPreviewControl { SimilarPhotoPreviewControl() }
 
     func updateUIView(_ view: SimilarPhotoPreviewControl, context: Context) {
         view.photoID = photoID
-        view.canCapture = canCapture
+        view.bindReadiness(readiness, fallback: canCapture)
         view.isEnabled = enabled
         view.accessibilityLabel = label
         view.accessibilityIdentifier = identifier
@@ -164,12 +188,17 @@ struct SimilarPhotoPreviewTile: UIViewRepresentable {
         view.open = open
         view.configure(content: content, selected: selected)
     }
+
+    static func dismantleUIView(_ view: SimilarPhotoPreviewControl, coordinator: ()) {
+        view.bindReadiness(nil, fallback: false)
+    }
 }
 
 @MainActor
 final class SimilarPhotoPreviewControl: UIControl {
     var photoID = ""
     var canCapture = false
+    private(set) var readiness: SimilarPhotoPreviewReadiness?
     var open: ((SimilarPhotoThumbnailCapture?) -> Void)?
     private var hosted: (UIView & UIContentView)?
 
@@ -180,6 +209,17 @@ final class SimilarPhotoPreviewControl: UIControl {
         addTarget(self, action: #selector(activate), for: .touchUpInside)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func bindReadiness(_ next: SimilarPhotoPreviewReadiness?, fallback: Bool) {
+        if readiness !== next {
+            if readiness?.target === self { readiness?.target = nil }
+            readiness = next
+        }
+        next?.target = self
+        // Also replay a callback delivered before UIKit was bound. Rebinding
+        // the same request (e.g. selection) preserves readiness and its count.
+        canCapture = next?.isReady ?? fallback
+    }
 
     func configure(content: AnyView, selected: Bool) {
         let configuration = UIHostingConfiguration {
@@ -209,6 +249,7 @@ final class SimilarPhotoPreviewControl: UIControl {
         guard canCapture, let window, !bounds.isEmpty else { return nil }
         let capturedID = photoID
         let capturedBounds = bounds
+        let capturedReadiness = readiness
         layoutIfNeeded()
         let format = UIGraphicsImageRendererFormat()
         format.scale = window.screen.scale
@@ -221,7 +262,7 @@ final class SimilarPhotoPreviewControl: UIControl {
         // A layout/identity change during drawing, or an incomplete hierarchy,
         // falls back to exact-ID navigation, never a stale layer snapshot.
         guard drawn, canCapture, photoID == capturedID, bounds == capturedBounds,
-              self.window === window else { return nil }
+              readiness === capturedReadiness, self.window === window else { return nil }
         return SimilarPhotoThumbnailCapture(photoID: capturedID, image: image, frame: convert(capturedBounds, to: window))
     }
 
