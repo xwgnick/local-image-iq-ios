@@ -291,9 +291,38 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
                 f.selected.toggle()
                 try await settle(host)
                 let selected = try previewControl(host)
+                XCTAssertTrue(selected === loaded, "Selection must keep the existing control")
                 XCTAssertTrue(selected.readiness === readiness)
                 XCTAssertTrue(selected.canCapture)
                 XCTAssertEqual(readiness.loadedCallbackCount, 1, "Selection must not reload the thumbnail")
+                let selectionMark = try XCTUnwrap(selected.subviews.compactMap { $0 as? UIImageView }.first)
+                XCTAssertEqual(selectionMark.isHidden, !f.selected)
+                XCTAssertFalse(selectionMark.isUserInteractionEnabled)
+                XCTAssertTrue(selectionMark.accessibilityElementsHidden)
+                XCTAssertTrue(selected.subviews.last === selectionMark, "The UIKit badge must stay above the thumbnail")
+                XCTAssertGreaterThan(selectionMark.bounds.width, 0)
+                XCTAssertEqual(selectionMark.frame.maxX, selected.bounds.maxX)
+                XCTAssertEqual(selectionMark.frame.maxY, selected.bounds.maxY)
+                XCTAssertTrue(hasRedCenter(try XCTUnwrap(selected.capture()).image),
+                              "Selection must retain the already-loaded photo pixels")
+                XCTAssertEqual(f.provider.plans.count, step + 1,
+                    "Selection-only update requested extra pixels before any geometry change\n"
+                        + previewReadinessDiagnostics(host, fixture: f))
+
+                // A repeated parent update must also leave the hosted task
+                // alone; neither a cache hit nor a new gate may hide a reload.
+                f.objectWillChange.send()
+                try await settle(host)
+                let repeated = try previewControl(host)
+                XCTAssertTrue(repeated === selected)
+                XCTAssertTrue(repeated.readiness === readiness)
+                XCTAssertTrue(repeated.canCapture)
+                XCTAssertEqual(readiness.loadedCallbackCount, 1)
+                XCTAssertEqual(selectionMark.isHidden, !f.selected)
+                XCTAssertTrue(hasRedCenter(try XCTUnwrap(repeated.capture()).image))
+                XCTAssertEqual(f.provider.plans.count, step + 1,
+                    "Repeated update requested extra pixels before the next request identity\n"
+                        + previewReadinessDiagnostics(host, fixture: f))
             }
             XCTAssertEqual(f.provider.plans.count, step + 1, "Only the visible thumbnail requests pixels")
             let plan = try XCTUnwrap(f.provider.plans.last)

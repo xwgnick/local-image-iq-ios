@@ -186,7 +186,8 @@ struct SimilarPhotoPreviewTile: UIViewRepresentable {
         view.accessibilityTraits = selected ? [.button, .selected] : [.button]
         view.accessibilityHint = "打开本组并定位这张照片，不改变选择"
         view.open = open
-        view.configure(content: content, selected: selected)
+        view.configure(content: content, selected: selected,
+                       contentIdentity: readiness.map { ObjectIdentifier($0) })
     }
 
     static func dismantleUIView(_ view: SimilarPhotoPreviewControl, coordinator: ()) {
@@ -201,11 +202,24 @@ final class SimilarPhotoPreviewControl: UIControl {
     private(set) var readiness: SimilarPhotoPreviewReadiness?
     var open: ((SimilarPhotoThumbnailCapture?) -> Void)?
     private var hosted: (UIView & UIContentView)?
+    private var contentIdentity: ObjectIdentifier?
+    private let selectionMark = UIImageView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         clipsToBounds = true
         isAccessibilityElement = true
+        selectionMark.image = UIImage(systemName: "checkmark.circle.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .bold))
+        selectionMark.tintColor = UIColor(IQStyle.accent)
+        selectionMark.contentMode = .scaleAspectFit
+        selectionMark.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        selectionMark.clipsToBounds = true
+        selectionMark.isHidden = true
+        selectionMark.isUserInteractionEnabled = false
+        selectionMark.isAccessibilityElement = false
+        selectionMark.accessibilityElementsHidden = true
+        addSubview(selectionMark)
         addTarget(self, action: #selector(activate), for: .touchUpInside)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -221,29 +235,37 @@ final class SimilarPhotoPreviewControl: UIControl {
         canCapture = next?.isReady ?? fallback
     }
 
-    func configure(content: AnyView, selected: Bool) {
-        let configuration = UIHostingConfiguration {
-            content.overlay(alignment: .bottomTrailing) {
-                if selected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(IQStyle.accent)
-                        .background(.black.opacity(0.6), in: Circle())
-                }
+    func configure(content: AnyView, selected: Bool, contentIdentity: ObjectIdentifier? = nil) {
+        // Selection is UIKit-only: rebuilding a hosting configuration can
+        // restart the thumbnail task even when its request has not changed.
+        selectionMark.isHidden = !selected
+        if hosted == nil || contentIdentity == nil || self.contentIdentity != contentIdentity {
+            // Production's relay already keys photo/revision/cache/network/
+            // geometry/scale. Nil identity keeps synthetic content updatable.
+            let configuration = UIHostingConfiguration {
+                content
+            }.margins(.all, 0).minSize(width: 0, height: 0)
+            if let hosted { hosted.configuration = configuration }
+            else {
+                let hosted = configuration.makeContentView()
+                hosted.isUserInteractionEnabled = false
+                hosted.accessibilityElementsHidden = true
+                insertSubview(hosted, belowSubview: selectionMark)
+                self.hosted = hosted
             }
-        }.margins(.all, 0).minSize(width: 0, height: 0)
-        if let hosted { hosted.configuration = configuration }
-        else {
-            let hosted = configuration.makeContentView()
-            hosted.isUserInteractionEnabled = false
-            hosted.accessibilityElementsHidden = true
-            addSubview(hosted)
-            self.hosted = hosted
+            self.contentIdentity = contentIdentity
         }
         setNeedsLayout()
     }
 
-    override func layoutSubviews() { super.layoutSubviews(); hosted?.frame = bounds }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        hosted?.frame = bounds
+        let size = selectionMark.intrinsicContentSize
+        selectionMark.frame = CGRect(x: bounds.maxX - size.width, y: bounds.maxY - size.height,
+                                     width: size.width, height: size.height)
+        selectionMark.layer.cornerRadius = min(size.width, size.height) / 2
+    }
 
     func capture() -> SimilarPhotoThumbnailCapture? {
         guard canCapture, let window, !bounds.isEmpty else { return nil }
