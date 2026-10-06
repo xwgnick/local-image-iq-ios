@@ -175,9 +175,15 @@ final class SearchIndexCacheTests: XCTestCase {
     func testSameSizeWriteWithRestoredMtimeDetectedByLiveDataVersionAndColdSHA() async throws {
         for useNewActor in [false, true] {
             let c = try await context()
+            // A whole-second timestamp round-trips exactly through Foundation's
+            // file attributes. Restoring a captured subsecond Date may lose
+            // filesystem precision, defeating the intended SAME-mtime fixture.
+            let fixedModified = Date(timeIntervalSince1970: 1_700_000_000)
+            try FileManager.default.setAttributes([.modificationDate: fixedModified], ofItemAtPath: c.database.path)
             let old = try await c.read()
             let attributes = try FileManager.default.attributesOfItem(atPath: c.database.path)
             let modified = try XCTUnwrap(attributes[.modificationDate] as? Date)
+            XCTAssertEqual(modified, fixedModified)
             try await c.writer.save(TestFixtures.photo(id: "a", revision: 124))
             try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: c.database.path)
             let after = try FileManager.default.attributesOfItem(atPath: c.database.path)
