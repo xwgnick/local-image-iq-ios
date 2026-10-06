@@ -2,7 +2,19 @@
 
 SwiftUI + PhotoKit + Core ML + 系统 Vision。独立原生 App，以本机检索为主，不是桌面网页套壳。
 
-## 当前交付：0.9.0 / build 27
+## 当前交付：0.9.1 / build 28
+
+**DELIVERED：完整原生验证、设备构建、发布、本地 SHA-256 和 CRC 校验完成；用户手机的约 5 秒停顿／退回首页现象仍待验证。**最终源码 `bf68aba44b0452debb547020eaacdfb2cf5d4f0f`，[CI 37506745432](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37506745432)／[job 112417231223](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37506745432/job/112417231223) SUCCESS。
+
+- **相似照片清理阈值扩大到 0.50–0.99**，步长 0.01、默认 0.96；低于 0.90 提示可能只是场景相近。调整后手动点“重新分组”，不自动勾选或删除；组内每两张均须达标。
+- 分组结果发布前的逐张主线程核验改为**离开主线程的一次批量元数据核验**，返回后仍有轻量权限／版本检查；原三次完整图库快照保留。计算结束显示“正在核验照片访问”，不把计算进度当作整个操作已完成。
+- **Core79、App1238（1237通过／1既有跳过）、UI14全部通过**，新增23项 App 测试。整体经历四轮：前两轮仅新增滑杆手势测试失败；第三轮清理已通过但一个旧筛选再次打开测试失败；第四轮同源码完整通过。没有跳过或放宽测试，也不能说已修复旧筛选失败的根因。完整记录见 [docs/SIMILAR_CLEANUP_THRESHOLD_UPDATE.md](docs/SIMILAR_CLEANUP_THRESHOLD_UPDATE.md)。
+- 本地已校验安装包：[build/device-download/37506745432/LocalImageIQ-0.9.1-build28-iphoneos-unsigned.ipa](build/device-download/37506745432/LocalImageIQ-0.9.1-build28-iphoneos-unsigned.ipa)；[公开 Release ci-37506745432-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37506745432-1)，**1,419,256,255 bytes**，SHA-256 `868e491928c09be03626823eb0938468abe0973b4806b152f8c25671c3ea1177`。仍是需本机重签的 arm64 Release 未签名包。
+- 沿用原 Sideloadly 账号／有效 Bundle ID **覆盖安装，不卸载、不清索引、不重建**。可依次试 0.85／0.80／0.75，但低阈值不保证有组，也不保证是可替代的重复照片。删除前逐张核对；删除的是系统 Photos 资产，可能经 iCloud 同步。
+
+已查看 [原生宽阈值预览](build/ui-review/37506745432/similar-threshold-review.jpg)：黑金清理页、0.75阈值、低阈值提示与空结果说明；0组／39候选为合成夹具，不是实际图库结果。已改正源码中已知的主线程阻塞路径，**没有证明它就是用户退回首页的原因，也没有宣称真机现象已消失**。用户已反馈 build27 搜索明显变快，本版保留搜索加速；该反馈没有数值，不代表真机10×已建立。
+
+## 上版交付记录：0.9.0 / build 27
 
 **DELIVERED：原生验证、设备构建、发布和本地 IPA 校验完成；真机搜索 10× 目标尚未验证。**最终功能源码 `ca5422c9473fed58a938120e3643c6de4f19e47c`，[CI 37468042819](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37468042819)／[job 112283955268](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37468042819/job/112283955268) **SUCCESS**。该 run 为 attempt 1，是本功能**整体第四轮验证；第三轮也已成功，不是四次失败**。前三轮生产代码相同、只修测试；第四轮依据初步冷路径基准修改批量缓存装包／解包、地点去重及 Double 矩阵构建。完整账本见 [docs/SEARCH_ACCELERATION.md](docs/SEARCH_ACCELERATION.md)。
 
@@ -41,10 +53,11 @@ SwiftUI + PhotoKit + Core ML + 系统 Vision。独立原生 App，以本机检�
 |[docs/NATIVE_PARITY.md](docs/NATIVE_PARITY.md)|真实模型数值验证；不能用维度相同替代对齐。|
 |[docs/QUERY_TRANSLATION.md](docs/QUERY_TRANSLATION.md)|iOS 18+ 真机系统翻译与独立语言包准备，iOS 17 原文回退。|
 |[docs/SEARCH_ACCELERATION.md](docs/SEARCH_ACCELERATION.md)|build 27 最终交付、四轮验证、冷建回退／warm 基准及真机未验证边界。|
+|[docs/SIMILAR_CLEANUP_THRESHOLD_UPDATE.md](docs/SIMILAR_CLEANUP_THRESHOLD_UPDATE.md)|build 28 阈值扩展、异步批量发布核验、四轮测试与交付边界。|
 |[docs/SIMILAR_PHOTO_CLEANUP.md](docs/SIMILAR_PHOTO_CLEANUP.md)|build 26 清理／系统删除契约、三轮原生记录、最终交付与未验证项。|
 |[docs/PHOTO_TEXT_SEARCH.md](docs/PHOTO_TEXT_SEARCH.md)|build 25 OCR 契约、两轮原生结果、交付资产与未验证项。|
 |[docs/SEARCH_RESULT_TOOLS.md](docs/SEARCH_RESULT_TOOLS.md)|build 24 功能契约、最终交付证据、三轮原生验证历史与未验证项。|
-|[docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)|build 27 及历次交付的资产、测试与失败／修正账本。|
+|[docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)|build 28 及历次交付的资产、测试与失败／修正账本。|
 
 ## 隐私与交付边界
 

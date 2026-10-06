@@ -5,7 +5,36 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.9.0（build 27）— 搜索加速与耗时诊断，已交付
+## 当前：0.9.1（build 28）— 相似阈值扩展至 0.50–0.99，已交付，真机待验
+
+**DELIVERED／PENDING-DEVICE。**本地已校验安装包：**[../build/device-download/37506745432/LocalImageIQ-0.9.1-build28-iphoneos-unsigned.ipa](../build/device-download/37506745432/LocalImageIQ-0.9.1-build28-iphoneos-unsigned.ipa)** · [公开 Release ci-37506745432-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37506745432-1)。本机已完整下载校验，无需重下；另一台电脑从该 Release 下载同名版本化 IPA。
+
+1. 用**同一 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**，签名沿用下方第 1–5 节。**不卸载、不清索引、不因升级重建索引**；模型、索引／缓存身份未改，已有有效索引直接复用，无需开启调试。
+2. 首页**搜索下方 → 相似照片清理**。按用户要求，阈值现在可调 **0.50–0.99**，**步长 0.01、默认 0.96**，越高越严格。进入页面或移动滑块**不会自动扫描／分组**；每次调阈值后须**手动开始／重新分组**。
+3. 低于 **0.90** 会显示警告：可能只是**场景／语义相似，并非重复照片**。可尝试 **0.85／0.80／0.75** 后手动分组，再点“**对比**”逐张检查；**不保证分组数量、准确率或一定找到预期照片**。阈值不是概率，组内仍执行严格两两校验，不以相似链传递代替。
+4. **不自动勾选、不自动保留或删除。**确需删除时逐张勾选，再点“**删除 N 张**”并明确确认；整组选中有额外警告，最终权限与系统行为仍由 Photos 决定。不要用不可替代照片做删除验证。
+
+**删除的是系统 Photos 中的真实照片，不只是 App 索引。即使 App 照片网络开关关闭，也可能经 iCloud 同步删除其他设备上的照片。**“最近删除”的恢复能力取决于 OS 与实际状态，不保证始终保留 30 天或一定可恢复。清理只使用当前有效的既有图像索引；若希望纳入新增／索引过期照片，才需手动更新图像索引，**不是升级必做步骤**。
+
+发布前元数据核验由原先 `MainActor` 上逐 ID 处理，改为主 actor 外的**非 actor 隔离异步 `prepareForPublication` 一次批量处理**，返回后主 actor 只做轻量 epoch 检查；**相似分组的原有三次完整 Photos 元数据快照仍保留**。核验使用独立阶段标签，不把仍在核验伪装成“100% 全部完成”。**已修正已知代码阻塞路径，不等于已证明用户约 5 秒停顿／自动回首页的根因或修复；真机效果仍待确认。**
+
+### build 28 包与验证摘要
+
+Release **405026260**，**2026-10-06T18:31:43Z** 发布，**9 项资产、prerelease、非 draft**。IPA asset **616319027**，**1,419,256,255 字节**，SHA-256 **`868e491928c09be03626823eb0938468abe0973b4806b152f8c25671c3ea1177`**；已实际完整流式核验长度／哈希，**7-Zip 26.03 全量 CRC PASS**（**11 文件夹、30 文件、解压后 1,566,782,421 字节**）。记录见 [../build/device-download/37506745432/release-fetch-ef1f1a34-fc95-41ee-8a1e-79bbc7e4d397.json](../build/device-download/37506745432/release-fetch-ef1f1a34-fc95-41ee-8a1e-79bbc7e4d397.json)；原包校验不验证 Sideloadly 重签包或手机安装。
+
+[CI 37506745432](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37506745432)／[job 112417231223](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37506745432/job/112417231223)，最终源码 **`bf68aba44b0452debb547020eaacdfb2cf5d4f0f`**：**第四次整体验证 SUCCESS，前三次各有 1 项 UI 测试失败，四次 App 均无失败**。首次最大端已通过、最小端仍停在 **0.99**；第二次最小端为 **0.51**；第三次滑块两端都通过，但**此前两次通过的既有筛选重新打开测试失败**。第四次使用与第三次**完全相同 SHA**，旧失败未复现，**不能声称已定位／修复旧筛选测试根因**。首次功能提交后四轮生产代码不变，后续修正仅在测试；所有断言、容差／超时和门槛保留，无 CI 优化、runner 或门槛变更。
+
+最终核心 **79 全通过**；App **1238＝1237 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败**（**348.414 秒，wall 349.765 秒**）。新增 **23＝12 项 `SimilarGroupingPublicationTests`（0.355 秒）＋8 项 `SimilarCleanupPublicationStateTests`（1.226 秒）＋3 项分组测试**，已计入总数；`SimilarPhotoGroupingTests` 整套 **29／0.332 秒**。真实模型 **8／131.977 秒**，完整 **CPU／`.all`／20 actor** 门槛保留。独立 UI **14 全通过／926.728 秒**（导航 **9／676.978**、键盘 **5／249.750 秒**），包含实际入口、滑块 **0.96 → 0.99 → 0.50**、无自动授权／扫描与原查询保留。
+
+新增分组／发布测试仅用**合成元数据**；新增实际宿主 `.sheet` 测试验证非空／空结果发布后保持展示，**不等于首页入口 → 真实 Photos 分组结果的 E2E，也没有实际 Photos 删除**。测试秒数不是手机性能。小型 IPA 元数据为 **0.9.1 / 28、arm64 Release、未签名、最低 iOS 17、SDK 18.5／Xcode 16.4、LaunchScreen**；同一 **SigLIP 768 模型／地点包哈希**沿用，未再次全量比较模型权重字节。
+
+父流程本轮**实际只查看**新增 [../build/ui-review/37506745432/similar-threshold-review.jpg](../build/ui-review/37506745432/similar-threshold-review.jpg)（**380×758**，来自 **1179×2340 原生已呈现 sheet**）：阈值 **0.75**、滑块约在中段、低阈值警告、**0 组／39 候选／3 未索引／0 过期**，顶部有 **TEST** 测试水印。均为合成状态，**不是用户分组准确率、真实 Photos 或实际场景隐私验证**。完整四次 SHA／run／job／耗时、失败 draft 的 GET-only 取证、UI 资产与地点哈希见 [BUILD_STATUS.md](BUILD_STATUS.md)。本次文档更新仅整理已有证据，没有重新测试、下载、审图或操作手机。
+
+**build 27 的手机搜索更快已获用户定性确认，但未实测证明端到端 10×。**首次建缓存、二进制加载与常驻热路径不能混为等条件测量；下方历史数据和边界完整保留。build 28 实际安装、真实相册分组质量、停顿／自动回首页及删除确认仍待真机验证。
+
+以下 build 27 及更早正文与安装历史全部保留；旧“当前／本轮”、旧包和操作要求不替代页首 build 28 及下方现行第 1–5 节。
+
+## 历史：0.9.0（build 27）— 搜索加速与耗时诊断，已交付
 
 **[../build/device-download/37468042819/LocalImageIQ-0.9.0-build27-iphoneos-unsigned.ipa](../build/device-download/37468042819/LocalImageIQ-0.9.0-build27-iphoneos-unsigned.ipa)** · [公开 Release ci-37468042819-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37468042819-1)。本机已完整下载校验，无需重下；另一台电脑从该 Release 下载。
 

@@ -1,6 +1,79 @@
-# Cloud build status — build 27
+# Cloud build status — build 28
 
-## Current: 0.9.0 (build 27) — 搜索加速与耗时诊断；第四次整体验证 SUCCESS，已交付，真机待验
+## Current: 0.9.1 (build 28) — 扩展相似阈值与分组发布核验；第四次整体验证 SUCCESS，已交付，真机待验
+
+**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE。按用户要求将阈值扩展至 0.50–0.99，步长 0.01、默认 0.96。低于 0.90 会提示：可能只是场景／语义相似，不代表重复照片。已修正一条已知的主线程阻塞代码路径，但没有证明它就是用户约 5 秒停顿／自动回首页的根因，也没有证明这两个真机现象已修复。**
+
+[Run 37506745432](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37506745432)／[job 112417231223](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37506745432/job/112417231223)，最终构建源码 **`bf68aba44b0452debb547020eaacdfb2cf5d4f0f`**。**第四次为全部通过的最终交付；与第三次是完全相同的 SHA，不是又修了一次生产代码。**
+
+当前已校验安装包：[../build/device-download/37506745432/LocalImageIQ-0.9.1-build28-iphoneos-unsigned.ipa](../build/device-download/37506745432/LocalImageIQ-0.9.1-build28-iphoneos-unsigned.ipa)。下载、覆盖安装和阈值使用步骤见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。以下记录来自本轮已完成的验证／交付证据；本次文档更新没有重新执行测试、下载、审图或真机操作。
+
+### build 28 功能与修正边界
+
+- **阈值 0.50–0.99／步长 0.01／默认 0.96**，越高越严格；保留组内**任意两张均须满足阈值**的严格两两校验，不用相似链传递代替。低阈值不是重复判定或概率，也不保证一定找到用户期待的照片。
+- 进入清理页面或移动滑块**不自动扫描／分组**；调阈值后须**手动重新分组**。仍然**不自动勾选、不自动决定保留哪张、不自动删除**。可尝试 **0.85／0.80／0.75** 后手动分组、逐张对比，但不承诺准确率或分组数量。
+- 结果发布前，原先在 `MainActor` 上逐 ID 读取元数据的路径，改为由**非 actor 隔离的异步 `prepareForPublication` 在主 actor 外一次批量核验元数据**；`await` 返回后，`MainActor` 只做轻量 epoch 检查再发布。**相似分组服务原有三次完整 Photos 元数据快照不变**，不是取消完整快照或跳过权限／修订核验。
+- 分组计算结束后，发布前核验使用**独立的核验阶段标签**；仍在核验时不把“100%”冒充全部完成。这是阶段表达修正，不是实测零等待或固定耗时承诺。
+- **模型、索引／缓存身份不变，不需要清除或重建索引。**上述代码路径修正不等于真机停顿／自动回首页已复现、定位或修复；实际 iPhone 分组质量、耗时和页面行为仍待验证。
+
+### build 28 四次验证账本
+
+|整体验证|run／job／完整源码 SHA|实际结果与修正边界|
+|---|---|---|
+|第一次|[37494269176／112374643351](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37494269176/job/112374643351)；`25d3c17296f1405e88468d8b8243b2a8e5f20cc1`|FAILED：核心 **79 全通过**；App **1238＝1237 通过／1 项既有 SQLite 跳过／0 失败**，**395.193 秒，wall 407.574 秒**。UI **14 项、1 项新增滑块测试失败**：最大端 **0.99 已通过**，随后最小端操作仍停在 **0.99**。|
+|第二次／仅测试修正|[37499517480／112392613346](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37499517480/job/112392613346)；`06d6b70c8c8dd07d8f18fd0a5607fde920622d5a`|FAILED：App **1238＝1237 通过／1 项既有 SQLite 跳过／0 失败**，**262.108 秒，wall 276.175 秒**。UI **14 项、1 项新增滑块测试失败**：最小端实际 **0.51**，不是要求的 **0.50**。|
+|第三次／仅测试修正|[37502943657／112404304545](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37502943657/job/112404304545)；`bf68aba44b0452debb547020eaacdfb2cf5d4f0f`|FAILED：App **1238＝1237 通过／1 项既有 SQLite 跳过／0 失败**，**265.602 秒，wall 279.236 秒**。清理 UI 的**滑块两端均通过**；UI **14 项、1 项既有筛选重新打开测试失败／795.873 秒**，失败位置为 [既有导航测试](../UITests/PresentationNavigationTests.swift#L89)。该旧测试在前两次通过，不能称为新增清理测试仍失败。|
+|第四次／同源码最终交付|[37506745432／112417231223](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37506745432/job/112417231223)；`bf68aba44b0452debb547020eaacdfb2cf5d4f0f`|**SUCCESS，全部门槛通过**。与第三次**完全相同 SHA**；既有筛选重新打开测试失败未复现，**不是已定位或修复其根因**。最终计数／耗时见下表。|
+
+**首次功能提交之后，四轮生产代码完全相同；第二、三轮只改测试，第四轮同源码重跑。**保留全部断言、容差／超时及完整测试门槛；没有通过删除断言、新增跳过、优化 CI、换 runner 或改门槛获得通过。前两次新增滑块测试失败不能归为用户操作失败，也不据此断言未证实的控件命中区域根因。
+
+失败证据仅以精确 **GET-only** 获取，未发布失败 draft：
+
+|失败轮次|保留的 draft／UI ZIP 资产|字节数／SHA-256|
+|---|---|---|
+|第一次|draft Release **404951055**；UI asset **616092687**|**14,142,009 字节**；`aa32c2722e4b6a7f1ee58454fb8804018f0dfc8f17e1b444ce361b545c747bd2`。|
+|第三次|draft Release **404993309**；UI asset **616218684**|**16,040,471 字节**；`22407b0326b3fbdac0802176adb38d4e441c734e5f64bd76c2c762ac82a9bf73`。|
+
+### build 28 最终验证结果
+
+|项目|实际结果／范围|
+|---|---|
+|Swift 核心|**79 全通过**。|
+|App XCTest|**1238＝1237 通过／1 项既有 SQLite 真机文件保护模拟器跳过／0 失败**；**348.414 秒，wall 349.765 秒**。|
+|新增 App 测试|相对 build 27 新增 **23＝12＋8＋3** 项，已包含在 App 1238 中，不重复相加。|
+|`SimilarGroupingPublicationTests`|新增 **12 全通过／0.355 秒**。|
+|`SimilarCleanupPublicationStateTests`|新增 **8 全通过／1.226 秒**。|
+|`SimilarPhotoGroupingTests`|新增 **3** 项；该套件现有 **29 全通过／0.332 秒**，该耗时不是仅新增三项的耗时。|
+|`GeneratedModelParityTests`|**8 全通过／131.977 秒**；完整真实模型 **CPU／`.all`／20 actor** 门槛保留。|
+|独立 UI|**14 全通过／926.728 秒**；导航 **9／676.978 秒**、键盘 **5／249.750 秒**，另计。实际清理入口及滑块 **0.96 → 0.99 → 0.50**、无自动 Photos 授权／扫描、原查询保留均通过。|
+|工作流与门槛|全部既有断言、计时要求和门槛保留；**没有 CI 优化、runner 或门槛变更**。|
+|设备构建／小型 IPA 元数据|**0.9.1 / 28、arm64 Release、未签名、最低 iOS 17、SDK 18.5、Xcode 16.4、LaunchScreen**。|
+
+新增分组／发布测试使用**合成元数据**；新增实际宿主 `.sheet` 测试验证**非空／空结果发布后保持展示**，但**不是从首页入口到真实 Photos 分组结果的完整 E2E**。真实模型测试与元数据测试是不同范围；本轮没有实际 Photos 删除。测试秒数不等于手机性能，也不证明真机约 5 秒停顿或自动回首页问题已解决。
+
+### build 28 资产与本地全量核验
+
+|资产／核验|实际身份与结果|
+|---|---|
+|公开 Release|[ci-37506745432-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37506745432-1)，ID **405026260**；**2026-10-06T18:31:43Z** 发布；**9 项资产、prerelease、非 draft**。|
+|版本化 IPA|asset **616319027**；[../build/device-download/37506745432/LocalImageIQ-0.9.1-build28-iphoneos-unsigned.ipa](../build/device-download/37506745432/LocalImageIQ-0.9.1-build28-iphoneos-unsigned.ipa)；**1,419,256,255 字节**；SHA-256 **`868e491928c09be03626823eb0938468abe0973b4806b152f8c25671c3ea1177`**。已实际完整流式下载并核验长度／哈希，不是仅核对远端声明。|
+|归档完整性|**7-Zip 26.03 全量 CRC PASS**；**11 文件夹、30 文件**，解压后 **1,566,782,421 字节**；不验证 Sideloadly 重签包或手机安装。|
+|UI ZIP|asset **616318722**；**6,928,917 字节**；SHA-256 **`95ac16949607463220a23fdddb4c6f5f951912dcb07cdc26346e3d2e91fb1be2`**；[../build/ui-review/37506745432/UIReview.zip](../build/ui-review/37506745432/UIReview.zip) 已下载核验。|
+|模型／地点小型元数据|沿用同一 **SigLIP 768 模型／地点身份**；Geo SHA-256 **`41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`**、manifest SHA-256 **`7edb232043452d9a6f718b8a59a121fa0938dfdd54e732ed97e2be60f195b7e5`** 均不变。**未再次全量比较模型权重字节**；小元数据与 CRC 不证明跨版本权重字节一致。|
+
+本地下载记录：[../build/device-download/37506745432/release-fetch-ef1f1a34-fc95-41ee-8a1e-79bbc7e4d397.json](../build/device-download/37506745432/release-fetch-ef1f1a34-fc95-41ee-8a1e-79bbc7e4d397.json)。
+
+### build 28 实际审图与真机边界
+
+父流程本轮**实际仅查看**新增 [../build/ui-review/37506745432/similar-threshold-review.jpg](../build/ui-review/37506745432/similar-threshold-review.jpg)（**380×758**），来自一张 **1179×2340 原生已呈现 sheet 截图**。可见阈值 **0.75**、滑块约在中段、低阈值警告，以及 **0 组／39 候选／3 未索引／0 过期**；这些均是**合成测试状态**。顶部 **TEST** 是测试水印，不属于生产页面。没有查看用户 Photos，不是用户分组准确率、真实场景隐私表现或删除操作的验证，也不扩大为其他截图已审阅。
+
+使用**同一 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清索引、不因升级重建索引**。首页**搜索下方 → 相似照片清理**，移动滑块后手动开始分组，再逐张对比；低阈值尤其不能把同场景照片直接当成重复。删除仍需用户明确选择与确认，会删除系统 Photos 中的真实照片，可能经 iCloud 同步；不要用不可替代照片做删除验证。详细风险与安装步骤见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
+
+**build 27 补充反馈：用户已定性确认手机搜索更快，但没有实测证明端到端 10×。**下方 build 27 首次建缓存／二进制加载／常驻热路径的全部原始数字与边界仍完整保留，不以这次定性反馈改写旧测量。build 28 的实际 iPhone 安装、真实分组质量、停顿及自动回首页行为仍为 **PENDING-DEVICE**。
+
+以下 build 27 及更早版本的正文全部保留；旧“当前／本轮”、旧包与操作要求仅属于各历史版本，当前交付以页首 build 28 为准。
+
+## Historical: 0.9.0 (build 27) — 搜索加速与耗时诊断；第四次整体验证 SUCCESS，已交付，真机待验
 
 **PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE。首次搜索不保证更快：最终模拟器同一查询，首次建缓存 19.863360 秒，对照旧路径 11.943925 秒，耗时约为旧路径的 1.66 倍（增加约 66%）。常驻热路径的 67.6006× 仅是搜索组件结果，不是手机端到端提速；尚未证明手机全搜索 10×，冷路径退步不能算目标已达成。**
 

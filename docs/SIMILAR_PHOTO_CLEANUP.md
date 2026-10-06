@@ -1,5 +1,7 @@
 # 相似照片清理
 
+> **现行 build28 更新：**阈值已扩展为 **0.50–0.99**，默认0.96；发布前元数据核验改为离开主线程的批量读取。最新交付及验证见 [SIMILAR_CLEANUP_THRESHOLD_UPDATE.md](SIMILAR_CLEANUP_THRESHOLD_UPDATE.md)。下文完整保留 build26 历史，旧范围及滑块2/3位置不适用于新版。
+
 **0.8.0 / build 26：DELIVERED；第三轮整体 SUCCESS，已完成设备构建、公开发布及本地 IPA 完整性校验；真机行为仍待验证。**
 最终功能源码 `f873b2c77ac03c9ca65e2126de1790f24de6ff3b`；[run 37373137157](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37373137157)／[job 111975016644](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37373137157/job/111975016644)。这是**新 run 的 attempt 1，也是本功能整体第三轮验证，不是首轮成功**；前两轮失败记录原样保留于 §9.1。
 版本见 [../project.yml](../project.yml)，当前交付入口见 [../README.md](../README.md)；[BUILD_STATUS.md](BUILD_STATUS.md) 保留 build 25 及更早历史，本次未改该文件。本文补记截至 2026-10-06 的最终结果，不改版本、不另触发构建。最终三张截图已经父会话实际查看，但不代表用户批准、真实相册准确率或真机删除流程已验收。
