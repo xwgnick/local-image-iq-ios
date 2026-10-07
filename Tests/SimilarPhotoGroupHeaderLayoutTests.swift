@@ -44,14 +44,13 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
                     AnyView(Color(hue: (photo.creationTime ?? 0).truncatingRemainder(dividingBy: 12) / 12,
                                   saturation: 0.45, brightness: 0.65))
                 })
-                .background {
-                    GeometryReader { viewport in
-                        Color.clear.preference(key: HeaderLayoutViewportSizePreference.self,
-                                               value: viewport.size)
-                    }
+                .overlay {
+                    HeaderLayoutViewportProbe(measurements: measured)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
                 .onPreferenceChange(SimilarPhotoGroupHeaderHeightPreference.self) { measured.naturalHeight = $0 }
-                .onPreferenceChange(HeaderLayoutViewportSizePreference.self) { measured.viewportSize = $0 }
                 .environment(\.dynamicTypeSize, dynamicType)
                 .environment(\.scenePhase, .active)
                 .environment(\.locale, Locale(identifier: "zh_CN"))
@@ -69,12 +68,14 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
             host.window.makeKeyAndVisible()
             host.layout()
 
-            // Wait for actual preference delivery and the production one-shot
-            // target callback, never a guessed render/animation sleep. The
+            // Wait for the production natural-height preference, a native
+            // viewport layout in this window, and the one-shot target callback.
+            // Never use a guessed render/animation sleep. The geometry
             // assertions below are deliberately NOT part of this readiness gate.
             let inspect: @MainActor () -> Bool = {
                 host.layout()
-                return measured.naturalHeight > 0 && measured.viewportSize.height > 0
+                return measured.naturalHeight > 0 && measured.viewportBounds.height > 0
+                    && measured.viewportWindow === host.window && measured.viewportFrame != nil
                     && fixture.browser.targetFrame != nil
             }
             let predicate = NSPredicate { _, _ in
@@ -84,25 +85,41 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
             let ready = XCTNSPredicateExpectation(predicate: predicate, object: nil)
             ready.expectationDescription = "Measured header and native target at \(width)x852, \(dynamicType), \(theme)"
             guard await XCTWaiter.fulfillment(of: [ready], timeout: 5) == .completed else {
-                XCTFail("Missing layout event: \(ready.expectationDescription); natural=\(measured.naturalHeight), viewport=\(measured.viewportSize)")
+                XCTFail("Missing layout event: \(ready.expectationDescription); \(layoutDiagnostics(host: host, measured: measured, browser: fixture.browser))")
                 throw HeaderLayoutFailure.layout
             }
             host.layout()
-            XCTAssertEqual(controller.view.bounds.size, size)
+            let context = "\(width)x852 \(dynamicType) \(theme): \(layoutDiagnostics(host: host, measured: measured, browser: fixture.browser))"
+            XCTAssertEqual(controller.view.bounds.size, size, context)
             let grids = controllers(controller).compactMap { $0 as? SimilarPhotoGroupGridController }
-            XCTAssertEqual(grids.count, 1)
-            let grid = try XCTUnwrap(grids.first)
+            XCTAssertEqual(grids.count, 1, context)
+            let grid = try XCTUnwrap(grids.first, context)
             let collection = grid.collectionView
             let headers = descendants(controller.view, UIScrollView.self).filter { !($0 is UICollectionView) }
-            XCTAssertEqual(headers.count, 1, "One header scroll view, not duplicate fitting/hidden header copies")
-            let header = try XCTUnwrap(headers.first)
+            XCTAssertEqual(headers.count, 1, "One header scroll view, not duplicate fitting/hidden header copies; \(context)")
+            let header = try XCTUnwrap(headers.first, context)
             let pixel = 1 / host.window.screen.scale
             let natural = measured.naturalHeight
-            let cap = measured.viewportSize.height * 0.45
+            let viewportSize = measured.viewportBounds.size
+            let viewportFrame = try XCTUnwrap(measured.viewportFrame, context)
+            let safeAreaFrame = controller.view.convert(controller.view.safeAreaLayoutGuide.layoutFrame, to: host.window)
+            let cap = viewportSize.height * 0.45
             let allocated = min(natural, cap)
             let headerFrame = header.convert(header.bounds, to: host.window)
             let gridFrame = collection.convert(collection.bounds, to: host.window)
-            let context = "\(width)x852 \(dynamicType) \(theme): natural=\(natural), header=\(headerFrame), grid=\(gridFrame)"
+
+            // This test hosts the detail directly, without ignoring safe areas.
+            // The full-size overlay measures the root GeometryReader's space,
+            // not the whole window. All endpoint comparisons use window coords.
+            XCTAssertTrue(measured.viewportWindow === host.window, context)
+            XCTAssertGreaterThan(viewportSize.width, 0, context)
+            XCTAssertGreaterThan(viewportSize.height, 0, context)
+            assertRect(viewportFrame, equals: safeAreaFrame, pixel: pixel, context: context)
+            XCTAssertEqual(viewportFrame.width, viewportSize.width, accuracy: pixel, context)
+            XCTAssertEqual(viewportFrame.height, viewportSize.height, accuracy: pixel, context)
+            XCTAssertEqual(headerFrame.minY, viewportFrame.minY, accuracy: pixel, context)
+            XCTAssertEqual(gridFrame.maxY, viewportFrame.maxY, accuracy: pixel, context)
+            XCTAssertEqual(gridFrame.minX, viewportFrame.minX, accuracy: pixel, context)
 
             // Compare actual laid-out content, the native scroll viewport, and
             // the native grid. The old maxHeight reservation leaves a large gap
@@ -111,32 +128,33 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
             XCTAssertEqual(headerFrame.height, allocated, accuracy: pixel, context)
             XCTAssertEqual(gridFrame.minY, headerFrame.maxY, accuracy: pixel, context)
             XCTAssertEqual(gridFrame.minY - headerFrame.minY, allocated, accuracy: pixel, context)
-            XCTAssertEqual(gridFrame.maxY - headerFrame.minY, measured.viewportSize.height, accuracy: pixel, context)
-            XCTAssertEqual(gridFrame.width, measured.viewportSize.width, accuracy: pixel, context)
+            XCTAssertEqual(gridFrame.maxY - headerFrame.minY, viewportSize.height, accuracy: pixel, context)
+            XCTAssertEqual(gridFrame.width, viewportSize.width, accuracy: pixel, context)
             XCTAssertLessThanOrEqual(header.contentSize.width, header.bounds.width + pixel, context)
             XCTAssertGreaterThan(gridFrame.height, 0, context)
-            XCTAssertGreaterThanOrEqual(gridFrame.height + pixel, measured.viewportSize.height * 0.55, context)
+            XCTAssertGreaterThanOrEqual(gridFrame.height + pixel, viewportSize.height * 0.55, context)
             XCTAssertEqual(header.isScrollEnabled, capped, context)
-            XCTAssertTrue(collection.isScrollEnabled, "Disabling a fitting header must not disable the photo grid")
+            XCTAssertTrue(collection.isScrollEnabled, "Disabling a fitting header must not disable the photo grid; \(context)")
             if capped {
-                XCTAssertGreaterThan(natural, cap, "Maximum-size text must exercise overflowing content, not just the policy")
+                XCTAssertGreaterThan(natural, cap, "Maximum-size text must exercise overflowing content, not just the policy; \(context)")
                 XCTAssertEqual(headerFrame.height, cap, accuracy: pixel, context)
             } else {
-                XCTAssertLessThan(natural, cap - pixel, "Regular text must exercise the short-header regression")
+                XCTAssertLessThan(natural, cap - pixel, "Regular text must exercise the short-header regression; \(context)")
                 XCTAssertEqual(gridFrame.minY, headerFrame.minY + natural, accuracy: pixel,
                                "The grid must start at the measured content bottom, within ONE device pixel; \(context)")
                 XCTAssertEqual(headerFrame.height - header.contentSize.height, 0, accuracy: pixel,
                                "No unused space inside the normal header; \(context)")
             }
 
-            XCTAssertEqual(collection.numberOfItems(inSection: 0), 300)
-            XCTAssertEqual(grid.initialScrollPhotoID, wanted)
-            XCTAssertEqual(fixture.browser.detailRoute?.photoID, wanted)
-            assertFiveColumns(collection, pixel: pixel)
-            let targetFrame = try assertTarget(grid, index: targetIndex, host: host, browser: fixture.browser, pixel: pixel)
+            XCTAssertEqual(collection.numberOfItems(inSection: 0), 300, context)
+            XCTAssertEqual(grid.initialScrollPhotoID, wanted, context)
+            XCTAssertEqual(fixture.browser.detailRoute?.photoID, wanted, context)
+            assertFiveColumns(collection, pixel: pixel, context: context)
+            let targetFrame = try assertTarget(grid, index: targetIndex, host: host, browser: fixture.browser,
+                                              pixel: pixel, context: context)
             if !capped {
                 XCTAssertEqual(targetFrame.midY, gridFrame.midY, accuracy: pixel,
-                    "The middle target must be centered using the measured-header viewport, not the initial zero-height header")
+                    "The middle target must be centered using the measured-header viewport, not the initial zero-height header; \(context)")
             }
 
             if capped {
@@ -146,12 +164,15 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
                 let bottom = header.contentSize.height - header.bounds.height + header.adjustedContentInset.bottom
                 header.setContentOffset(CGPoint(x: header.contentOffset.x, y: bottom), animated: false)
                 host.layout()
-                XCTAssertGreaterThan(header.contentOffset.y, before)
-                XCTAssertEqual(header.contentOffset.y, bottom, accuracy: pixel)
+                let endContext = "Header end: \(context); after=\(layoutDiagnostics(host: host, measured: measured, browser: fixture.browser))"
+                XCTAssertGreaterThan(header.contentOffset.y, before, endContext)
+                XCTAssertEqual(header.contentOffset.y, bottom, accuracy: pixel, endContext)
                 XCTAssertEqual(header.contentOffset.y + header.bounds.height - header.adjustedContentInset.bottom,
-                               natural, accuracy: pixel, "All header content is reachable without expanding its viewport")
-                assertRect(collection.convert(collection.bounds, to: host.window), equals: gridFrame, pixel: pixel)
-                _ = try assertTarget(grid, index: targetIndex, host: host, browser: fixture.browser, pixel: pixel)
+                               natural, accuracy: pixel, "All header content is reachable without expanding its viewport; \(endContext)")
+                assertRect(collection.convert(collection.bounds, to: host.window), equals: gridFrame,
+                           pixel: pixel, context: endContext)
+                _ = try assertTarget(grid, index: targetIndex, host: host, browser: fixture.browser,
+                                     pixel: pixel, context: endContext)
             }
 
             // The real browse callback still carries the exact ID and ALL 300
@@ -169,39 +190,54 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
     }
 
     private func assertTarget(_ grid: SimilarPhotoGroupGridController, index: Int, host: HeaderLayoutHost,
-                              browser: SimilarPhotoGroupBrowser, pixel: CGFloat) throws -> CGRect {
+                              browser: SimilarPhotoGroupBrowser, pixel: CGFloat, context: String) throws -> CGRect {
         let collection = grid.collectionView
-        let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: index, section: 0)))
-        XCTAssertEqual(cell.accessibilityIdentifier, "similar-cleanup-detail-photo-\(index + 1)")
+        let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: index, section: 0)), context)
+        XCTAssertEqual(cell.accessibilityIdentifier, "similar-cleanup-detail-photo-\(index + 1)", context)
         let frame = cell.convert(cell.bounds, to: host.window)
-        XCTAssertGreaterThan(frame.height, 0)
+        XCTAssertGreaterThan(frame.height, 0, context)
         XCTAssertTrue(collection.convert(collection.bounds, to: host.window).contains(frame),
-                      "The exact routed photo must be entirely inside the final grid viewport")
-        assertRect(try XCTUnwrap(browser.targetFrame), equals: frame, pixel: pixel)
+                      "The exact routed photo must be entirely inside the final grid viewport; \(context)")
+        assertRect(try XCTUnwrap(browser.targetFrame, context), equals: frame, pixel: pixel, context: context)
         return frame
     }
 
-    private func assertFiveColumns(_ collection: UICollectionView, pixel: CGFloat) {
+    private func assertFiveColumns(_ collection: UICollectionView, pixel: CGFloat, context: String) {
         var previous: CGRect?
         for index in 0..<5 {
             guard let frame = collection.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame else {
-                XCTFail("Missing one of the five native column attributes"); return
+                XCTFail("Missing one of the five native column attributes; \(context)"); return
             }
-            XCTAssertEqual(frame.width, frame.height, accuracy: pixel)
-            XCTAssertEqual(frame.minY, 2, accuracy: pixel)
-            XCTAssertEqual(frame.minX, previous.map { $0.maxX + 2 } ?? 2, accuracy: pixel)
+            XCTAssertEqual(frame.width, frame.height, accuracy: pixel, context)
+            XCTAssertEqual(frame.minY, 2, accuracy: pixel, context)
+            XCTAssertEqual(frame.minX, previous.map { $0.maxX + 2 } ?? 2, accuracy: pixel, context)
             previous = frame
         }
-        XCTAssertEqual(previous?.maxX ?? 0, collection.bounds.width - 2, accuracy: pixel)
-        XCTAssertEqual(collection.contentSize.width, collection.bounds.width, accuracy: pixel)
+        XCTAssertEqual(previous?.maxX ?? 0, collection.bounds.width - 2, accuracy: pixel, context)
+        XCTAssertEqual(collection.contentSize.width, collection.bounds.width, accuracy: pixel, context)
     }
 
     private func assertRect(_ actual: CGRect, equals expected: CGRect, pixel: CGFloat,
+                            context: String,
                             file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertEqual(actual.minX, expected.minX, accuracy: pixel, file: file, line: line)
-        XCTAssertEqual(actual.minY, expected.minY, accuracy: pixel, file: file, line: line)
-        XCTAssertEqual(actual.width, expected.width, accuracy: pixel, file: file, line: line)
-        XCTAssertEqual(actual.height, expected.height, accuracy: pixel, file: file, line: line)
+        XCTAssertEqual(actual.minX, expected.minX, accuracy: pixel, context, file: file, line: line)
+        XCTAssertEqual(actual.minY, expected.minY, accuracy: pixel, context, file: file, line: line)
+        XCTAssertEqual(actual.width, expected.width, accuracy: pixel, context, file: file, line: line)
+        XCTAssertEqual(actual.height, expected.height, accuracy: pixel, context, file: file, line: line)
+    }
+
+    private func layoutDiagnostics(host: HeaderLayoutHost, measured: HeaderLayoutMeasurements,
+                                   browser: SimilarPhotoGroupBrowser) -> String {
+        let root = host.controller.view!
+        let safeArea = root.convert(root.safeAreaLayoutGuide.layoutFrame, to: host.window)
+        let headers = descendants(root, UIScrollView.self).filter { !($0 is UICollectionView) }
+        let grids = controllers(host.controller).compactMap { $0 as? SimilarPhotoGroupGridController }
+        func describe(_ scroll: UIScrollView) -> String {
+            "bounds=\(scroll.bounds), windowFrame=\(scroll.convert(scroll.bounds, to: host.window)), content=\(scroll.contentSize), offset=\(scroll.contentOffset), inset=\(scroll.adjustedContentInset), scrollEnabled=\(scroll.isScrollEnabled)"
+        }
+        let headerInfo = headers.map { describe($0) }.joined(separator: "; ")
+        let gridInfo = grids.map { describe($0.collectionView) }.joined(separator: "; ")
+        return "natural=\(measured.naturalHeight), probe(bounds=\(measured.viewportBounds), windowFrame=\(String(describing: measured.viewportFrame)), layoutCallbacks=\(measured.viewportLayouts), sameWindow=\(measured.viewportWindow === host.window)), host(bounds=\(root.bounds), safeAreaWindowFrame=\(safeArea)), headers[\(headers.count)]=[\(headerInfo)], grids[\(grids.count)]=[\(gridInfo)], targetWindowFrame=\(String(describing: browser.targetFrame))"
     }
 
     private func controllers(_ controller: UIViewController) -> [UIViewController] {
@@ -218,12 +254,60 @@ private enum HeaderLayoutFailure: Error { case layout, unexpectedDeletion }
 @MainActor
 private final class HeaderLayoutMeasurements {
     var naturalHeight: CGFloat = 0
-    var viewportSize: CGSize = .zero
+    var viewportBounds: CGRect = .zero
+    var viewportFrame: CGRect?
+    weak var viewportWindow: UIWindow?
+    var viewportLayouts = 0
 }
 
-private struct HeaderLayoutViewportSizePreference: PreferenceKey {
-    static var defaultValue: CGSize { .zero }
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+/// A transparent overlay takes the detail's finite size proposal but records
+/// only the UIView's actual layout. No viewport preference or state publisher.
+@MainActor
+private struct HeaderLayoutViewportProbe: UIViewRepresentable {
+    let measurements: HeaderLayoutMeasurements
+
+    func makeUIView(context: Context) -> HeaderLayoutViewportView {
+        HeaderLayoutViewportView(measurements: measurements)
+    }
+
+    func updateUIView(_ view: HeaderLayoutViewportView, context: Context) {
+        view.measurements = measurements
+        view.setNeedsLayout()
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: HeaderLayoutViewportView,
+                      context: Context) -> CGSize? {
+        guard let width = proposal.width, let height = proposal.height else { return nil }
+        return CGSize(width: width, height: height)
+    }
+}
+
+@MainActor
+private final class HeaderLayoutViewportView: UIView {
+    var measurements: HeaderLayoutMeasurements
+
+    init(measurements: HeaderLayoutMeasurements) {
+        self.measurements = measurements
+        super.init(frame: .zero)
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        accessibilityElementsHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        measurements.viewportLayouts += 1
+        measurements.viewportBounds = bounds
+        measurements.viewportWindow = window
+        measurements.viewportFrame = window.map { convert(bounds, to: $0) }
+    }
 }
 
 @MainActor
