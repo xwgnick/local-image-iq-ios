@@ -1,3 +1,27 @@
+# Local Image IQ · Native iOS — 当前交付
+
+## 当前交付：0.11.1 / build 31
+
+**DELIVERED：相似清理错误分类与普通弹窗诊断已完成原生验证、发布和本地包校验；手机根因仍未知。**最终源码 `86f60eb0ae107114fa1a08287822e69a61768842`，[CI 37632945316](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37632945316)／[job 112831681483](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37632945316/job/112831681483) **首次且唯一一次完整 CI SUCCESS**。
+
+- 普通错误弹窗提供固定短码、阶段和必要数字返回码；只对实际权限错误提示 Photos 权限，未知保持未知，不再把所有失败统一说成权限问题。类型化错误码 **53** 种，操作／阶段仅作本机诊断；不展示或记录原始错误、路径、照片 ID、查询、OCR 或 SQLite 错误文本。
+- 原有源、锁、文件、Photos、发布／选择／删除检查全部保留；不增加回退、自动重试、清库或重索引。**进入失败本身不自动重试**；选择失败后既有生命周期仍可能再次恢复，不能理解为全局“任何错误后永不恢复”。模型／768维、图像策略、索引／OCR 身份及原界面布局不变。
+- 这是**误导文案与诊断保真修正**，不是已经找到或修复用户“刚进入就失败”的具体手机原因。错误码在第一逻辑行只出现一次；原生窄弹窗可将代码／阶段折成两行。
+
+**安装包：**[build/device-download/37632945316/LocalImageIQ-0.11.1-build31-iphoneos-unsigned.ipa](build/device-download/37632945316/LocalImageIQ-0.11.1-build31-iphoneos-unsigned.ipa) · [公开 Release ci-37632945316-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37632945316-1)。Release **405866808** 于 **2026-10-07T14:44:51Z** 发布，**9 项资产、prerelease、非草稿**。IPA **1,419,534,740 bytes**，实际全文件流式 SHA-256 `14966528e2759e6fe97d0d912c270f4b1cbe5fd74c6053cf233a994cb49871bf`；**7-Zip 26.04 全量 CRC PASS**。仍需 Sideloadly 本机重签。
+
+**Core79 全通过；App1525＝1524通过／1项既有 SQLite 物理保护模拟器跳过／0失败；新增86项全通过；UI14全通过。**真实模型8项、CPU／`.all`／20 actor 及全部原工作流门槛保留；源检查／打包自检、Python静态30、品牌12、Node104均通过，未改 CI 缓存、runner 或跳过策略。完整耗时、资产与验证范围见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+
+父流程已实际查看 [build/ui-review/37632945316/cleanup-failure-review.jpg](build/ui-review/37632945316/cleanup-failure-review.jpg)：注入源检查失败不显示权限提示；权限样例和安全页脚／“知道了”可见。它们是原生宿主的合成错误，**不是真机、iOS26或真实 Photos 证据**；最大 Dynamic Type 的背景下，系统弹窗文字仍较小，未宣称字号随之放大或完整 AX 可见性。详见 [docs/SIMILAR_CLEANUP_FAILURE_DIAGNOSTICS.md](docs/SIMILAR_CLEANUP_FAILURE_DIAGNOSTICS.md)。
+
+**原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清库、不重索引、不重新授权。**正常进入相似清理一次；若仍失败，只发**一张带错误码的普通弹窗截图**，无需调试或寻找旧版未记录的日志，也不做真实照片删除测试。安装细节见 [docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)。本次仅整理父流程既有结果，未重跑测试／CI、下载或审图。
+
+## 完整历史 README（截至 build 30）
+
+**以下为更新前 README 全文，含 build 30、全部后续章节和尾部，原样保留。旧文中的“当前／本轮”仅指当时版本；现行交付与操作以上方 build 31 为准。既有截至 build 22 的独立归档及其链接也保留，不以摘要替代历史。**
+
+---
+
 # Local Image IQ · Native iOS
 
 SwiftUI + PhotoKit + Core ML + 系统 Vision。独立原生 App，以本机检索为主，不是桌面网页套壳。

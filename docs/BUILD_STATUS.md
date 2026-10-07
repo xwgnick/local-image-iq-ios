@@ -1,6 +1,70 @@
+# Cloud build status — build 31
+
+## Current: 0.11.1 (build 31) — 相似清理错误分类；首次且唯一一次完整 CI SUCCESS，已交付
+
+**PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE。诊断修正已完成，但用户刚进入清理就失败的手机根因仍未知，不宣称该未知故障已修复。**最终源码 **`86f60eb0ae107114fa1a08287822e69a61768842`**；[run 37632945316](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37632945316)／[job 112831681483](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37632945316/job/112831681483)，**attempt 1、首次且唯一一次完整 CI SUCCESS**，不是待构建或待发布。
+
+以下只汇总**父流程已经完成**的源码检查、测试、发布、完整下载／哈希／CRC 和实际审图。本次文档编辑**未运行终端、Git、CI、测试、下载、解包或重新审图**；编辑器诊断不替代原生验证。
+
+### build 31 已实现的诊断与不变边界
+
+- **53 种类型化错误码**，保留本机操作（恢复／计算／发布／选择核验）、阶段及必要的 errno／SQLite 数字码。仅实际权限错误显示权限提示，未知保持未知；不保留／输出 raw Error、路径、照片 ID、查询、OCR、SQLite errmsg 或未知 NSError 内容。
+- 普通原生弹窗第一**逻辑行**提供一次短码及阶段，不重复代码；实际窄弹窗可能折为两行。无需调试工具，不新增 UI 布局美化。
+- 已捕获的**首个致命源诊断在缓存最终 validator 内失败后直接保留**，不让稍后的重查覆盖首因；只有可选缓存写失败准备降为警告时，仍先核验 **Photos 与图像索引源两个 authority**，任一失效都不能继续冒充保存警告。
+- 全部原有源／锁／文件／Photos／发布／选择／删除 guards 保留；不增加搜索式无监视器回退、回退计算、自动重试、清库或重索引。**进入失败本身不自动重试**；选择失败仍按既有生命周期失效，后续生命周期可能再次恢复，不能写成全局“错误后永不恢复”。
+- SigLIP 768、FP32／`.all`、图像输入策略、模型／索引／数据库 schema／OCR 身份、20 actor、阈值、主导航、搜索两列／12张分页、清理五列、B02／LaunchScreen 和删除流程不变。尚无手机原始返回码，锁检测不可用、实际 writer、辅助文件等均不能当作该手机已证实原因。
+
+### build 31 实际验证结果
+
+|项目|父流程已完成的结果／范围|
+|---|---|
+|Swift 核心|**79 全通过**。|
+|App XCTest|**1525＝1524 通过／1 项既有 SQLite 物理文件保护模拟器跳过／0 失败**；测试 **517.270 秒，wall 533.102 秒**。没有新增跳过。|
+|新增 App 测试|**86＝20＋32＋30＋2＋2**，全部通过，已计入 App1525，不重复相加。|
+|错误诊断|新增 **20／0.076 秒**。|
+|源诊断|新增 **32／0.183 秒**。|
+|状态错误处理|新增 **30／0.117 秒**。|
+|实际原生 UIAlert 展示|新增 **2／7.011 秒**；实际挂载宿主并呈现弹窗，错误为注入值，不是真实 Photos 故障。|
+|恢复／保存首因集成|新增 **2**；复用套件现共 **65／2.489 秒**，该耗时是整套65项，不是仅新增两项。|
+|真实模型 Generated|**8／161.738 秒**全通过；完整 **CPU／`.all`／20 actor** 门槛保留。|
+|独立 UI|既有 **14 全通过／1232.079 秒**；导航 **9／998.910 秒**，键盘 **5／233.169 秒**。与新增原生宿主弹窗2项分开计数。|
+|源检查与打包|源检查、打包自检、**Python静态30／品牌12／Node104 全通过**。|
+
+**整个原工作流未改变**：未新增 CI 缓存、未跳过任何门槛、未新增测试跳过，也未优化 runner 或放宽原有门槛；真实模型与全部 App／UI 回归均执行，唯一跳过仍是上述既有 SQLite 物理保护模拟器用例。测试耗时不是手机性能，也不是实际 Photos／iOS26 验收。
+
+### build 31 最终发布与全文件核验
+
+|资产／核验|实际结果|
+|---|---|
+|公开 Release|[ci-37632945316-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37632945316-1)，ID **405866808**；**2026-10-07T14:44:51Z** 发布；**9 项资产、prerelease、非 draft**。|
+|IPA|asset **618975307**；[../build/device-download/37632945316/LocalImageIQ-0.11.1-build31-iphoneos-unsigned.ipa](../build/device-download/37632945316/LocalImageIQ-0.11.1-build31-iphoneos-unsigned.ipa)；**1,419,534,740 bytes**；实际全文件流式 SHA-256 **`14966528e2759e6fe97d0d912c270f4b1cbe5fd74c6053cf233a994cb49871bf`**。不是仅核对远端声明或小型元数据。|
+|完整归档|**7-Zip 26.04 全量 CRC PASS**；**11 文件夹、30 文件、解压后 1,567,718,022 bytes**。验证原始 IPA，不验证 Sideloadly 重签包或手机安装。|
+|UI ZIP|asset **618974988**；[../build/ui-review/37632945316/UIReview.zip](../build/ui-review/37632945316/UIReview.zip)，**9,614,734 bytes**；实际完整核验 SHA-256 **`b5ab5fb6267f3be753a7563bc133e8dae16ad6166416c3078a98e0d1a2feacc6`**。|
+|IPA 小型元数据|**0.11.1 / 31、arm64 Release、未签名、最低 iOS17、SDK18.5／Xcode16.4、LaunchScreen**。模型及策略身份不变；**未做完整模型字节比较**。|
+|地点身份|Geo SHA-256 **`41d12962d73abf3976c55a83299a963385670c9f331597ab1ead6ddc0ed47ab4`**；manifest SHA-256 **`7edb232043452d9a6f718b8a59a121fa0938dfdd54e732ed97e2be60f195b7e5`**；均不变。|
+
+本地完整下载记录：[../build/device-download/37632945316/release-fetch-9bb7ce11-dd22-4070-b287-8f7b2281a715.json](../build/device-download/37632945316/release-fetch-9bb7ce11-dd22-4070-b287-8f7b2281a715.json)。
+
+### build 31 已实际审图与手机交接
+
+父流程已实际查看 [../build/ui-review/37632945316/cleanup-failure-review.jpg](../build/ui-review/37632945316/cleanup-failure-review.jpg)（**860×940**），包含 **2 张各1179×2556 的实际原生宿主弹窗截图**：
+
+- 左侧注入 **`SG-SOURCE-LOCK-CHECK(10)`／`sourceCheck`**；不出现权限提示。第一逻辑行的代码／阶段在画面上折成两行，仍可理解；代码没有重复显示。数字10是合成注入值，不能据此判断用户手机错误。
+- 右侧为注入权限错误、**`photos`** 阶段，宿主配置最大 Dynamic Type。两图的安全页脚及“**知道了**”都可见。
+- **系统 UIAlert 文字仍较小，即使背景使用最大字体**；只确认挂载的字体 trait、公开 message 内容及截图可见像素，不宣称弹窗文字已缩放至最大字号或完整 AX 可见性。
+- 无实际私人 Photos、手机根因或真实删除证据，**不是 iOS26 测试**，也没有进行 UI 布局美化。
+
+用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装，不卸载、不清库、不重索引、不重新授权**。正常进入清理**一次**；若仍报错，只需**一张带错误码的普通弹窗截图**，不要要求寻找不存在的旧日志或开启调试，更不做真实照片删除测试。手机安装及立即失败原因仍待确认；功能细节见 [SIMILAR_CLEANUP_FAILURE_DIAGNOSTICS.md](SIMILAR_CLEANUP_FAILURE_DIAGNOSTICS.md)，安装见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
+
+## 完整历史正文（截至 build 30）
+
+**以下保留更新前的全部标题、build 30 正文和所有更早历史／尾部；唯一历史文字调整是将旧 Current 标题改为 Historical。旧文中的“当前／本轮”、旧页首指向及操作要求仅属于其历史阶段，不能替代顶部 build 31。**
+
+---
+
 # Cloud build status — build 30
 
-## Current: 0.11.0 (build 30) — 双主功能首页与分组结果复用；第四次整体验证 SUCCESS，已交付，真机待验
+## Historical: 0.11.0 (build 30) — 双主功能首页与分组结果复用；第四次整体验证 SUCCESS，已交付，真机待验
 
 **PASS-NATIVE／PASS-PACKAGE／DELIVERED；PENDING-DEVICE。V3 设计与首次进入清理的交互均已获批，本阶段已实现并交付，不是等待设计批准。共四次完整原生验证：前三次 FAILED，第四次 SUCCESS。**
 

@@ -1,3 +1,33 @@
+# Windows → iPhone 安装 — build 31 当前交付
+
+## 当前：0.11.1（build 31）— 错误分类与普通弹窗诊断已交付
+
+**DELIVERED／PENDING-DEVICE。**[../build/device-download/37632945316/LocalImageIQ-0.11.1-build31-iphoneos-unsigned.ipa](../build/device-download/37632945316/LocalImageIQ-0.11.1-build31-iphoneos-unsigned.ipa) · [公开 Release ci-37632945316-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37632945316-1)。本机已经完整下载核验，无需重下；另一台电脑从该 Release 下载同一版本包。仍须 Sideloadly 本机重签，不是手机安装已验证。
+
+### 这次只需覆盖安装、进入清理一次
+
+1. 使用上述 **0.11.1 / build31** 包，沿用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**。**不卸载、不清库、不重索引、不重新授权**，不改变已有图片／OCR 索引、模型或网络许可。
+2. 正常打开 App，点底部“**相似清理**”进入**一次**。无需开启调试、找旧版未记录的日志、反复重试或重新建立索引。
+3. 如果仍报错，只发送**一张带错误码的普通弹窗截图**即可；代码及阶段可能自然折为两行，不必另录屏或采集调试报告。**本次不要求实际删除照片来测试。**
+
+本版只有实际权限错误才提示 Photos 权限，未知保持未知；短码／阶段仅作本机诊断，不输出原始错误、路径、照片ID、查询、OCR 或 SQLite 错误文本。**已修正误导文案和错误保留，但尚未知道或证明修复手机刚进入就失败的原因。**所有安全检查保留，未增加回退或重试；进入失败本身不自动重试，选择失败后既有生命周期仍可能再次恢复，不能概括为全局“失败后不再恢复”。
+
+### 已完成的包与验证摘要
+
+- 最终源码 **`86f60eb0ae107114fa1a08287822e69a61768842`**；[CI 37632945316](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37632945316)／[job 112831681483](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37632945316/job/112831681483) **首次且唯一一次完整 CI SUCCESS**。Core79全通过；App1525＝1524通过／1项既有SQLite物理保护模拟器跳过／0失败（**517.270秒，wall533.102秒**），新增86全通过；UI14全通过。真实模型8项、CPU／`.all`／20 actor及原工作流完整门槛保留，未作缓存、runner优化或新增跳过。
+- Release **405866808**，**2026-10-07T14:44:51Z** 发布，**9项资产、prerelease、非draft**。IPA asset **618975307**，**1,419,534,740 bytes**，实际全文件流式 SHA-256 **`14966528e2759e6fe97d0d912c270f4b1cbe5fd74c6053cf233a994cb49871bf`**；**7-Zip26.04全量CRC PASS**（**11文件夹、30文件、解压后1,567,718,022 bytes**）。[../build/device-download/37632945316/release-fetch-9bb7ce11-dd22-4070-b287-8f7b2281a715.json](../build/device-download/37632945316/release-fetch-9bb7ce11-dd22-4070-b287-8f7b2281a715.json) 保留实际下载记录。
+- 小型IPA元数据确认 **0.11.1／31、arm64 Release、未签名、最低iOS17、SDK18.5／Xcode16.4、LaunchScreen**；SigLIP768、策略／索引／数据库schema／OCR及地点身份未改，**未做完整模型字节比较**。原包校验不验证重签后的包或实际手机。
+
+父流程已实际查看 [../build/ui-review/37632945316/cleanup-failure-review.jpg](../build/ui-review/37632945316/cleanup-failure-review.jpg)（860×940，两张各1179×2556原生宿主图）：注入 `SG-SOURCE-LOCK-CHECK(10)`／`sourceCheck` 无权限提示，权限样例为 `photos`；安全页脚及“知道了”均可见。最大Dynamic Type宿主下**系统弹窗文字仍较小**，不是最大字号文字／完整AX可见性验证。**不是手机、iOS26或真实Photos故障／删除证据**，未作UI布局美化。
+
+完整分项测试、UI资产哈希及诊断边界见 [BUILD_STATUS.md](BUILD_STATUS.md) 和 [SIMILAR_CLEANUP_FAILURE_DIAGNOSTICS.md](SIMILAR_CLEANUP_FAILURE_DIAGNOSTICS.md)。本次仅据父流程已完成的结果更新文档，未重跑测试、CI、下载、CRC、审图或手机操作。
+
+## 完整安装历史（截至 build 30，含原第 1–5 节）
+
+**以下旧标题、设备说明、build30及更早正文、原第1–5节和全部尾部完整保留，仅把旧“当前”交付标题改为“历史”。旧版包名、调试／迁移／清库要求均为历史；签名方法可参考原第1–4节，但包必须选择顶部build31，安装后只执行上方这次的三步，不执行旧第5节的网格诊断或其他旧版操作。已有可用工具、配对、账号与授权无需重置。**
+
+---
+
 # Windows → iPhone 安装（免费账号）
 
 用户设备：**iPhone 15 / iOS 26.6.1**，只能使用 Windows；已同意使用
@@ -5,7 +35,7 @@
 苹果提供的 Windows 版 Xcode。此前版本已在该手机安装、打开并使用；每个新版本
 的界面与实际图库行为仍需在手机上确认。
 
-## 当前：0.11.0（build 30）— 双主入口与分组复用，已交付，真机待验
+## 历史：0.11.0（build 30）— 双主入口与分组复用，已交付，真机待验
 
 **DELIVERED／PENDING-DEVICE。本地已校验包：[../build/device-download/37613875842/LocalImageIQ-0.11.0-build30-iphoneos-unsigned.ipa](../build/device-download/37613875842/LocalImageIQ-0.11.0-build30-iphoneos-unsigned.ipa)** · [公开 Release ci-37613875842-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37613875842-1)。本机无需重下；另一台电脑从此 Release 下载同一版本包。仍须 Sideloadly 本机重签，不是免签安装或真机已通过。
 
