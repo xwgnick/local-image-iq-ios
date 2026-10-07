@@ -80,6 +80,16 @@ final class SimilarPhotoGroupBrowser: ObservableObject {
     }
 }
 
+/// The padded header's natural height, measured inside the vertical scroll
+/// content rather than from its capped viewport. Layout observers can read the
+/// same preference without creating a second copy of the text or buttons.
+struct SimilarPhotoGroupHeaderHeightPreference: PreferenceKey {
+    static var defaultValue: CGFloat { 0 }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 @MainActor
 struct SimilarPhotoGroupDetail: View {
     let group: SimilarPhotoGroup
@@ -91,6 +101,7 @@ struct SimilarPhotoGroupDetail: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var selectionMode = false
+    @State private var measuredHeaderHeight: CGFloat = 0
 
     private var current: Bool { state.selectionSessionID == route.sessionID }
     private var enabled: Bool {
@@ -101,32 +112,47 @@ struct SimilarPhotoGroupDetail: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let availableHeaderHeight = geometry.size.height * 0.45
             VStack(spacing: 0) {
-                // At huge text sizes the header can scroll in its own region;
-                // the remaining viewport still shows the five-column grid.
-                ViewThatFits(in: .vertical) {
+                // Scroll content gets an unbounded vertical proposal, even
+                // before its viewport has a height. Short headers fit exactly;
+                // accessibility text can scroll without consuming the grid.
+                ScrollView {
                     header
-                    ScrollView { header }
+                        .background {
+                            GeometryReader { content in
+                                Color.clear.preference(key: SimilarPhotoGroupHeaderHeightPreference.self,
+                                                       value: content.size.height)
+                            }
+                        }
                 }
-                .frame(maxHeight: geometry.size.height * 0.45, alignment: .top)
+                .frame(height: min(measuredHeaderHeight, availableHeaderHeight), alignment: .top)
+                .scrollDisabled(measuredHeaderHeight <= availableHeaderHeight)
                 .layoutPriority(1)
-                SimilarPhotoGroupGrid(
-                    photos: group.photos, groupNumber: number, sessionID: route.sessionID,
-                    initialPhotoID: route.photoID, selectedIDs: state.selectedIDs,
-                    selectionMode: selectionMode, isSelecting: state.isSelecting, enabled: enabled,
-                    hiddenPhotoID: browser.zoomFlight?.photoID,
-                    thumbnail: thumbnail,
-                    begin: { guard enabled else { return nil }; return state.beginRangeSelection(groupID: group.id) },
-                    finish: { token, ids in
-                        guard current else { return }
-                        state.finishRangeSelection(token: token, selectedInGroup: ids)
-                    },
-                    cancel: { if current { state.cancelRangeSelection() } },
-                    toggle: { id in if enabled && !state.isSelecting { state.toggleSelection(id) } },
-                    browse: { id in if enabled && !state.isSelecting { browser.viewPhoto(id, in: group) } },
-                    initialTarget: { id, frame in browser.didLayoutTarget(routeID: route.id, photoID: id, frame: frame) }
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onPreferenceChange(SimilarPhotoGroupHeaderHeightPreference.self) { height in
+                    if measuredHeaderHeight != height { measuredHeaderHeight = height }
+                }
+                // Initial scrolling and zoom targeting are one-shot UIKit
+                // operations: never run them against a zero-header viewport.
+                if measuredHeaderHeight > 0 {
+                    SimilarPhotoGroupGrid(
+                        photos: group.photos, groupNumber: number, sessionID: route.sessionID,
+                        initialPhotoID: route.photoID, selectedIDs: state.selectedIDs,
+                        selectionMode: selectionMode, isSelecting: state.isSelecting, enabled: enabled,
+                        hiddenPhotoID: browser.zoomFlight?.photoID,
+                        thumbnail: thumbnail,
+                        begin: { guard enabled else { return nil }; return state.beginRangeSelection(groupID: group.id) },
+                        finish: { token, ids in
+                            guard current else { return }
+                            state.finishRangeSelection(token: token, selectedInGroup: ids)
+                        },
+                        cancel: { if current { state.cancelRangeSelection() } },
+                        toggle: { id in if enabled && !state.isSelecting { state.toggleSelection(id) } },
+                        browse: { id in if enabled && !state.isSelecting { browser.viewPhoto(id, in: group) } },
+                        initialTarget: { id, frame in browser.didLayoutTarget(routeID: route.id, photoID: id, frame: frame) }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .background(IQStyle.background)
