@@ -220,6 +220,7 @@ struct PrimaryLibraryButton: View {
     var body: some View {
         Button(action: action) {
             Label("我的图库", systemImage: "photo.stack")
+                .labelStyle(.titleAndIcon)
                 .font(.subheadline).frame(minHeight: 44)
         }
         .accessibilityIdentifier("open-library")

@@ -7,8 +7,10 @@ import ImageIQCore
 
 /// Check the real production pages' public UIKit exclusion boundaries, not a
 /// recursive SwiftUI AX snapshot (which is not available in an app-host test).
-/// The unchanged XCUI tests remain responsible for strict identifier absence,
-/// including photo-query, photo-text-search-enabled and index-photo-text.
+/// The unchanged external XCUI tests remain responsible for strict public
+/// button/label existence and identifier absence, including photo-query,
+/// photo-text-search-enabled and index-photo-text. Native bar attachment and
+/// geometry below do not establish that individual toolbar buttons are visible.
 @MainActor
 final class PrimaryPageAccessibilityTests: XCTestCase {
     func testActualPagesExcludeInactiveNativeContentAndHeadersWithoutRemovingControls() async throws {
@@ -157,7 +159,7 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         let nav = try navigation(containing: anchor, in: host)
         XCTAssertFalse(nav.view.accessibilityElementsHidden)
         XCTAssertEqual(descendants(nav.view, UISlider.self).count, 1)
-        XCTAssertGreaterThan(nav.navigationBar.topItem?.rightBarButtonItems?.count ?? 0, 0)
+        assertHeader(nav, active: true)
         XCTAssertEqual(c.grouping.scans, 0)
     }
 
@@ -266,15 +268,36 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
 
     private func assertHeader(_ nav: UINavigationController, active: Bool,
                               file: StaticString = #filePath, line: UInt = #line) {
-        // Public UINavigationItem, not guessed AX descendants/identifiers.
-        let leading = nav.navigationBar.topItem?.leftBarButtonItems?.count ?? 0
-        let trailing = nav.navigationBar.topItem?.rightBarButtonItems?.count ?? 0
+        // NavigationStack toolbars need not populate UINavigationItem's button
+        // arrays. Check the public native bar and its enclosing AX scope only;
+        // exact buttons/labels, rendering and interaction remain external XCUI
+        // responsibilities, not inferred from these in-process measurements.
+        let bar = nav.navigationBar
+        XCTAssertTrue(bar.isDescendant(of: nav.view), file: file, line: line)
+        XCTAssertEqual(nav.view.accessibilityElementsHidden, !active, file: file, line: line)
+        var ancestry: [UIView] = []
+        var ancestor: UIView? = bar
+        while let view = ancestor {
+            ancestry.append(view)
+            ancestor = view.superview
+        }
+        XCTAssertEqual(ancestry.contains { $0.accessibilityElementsHidden }, !active,
+                       "The active bar must not be AX-excluded; the inactive bar must be excluded by its page scope",
+                       file: file, line: line)
         if active {
-            XCTAssertGreaterThan(leading, 0, file: file, line: line)
-            XCTAssertGreaterThan(trailing, 0, file: file, line: line)
-        } else {
-            XCTAssertEqual(leading, 0, "Inactive page must not keep duplicate library/back controls", file: file, line: line)
-            XCTAssertEqual(trailing, 0, "Inactive page must not keep duplicate settings/done controls", file: file, line: line)
+            guard let window = bar.window else {
+                XCTFail("The active native navigation bar must remain attached to a window", file: file, line: line)
+                return
+            }
+            XCTAssertTrue(window === nav.view.window, file: file, line: line)
+            // Geometric visibility only, not a SwiftUI toolbar snapshot or an
+            // assumption about the hidden state of internal hosting wrappers.
+            var visibleBounds = bar.convert(bar.bounds, to: window).intersection(window.bounds)
+            for view in ancestry.dropFirst() where view.clipsToBounds {
+                visibleBounds = visibleBounds.intersection(view.convert(view.bounds, to: window))
+            }
+            XCTAssertGreaterThan(visibleBounds.width, 0, file: file, line: line)
+            XCTAssertGreaterThan(visibleBounds.height, 0, file: file, line: line)
         }
     }
 
