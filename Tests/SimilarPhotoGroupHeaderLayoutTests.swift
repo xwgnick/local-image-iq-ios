@@ -105,7 +105,10 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
             let safeAreaFrame = controller.view.convert(controller.view.safeAreaLayoutGuide.layoutFrame, to: host.window)
             let cap = viewportSize.height * 0.45
             let allocated = min(natural, cap)
-            let headerFrame = header.convert(header.bounds, to: host.window)
+            let headerInsets = header.adjustedContentInset
+            let rawHeaderFrame = header.convert(header.bounds, to: host.window)
+            let usableHeaderBounds = header.bounds.inset(by: headerInsets)
+            let usableHeaderFrame = header.convert(usableHeaderBounds, to: host.window)
             let gridFrame = collection.convert(collection.bounds, to: host.window)
 
             // This test hosts the detail directly, without ignoring safe areas.
@@ -117,32 +120,46 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
             assertRect(viewportFrame, equals: safeAreaFrame, pixel: pixel, context: context)
             XCTAssertEqual(viewportFrame.width, viewportSize.width, accuracy: pixel, context)
             XCTAssertEqual(viewportFrame.height, viewportSize.height, accuracy: pixel, context)
-            XCTAssertEqual(headerFrame.minY, viewportFrame.minY, accuracy: pixel, context)
+            // UIKit can extend the raw scroll view into the system safe area.
+            // Inset its actual bounds (including the content-offset origin)
+            // before conversion; that excluded area is not unused header space.
+            XCTAssertEqual(rawHeaderFrame.minY + headerInsets.top, viewportFrame.minY, accuracy: pixel, context)
+            XCTAssertEqual(rawHeaderFrame.maxY - headerInsets.bottom, usableHeaderFrame.maxY, accuracy: pixel, context)
+            XCTAssertEqual(rawHeaderFrame.minX + headerInsets.left, viewportFrame.minX, accuracy: pixel, context)
+            XCTAssertEqual(rawHeaderFrame.maxX - headerInsets.right, viewportFrame.maxX, accuracy: pixel, context)
+            XCTAssertEqual(usableHeaderFrame.minY, viewportFrame.minY, accuracy: pixel, context)
+            XCTAssertEqual(usableHeaderFrame.minX, viewportFrame.minX, accuracy: pixel, context)
+            XCTAssertEqual(usableHeaderFrame.width, viewportSize.width, accuracy: pixel, context)
+            XCTAssertEqual(usableHeaderFrame.width, rawHeaderFrame.width - headerInsets.left - headerInsets.right,
+                           accuracy: pixel, context)
+            XCTAssertEqual(usableHeaderFrame.height, rawHeaderFrame.height - headerInsets.top - headerInsets.bottom,
+                           accuracy: pixel, context)
             XCTAssertEqual(gridFrame.maxY, viewportFrame.maxY, accuracy: pixel, context)
             XCTAssertEqual(gridFrame.minX, viewportFrame.minX, accuracy: pixel, context)
 
-            // Compare actual laid-out content, the native scroll viewport, and
-            // the native grid. The old maxHeight reservation leaves a large gap
-            // here even though the five-column/count/target tests still pass.
+            // Compare raw laid-out content with the actual usable scroll viewport
+            // and native grid, without clamping or inferring the measured frame
+            // from the cap. The old maxHeight reservation leaves a large gap here
+            // even though the five-column/count/target tests still pass.
             XCTAssertEqual(header.contentSize.height, natural, accuracy: pixel, context)
-            XCTAssertEqual(headerFrame.height, allocated, accuracy: pixel, context)
-            XCTAssertEqual(gridFrame.minY, headerFrame.maxY, accuracy: pixel, context)
-            XCTAssertEqual(gridFrame.minY - headerFrame.minY, allocated, accuracy: pixel, context)
-            XCTAssertEqual(gridFrame.maxY - headerFrame.minY, viewportSize.height, accuracy: pixel, context)
+            XCTAssertEqual(usableHeaderFrame.height, allocated, accuracy: pixel, context)
+            XCTAssertEqual(gridFrame.minY, usableHeaderFrame.maxY, accuracy: pixel, context)
+            XCTAssertEqual(gridFrame.minY - usableHeaderFrame.minY, allocated, accuracy: pixel, context)
+            XCTAssertEqual(gridFrame.maxY - usableHeaderFrame.minY, viewportSize.height, accuracy: pixel, context)
             XCTAssertEqual(gridFrame.width, viewportSize.width, accuracy: pixel, context)
-            XCTAssertLessThanOrEqual(header.contentSize.width, header.bounds.width + pixel, context)
+            XCTAssertLessThanOrEqual(header.contentSize.width, usableHeaderBounds.width + pixel, context)
             XCTAssertGreaterThan(gridFrame.height, 0, context)
             XCTAssertGreaterThanOrEqual(gridFrame.height + pixel, viewportSize.height * 0.55, context)
             XCTAssertEqual(header.isScrollEnabled, capped, context)
             XCTAssertTrue(collection.isScrollEnabled, "Disabling a fitting header must not disable the photo grid; \(context)")
             if capped {
                 XCTAssertGreaterThan(natural, cap, "Maximum-size text must exercise overflowing content, not just the policy; \(context)")
-                XCTAssertEqual(headerFrame.height, cap, accuracy: pixel, context)
+                XCTAssertEqual(usableHeaderFrame.height, cap, accuracy: pixel, context)
             } else {
                 XCTAssertLessThan(natural, cap - pixel, "Regular text must exercise the short-header regression; \(context)")
-                XCTAssertEqual(gridFrame.minY, headerFrame.minY + natural, accuracy: pixel,
+                XCTAssertEqual(gridFrame.minY, usableHeaderFrame.minY + natural, accuracy: pixel,
                                "The grid must start at the measured content bottom, within ONE device pixel; \(context)")
-                XCTAssertEqual(headerFrame.height - header.contentSize.height, 0, accuracy: pixel,
+                XCTAssertEqual(usableHeaderFrame.height - header.contentSize.height, 0, accuracy: pixel,
                                "No unused space inside the normal header; \(context)")
             }
 
@@ -233,7 +250,7 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
         let headers = descendants(root, UIScrollView.self).filter { !($0 is UICollectionView) }
         let grids = controllers(host.controller).compactMap { $0 as? SimilarPhotoGroupGridController }
         func describe(_ scroll: UIScrollView) -> String {
-            "bounds=\(scroll.bounds), windowFrame=\(scroll.convert(scroll.bounds, to: host.window)), content=\(scroll.contentSize), offset=\(scroll.contentOffset), inset=\(scroll.adjustedContentInset), scrollEnabled=\(scroll.isScrollEnabled)"
+            "bounds=\(scroll.bounds), windowFrame=\(scroll.convert(scroll.bounds, to: host.window)), usableWindowFrame=\(scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: host.window)), content=\(scroll.contentSize), offset=\(scroll.contentOffset), inset=\(scroll.adjustedContentInset), scrollEnabled=\(scroll.isScrollEnabled)"
         }
         let headerInfo = headers.map { describe($0) }.joined(separator: "; ")
         let gridInfo = grids.map { describe($0.collectionView) }.joined(separator: "; ")
