@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var visiblePageBoundary: ResultPageBoundaryValue?
     @FocusState private var isSearchFocused: Bool
     private var showingResults: Bool { state.completedQuery != nil || state.activity == .searching }
+    private var isSearchPageActive: Bool { navigation.page == .search }
 
     init(state: AppState, photoActionService: (any PhotoLibraryActions)? = nil,
          similarCleanupState: SimilarPhotoCleanupState? = nil,
@@ -129,11 +130,14 @@ struct ContentView: View {
                     .background {
                         // Inside the content, so native ownership resolves to
                         // this ScrollView even while its retained page is hidden.
-                        PrimarySearchScrollAnchor()
+                        PrimarySearchScrollAnchor(active: isSearchPageActive)
                             .frame(height: 0)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }
+                    // Inside the navigation/scroll AX boundaries, including
+                    // the query, OCR switch and its manual indexing action.
+                    .accessibilityHidden(!isSearchPageActive)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .coordinateSpace(name: ResultPageBoundary.coordinateSpace)
@@ -157,12 +161,14 @@ struct ContentView: View {
             .background(IQStyle.background)
             .foregroundStyle(IQStyle.text)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if state.isSelectingResults { selectionToolbar }
-                else {
+                if state.isSelectingResults {
+                    selectionToolbar.accessibilityHidden(!isSearchPageActive)
+                } else {
                     libraryStatus
                         .padding(.horizontal, 20)
                         .padding(.vertical, 8)
                         .background(IQStyle.background)
+                        .accessibilityHidden(!isSearchPageActive)
                 }
             }
             .navigationTitle(showingResults ? "照片搜索" : "")
@@ -170,22 +176,26 @@ struct ContentView: View {
             .toolbarBackground(IQStyle.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    PrimaryLibraryButton(canRead: state.canRead, action: openLibrary)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    PrimarySettingsButton(action: openSettings)
-                }
-                if isSearchFocused {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("完成") { isSearchFocused = false }
-                            .accessibilityLabel("收起键盘").accessibilityIdentifier("hide-search-keyboard")
+                // Toolbar items are hosted outside ScrollView's AX subtree.
+                // Remove only these stateless controls, never the retained page.
+                if isSearchPageActive {
+                    ToolbarItem(placement: .topBarLeading) {
+                        PrimaryLibraryButton(canRead: state.canRead, action: openLibrary)
                     }
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("完成") { isSearchFocused = false }
-                        .accessibilityLabel("收起键盘").accessibilityIdentifier("keyboard-done")
+                    ToolbarItem(placement: .topBarTrailing) {
+                        PrimarySettingsButton(action: openSettings)
+                    }
+                    if isSearchFocused {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("完成") { isSearchFocused = false }
+                                .accessibilityLabel("收起键盘").accessibilityIdentifier("hide-search-keyboard")
+                        }
+                    }
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("完成") { isSearchFocused = false }
+                            .accessibilityLabel("收起键盘").accessibilityIdentifier("keyboard-done")
+                    }
                 }
             }
         }

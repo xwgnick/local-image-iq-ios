@@ -52,6 +52,8 @@ struct SimilarPhotoCleanupSheet: View {
             && !state.isGrouping && !state.isRestoring && !state.isDeleting && !state.isSelecting
     }
 
+    private var isPageAccessible: Bool { !embedded || isPageActive }
+
     private var thresholdBinding: Binding<Double> {
         // Integer slider ticks avoid Float-to-Double roundoff at decimal steps.
         Binding(get: { (Double(state.threshold) * 100).rounded() }, set: { value in
@@ -75,7 +77,7 @@ struct SimilarPhotoCleanupSheet: View {
                 overview
                     .opacity(browser.detailRoute == nil ? 1 : 0)
                     .allowsHitTesting(browser.detailRoute == nil)
-                    .accessibilityHidden(browser.detailRoute != nil)
+                    .accessibilityHidden(!isPageAccessible || browser.detailRoute != nil)
                 if let route = browser.detailRoute,
                    route.sessionID == state.selectionSessionID,
                    let index = state.groups.firstIndex(where: { $0.id == route.groupID }) {
@@ -88,13 +90,20 @@ struct SimilarPhotoCleanupSheet: View {
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
+            .background {
+                // Inside this page's NavigationStack; the native scope also
+                // covers the retained detail UICollectionView and header.
+                PrimaryPageAccessibilityAnchor(active: isPageAccessible)
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+            }
             .background(IQStyle.background.ignoresSafeArea())
             .navigationTitle(embedded ? "相似清理" : "相似照片清理")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(IQStyle.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
-                if embedded {
+                if embedded && isPageAccessible {
                     ToolbarItem(placement: .topBarLeading) {
                         PrimaryLibraryButton(canRead: appState.canRead, action: openLibrary)
                     }
@@ -102,7 +111,7 @@ struct SimilarPhotoCleanupSheet: View {
                         PrimarySettingsButton(action: openSettings)
                     }
                 }
-                if browser.detailRoute != nil {
+                if isPageAccessible && browser.detailRoute != nil {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("所有分组", systemImage: "chevron.left") {
                             state.cancelRangeSelection()
@@ -112,7 +121,7 @@ struct SimilarPhotoCleanupSheet: View {
                         .accessibilityIdentifier("similar-cleanup-all-groups")
                     }
                 }
-                if !embedded {
+                if !embedded && isPageAccessible {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("完成") { dismiss() }
                             .disabled(state.isDeleting)
@@ -136,6 +145,7 @@ struct SimilarPhotoCleanupSheet: View {
                     selectionToolbar
                 }
             }
+            .accessibilityHidden(!isPageAccessible)
         }
         .foregroundStyle(IQStyle.text)
         .tint(IQStyle.accent)
@@ -248,6 +258,7 @@ struct SimilarPhotoCleanupSheet: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityHidden(!isPageAccessible || browser.detailRoute != nil)
         }
         .accessibilityIdentifier("similar-cleanup-scroll")
     }

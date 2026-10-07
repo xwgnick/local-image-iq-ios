@@ -28,26 +28,62 @@ struct RetainedPrimaryPage: ViewModifier {
         content
             .opacity(active ? 1 : 0)
             .allowsHitTesting(active)
+            // This outer hint does not cross NavigationStack's native AX
+            // boundary. Each page also installs an inner native anchor below.
             .accessibilityHidden(!active)
     }
 }
 
-/// Native ownership marker only: no app state, scroll behavior or AX identifier.
-/// Place in search ScrollView content, not outside the scroll view itself.
+/// Keep the original search ownership marker inside ScrollView content. Besides
+/// locating that exact scroller, it gates its native AX subtree and the owning
+/// NavigationStack without replacing either view or changing scroll behavior.
 struct PrimarySearchScrollAnchor: UIViewRepresentable {
+    var active = true
+
     func makeUIView(context: Context) -> PrimarySearchScrollAnchorView {
         let view = PrimarySearchScrollAnchorView(frame: .zero)
-        view.backgroundColor = .clear
-        view.isUserInteractionEnabled = false
-        view.isAccessibilityElement = false
-        view.accessibilityElementsHidden = true
+        view.setPageActive(active)
         return view
     }
 
-    func updateUIView(_ uiView: PrimarySearchScrollAnchorView, context: Context) { }
+    func updateUIView(_ uiView: PrimarySearchScrollAnchorView, context: Context) {
+        uiView.setPageActive(active)
+    }
+
+    static func dismantleUIView(_ uiView: PrimarySearchScrollAnchorView, coordinator: ()) {
+        uiView.stopTracking()
+    }
 }
 
-final class PrimarySearchScrollAnchorView: UIView {
+/// Place inside a NavigationStack's content root, never around the two pages.
+/// Its native scope includes that page's navigation bar and any native detail
+/// children, but not the other page, the shared tabs or a presented sheet.
+struct PrimaryPageAccessibilityAnchor: UIViewRepresentable {
+    let active: Bool
+
+    func makeUIView(context: Context) -> PrimaryPageAccessibilityAnchorView {
+        let view = PrimaryPageAccessibilityAnchorView(frame: .zero)
+        view.setPageActive(active)
+        return view
+    }
+
+    func updateUIView(_ uiView: PrimaryPageAccessibilityAnchorView, context: Context) {
+        uiView.setPageActive(active)
+    }
+
+    static func dismantleUIView(_ uiView: PrimaryPageAccessibilityAnchorView, coordinator: ()) {
+        uiView.stopTracking()
+    }
+}
+
+final class PrimarySearchScrollAnchorView: PrimaryPageAccessibilityAnchorView { }
+
+class PrimaryPageAccessibilityAnchorView: UIView {
+    private var pageActive = true
+    private var tracking = true
+    private let scrollBoundary = PrimaryPageAccessibilityBoundary()
+    private let navigationBoundary = PrimaryPageAccessibilityBoundary()
+
     /// Resolve the live ancestry without retaining or caching a scroll view.
     var owningScrollView: UIScrollView? {
         var ancestor = superview
@@ -56,6 +92,87 @@ final class PrimarySearchScrollAnchorView: UIView {
             ancestor = view.superview
         }
         return nil
+    }
+
+    /// Only public UIKit containment/responder APIs; never match SwiftUI's
+    /// private class names or fall back to the window/shared hosting root.
+    var owningNavigationController: UINavigationController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController,
+               let navigation = (controller as? UINavigationController) ?? controller.navigationController,
+               let root = navigation.viewIfLoaded, isDescendant(of: root) {
+                return navigation
+            }
+            responder = current.next
+        }
+        return nil
+    }
+
+    func setPageActive(_ active: Bool) {
+        pageActive = active
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        isAccessibilityElement = false
+        accessibilityElementsHidden = true
+        updateBoundaries()
+        // SwiftUI may update the representable before attaching its enclosing
+        // controller. Re-resolve once after that transaction, using the latest
+        // value (not a captured old tab value). No polling or AX notifications.
+        DispatchQueue.main.async { [weak self] in self?.updateBoundaries() }
+    }
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        updateBoundaries()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateBoundaries()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateBoundaries()
+    }
+
+    func stopTracking() {
+        tracking = false
+        scrollBoundary.restore()
+        navigationBoundary.restore()
+    }
+
+    private func updateBoundaries() {
+        guard tracking, window != nil else {
+            scrollBoundary.restore()
+            navigationBoundary.restore()
+            return
+        }
+        scrollBoundary.update(owningScrollView, active: pageActive)
+        navigationBoundary.update(owningNavigationController?.viewIfLoaded, active: pageActive)
+    }
+}
+
+/// Own the page flag while attached; restore the borrowed UIView on detach or
+/// reparent. In particular, an initially inactive page must become accessible.
+@MainActor
+private final class PrimaryPageAccessibilityBoundary {
+    private weak var view: UIView?
+    private var originalHidden = false
+
+    func update(_ target: UIView?, active: Bool) {
+        if view !== target {
+            restore()
+            view = target
+            originalHidden = target?.accessibilityElementsHidden ?? false
+        }
+        target?.accessibilityElementsHidden = !active
+    }
+
+    func restore() {
+        view?.accessibilityElementsHidden = originalHidden
+        view = nil
     }
 }
 
