@@ -2,7 +2,23 @@
 
 SwiftUI + PhotoKit + Core ML + 系统 Vision。独立原生 App，以本机检索为主，不是桌面网页套壳。
 
-## 当前交付：0.10.0 / build 29
+## 当前交付：0.11.0 / build 30
+
+**DELIVERED：已实现确认的双主功能布局、文字开关、0.80阈值设置与首次自动分组／结果复用。**最终源码 `911337669b8645d8829356d66062aac98e0dd0bd`，[CI 37613875842](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37613875842)／[job 112767437741](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37613875842/job/112767437741) SUCCESS。原生、设备构建和本地包校验完成，真机体验仍待验证。
+
+- 底部 **照片搜索 / 相似清理** 同级大入口，默认搜索；切页保留已完成结果、草稿与滚动位置。隐藏页及弹层背后的控件不会继续暴露在辅助功能树中。
+- 搜索框下“筛选”旁的 **照片文字** 开关，右侧精确说明 **“用照片里的文字进行搜索”**。开关默认OFF、持久保存；开启不自动OCR，建立／更新文字索引仍需用户另行点击。
+- 清理滑杆仅在设置，默认 **0.80**、范围0.50–0.99，偏好持久保存；修改只提示手动重新分组，不自动扫描。
+- 首次进入清理且已具备权限、图片索引及模型就绪条件时自动分组一次；之后复用完成结果（包括零组）。重启后核验本机派生缓存再恢复，不重新算照片对。相关照片／授权／阈值／索引内容变化时提示手动更新，不只比较数量。
+- 恢复仍有元数据和源图片向量BLOB指纹读取，**不是瞬时／零I/O承诺**；不推理、不读取照片像素、不自动建立图片或文字索引。新照片需先手动更新图片索引，才能参与分组。
+
+**最终安装包：**[build/device-download/37613875842/LocalImageIQ-0.11.0-build30-iphoneos-unsigned.ipa](build/device-download/37613875842/LocalImageIQ-0.11.0-build30-iphoneos-unsigned.ipa) · [公开 Release ci-37613875842-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37613875842-1)。**1,419,516,143 bytes**；全文件SHA-256 `ce60322197c84855c19e10687c8e388f6a208a6a7b794a887318fcab9b44131b`；7-Zip26.04全量CRC通过。
+
+最终 **Core79、App1439（1438通过／1既有SQLite跳过）、UI14全部通过**。新增143项App测试；共四轮原生验证，含真实隐藏页／弹层AX缺陷修复及错误工具栏测试测量修正，不声称首轮成功。完整账本与恢复成本见 [docs/PRIMARY_NAVIGATION_GROUP_REUSE.md](docs/PRIMARY_NAVIGATION_GROUP_REUSE.md)。已实际查看 [四张原生主界面预览](build/ui-review/37613875842/primary-navigation-review.jpg)：搜索OFF／ON、清理及设置；合成统计和无权限占位不是私人照片或真实分组准确率证据，也不宣称与HTML效果图逐像素一致。
+
+沿用原Sideloadly账号／有效Bundle ID覆盖安装，**不卸载、不清索引、不重建**。模型／索引／OCR身份、搜索两列与12张分页、清理五列、明确选择并确认后的系统删除及B02启动保持。真实iPhone恢复耗时、内存和系统删除尚未验收。
+
+## 上版交付记录：0.10.0 / build 29
 
 **DELIVERED：组总览、五列组内浏览、滑动多选及删除恢复提醒已完成原生构建、发布和本地校验。**最终源码 `2d3d9f86131d1134e8c91b215122b0c38e711262`，[CI 37557999448](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37557999448)／[job 112588591510](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37557999448/job/112588591510) SUCCESS；真机触摸体验、帧率与实际删除仍待验证。
 
@@ -67,12 +83,13 @@ SwiftUI + PhotoKit + Core ML + 系统 Vision。独立原生 App，以本机检�
 |[docs/NATIVE_PARITY.md](docs/NATIVE_PARITY.md)|真实模型数值验证；不能用维度相同替代对齐。|
 |[docs/QUERY_TRANSLATION.md](docs/QUERY_TRANSLATION.md)|iOS 18+ 真机系统翻译与独立语言包准备，iOS 17 原文回退。|
 |[docs/SEARCH_ACCELERATION.md](docs/SEARCH_ACCELERATION.md)|build 27 最终交付、四轮验证、冷建回退／warm 基准及真机未验证边界。|
+|[docs/PRIMARY_NAVIGATION_GROUP_REUSE.md](docs/PRIMARY_NAVIGATION_GROUP_REUSE.md)|build 30 双主导航、主页文字开关、0.80设置、首次自动分组与持久复用。|
 |[docs/SIMILAR_GROUP_BROWSER.md](docs/SIMILAR_GROUP_BROWSER.md)|build 29 组总览／五列浏览／滑动选择／恢复提醒、完整验证及最终交付。|
 |[docs/SIMILAR_CLEANUP_THRESHOLD_UPDATE.md](docs/SIMILAR_CLEANUP_THRESHOLD_UPDATE.md)|build 28 阈值扩展、异步批量发布核验、四轮测试与交付边界。|
 |[docs/SIMILAR_PHOTO_CLEANUP.md](docs/SIMILAR_PHOTO_CLEANUP.md)|build 26 清理／系统删除契约、三轮原生记录、最终交付与未验证项。|
 |[docs/PHOTO_TEXT_SEARCH.md](docs/PHOTO_TEXT_SEARCH.md)|build 25 OCR 契约、两轮原生结果、交付资产与未验证项。|
 |[docs/SEARCH_RESULT_TOOLS.md](docs/SEARCH_RESULT_TOOLS.md)|build 24 功能契约、最终交付证据、三轮原生验证历史与未验证项。|
-|[docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)|build 29 及历次交付的资产、测试与失败／修正账本。|
+|[docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)|build 30 及历次交付的资产、测试与失败／修正账本。|
 
 ## 隐私与交付边界
 

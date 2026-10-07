@@ -1,5 +1,7 @@
 # 相似照片清理
 
+> **现行 build30 更新：**相似清理成为底部主标签，首次就绪进入自动分组，保存完成结果供后续恢复；相关输入变化后手动更新。阈值默认0.80、滑杆移入设置。最新交付与缓存有效性见 [PRIMARY_NAVIGATION_GROUP_REUSE.md](PRIMARY_NAVIGATION_GROUP_REUSE.md)。下文旧“默认0.96／首次手动／关闭即丢结果”等只属历史。
+
 > **现行 build29 更新：**清理页改为紧凑组总览，点封面进入五列组内浏览，支持横向起拖多选及边缘滚动；删除前后有经过Apple文档核实的通常30天恢复说明。阈值仍0.50–0.99。当前功能和包见 [SIMILAR_GROUP_BROWSER.md](SIMILAR_GROUP_BROWSER.md)，下文旧版展开式两列布局仅为历史。
 
 > **现行 build28 更新：**阈值已扩展为 **0.50–0.99**，默认0.96；发布前元数据核验改为离开主线程的批量读取。最新交付及验证见 [SIMILAR_CLEANUP_THRESHOLD_UPDATE.md](SIMILAR_CLEANUP_THRESHOLD_UPDATE.md)。下文完整保留 build26 历史，旧范围及滑块2/3位置不适用于新版。
