@@ -30,16 +30,16 @@ final class PhotoTextPresentationTests: XCTestCase {
 
         let host = try await mount(c.state)
         defer { host.close() }
-        let form = try collection(in: host, rows: 6)
-        // Source-owned rows: toggle, counts, reduced-preview warning, manual
+        let form = try collection(in: host, rows: 5)
+        // Source-owned rows: counts, reduced-preview warning, manual
         // update, unchanged-photo scope, on-device/no-backup/saved-count privacy.
         // Capture the initial top; long scope/privacy copy may be below the fold.
         // Visibility + screenshot is review evidence, NOT an AX text assertion.
         try assertVisibleRow(0, in: form)
         try attachReview(host, name: "UIReview-photo-text-settings-dark")
-        form.scrollToItem(at: IndexPath(item: 5, section: 0), at: .bottom, animated: false)
+        form.scrollToItem(at: IndexPath(item: 4, section: 0), at: .bottom, animated: false)
         try await settle(host)
-        try assertVisibleRow(5, in: form)
+        try assertVisibleRow(4, in: form)
         assertServices(c, textCalls: 0)
         form.scrollToItem(at: IndexPath(item: 0, section: 0), at: .top, animated: false)
         try await settle(host)
@@ -70,14 +70,14 @@ final class PhotoTextPresentationTests: XCTestCase {
 
         let host = try await mount(c.state)
         defer { host.close() }
-        let form = try collection(in: host, rows: 6)
-        // Toggle, determinate progress, pause, aggregate progress, scope, privacy.
-        // Capture before scrolling; six existing rows need not fit one viewport.
+        let form = try collection(in: host, rows: 5)
+        // Determinate progress, pause, aggregate progress, scope, privacy.
+        // Capture before scrolling; five existing rows need not fit one viewport.
         try assertVisibleRow(0, in: form)
         try attachReview(host, name: "UIReview-photo-text-progress-dark")
-        form.scrollToItem(at: IndexPath(item: 5, section: 0), at: .bottom, animated: false)
+        form.scrollToItem(at: IndexPath(item: 4, section: 0), at: .bottom, animated: false)
         try await settle(host)
-        try assertVisibleRow(5, in: form)
+        try assertVisibleRow(4, in: form)
         assertServices(c, textCalls: 1) // Only the explicit held index call; no work from scrolling.
         form.scrollToItem(at: IndexPath(item: 0, section: 0), at: .top, animated: false)
         try await settle(host)
@@ -105,7 +105,7 @@ final class PhotoTextPresentationTests: XCTestCase {
         XCTAssertFalse(c.state.textSearchEnabled, "No persisted defaults are injected into hosted fixtures")
         let host = try await mount(c.state)
         defer { host.close() }
-        _ = try collection(in: host, rows: 1)
+        _ = try collection(in: host, rows: 6)
         assertServices(c, textCalls: 0)
 
         // State bindings only; actual switch-thumb activation is covered by the
@@ -114,7 +114,7 @@ final class PhotoTextPresentationTests: XCTestCase {
             c.state.textSearchEnabled = enabled
             try await settle(host)
             await c.state.waitUntilIdle()
-            _ = try collection(in: host, rows: enabled ? 6 : 1)
+            _ = try collection(in: host, rows: enabled ? 5 : 6)
             XCTAssertEqual(c.state.textSearchEnabled, enabled)
             XCTAssertEqual(c.state.canIndexText, enabled, "The idle ON case must be genuinely eligible for manual indexing")
             XCTAssertNil(c.state.activity)
@@ -131,16 +131,16 @@ final class PhotoTextPresentationTests: XCTestCase {
         c.state.textSearchEnabled = true
         let host = try await mount(c.state, size: CGSize(width: 320, height: 568), dynamicType: .accessibility5)
         defer { host.close() }
-        let form = try collection(in: host, rows: 6)
+        let form = try collection(in: host, rows: 5)
         XCTAssertTrue(form.isScrollEnabled)
         XCTAssertGreaterThan(form.contentSize.height, form.bounds.height)
         XCTAssertGreaterThan(form.contentSize.width, 0)
         XCTAssertLessThanOrEqual(form.contentSize.width, form.bounds.width)
         let originalOffset = form.contentOffset
-        let privacy = IndexPath(item: 5, section: 0)
+        let privacy = IndexPath(item: 4, section: 0)
         form.scrollToItem(at: privacy, at: .bottom, animated: false)
         try await settle(host)
-        try assertVisibleRow(5, in: form)
+        try assertVisibleRow(4, in: form)
         XCTAssertGreaterThan(form.contentOffset.y, originalOffset.y)
         XCTAssertEqual(form.contentOffset.x, originalOffset.x)
         XCTAssertLessThanOrEqual(form.contentSize.width, form.bounds.width)

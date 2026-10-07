@@ -85,11 +85,13 @@ final class SearchKeyboardTests: XCTestCase {
         XCTAssertEqual(field.value as? String, "query not submitted")
     }
 
-    func testLibraryFooterDismissesKeyboardAndPreservesQueryOnReturn() {
+    func testLibraryHeaderDismissesKeyboardAndPreservesQueryOnReturn() {
         let field = focusQuery("TEST FIXTURE library")
         let library = app.buttons["open-library"]
         XCTAssertTrue(library.exists && library.isHittable,
-                      "The compact footer must remain reachable while typing")
+                      "The library header must remain reachable while typing")
+        XCTAssertEqual(app.buttons.matching(identifier: "open-library").count, 1)
+        XCTAssertTrue(library.label.contains("我的图库"))
         library.tap()
         let done = app.buttons["close-library"]
         XCTAssertTrue(done.waitForExistence(timeout: 5))

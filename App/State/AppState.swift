@@ -131,7 +131,7 @@ final class AppState: ObservableObject {
     private var operationID = UUID()
     private var photoCheckID = UUID()
     private var translationAvailabilityID = UUID()
-    private var isForeground = true
+    @Published private(set) var isForeground = true
 
     init(library: PhotoLibraryClient = PhotoLibraryClient(), worker: (any PhotoWorkServicing)? = nil,
          authorizationStatus: @escaping () -> PHAuthorizationStatus = { PhotoLibraryClient.authorization },

@@ -68,7 +68,7 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
         XCTAssertEqual(f.grouping.calls.thresholds.count, 1)
         XCTAssertTrue(f.deletion.calls.isEmpty)
         await scan(f.state)
-        XCTAssertEqual(f.grouping.calls.thresholds, [0.96, 0.98])
+        XCTAssertEqual(f.grouping.calls.thresholds, [SimilarPhotoGroupingPolicy.defaultThreshold, 0.98])
         XCTAssertTrue(f.state.hasScanned)
     }
 
@@ -152,7 +152,7 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
         assertEmpty(state)
         XCTAssertFalse(state.isGrouping)
         XCTAssertNil(state.message)
-        XCTAssertEqual(service.calls.thresholds, [0.96])
+        XCTAssertEqual(service.calls.thresholds, [SimilarPhotoGroupingPolicy.defaultThreshold])
     }
 
     func testPauseCancelsReadAndResumeOnlyEnablesExplicitScan() async {

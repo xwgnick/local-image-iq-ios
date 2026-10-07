@@ -27,7 +27,7 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(app.alerts.firstMatch.exists)
         assertHomeControls()
         let libraryReady = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label CONTAINS %@", "选择照片"),
+            predicate: NSPredicate(format: "value == %@", "authorization-required"),
             object: app.buttons["open-library"])
         XCTAssertEqual(XCTWaiter.wait(for: [libraryReady], timeout: 15), .completed,
                        "Capture the settled unauthorized home, not a transient library refresh")
@@ -71,8 +71,7 @@ final class PresentationNavigationTests: XCTestCase {
         assertHomeControls()
         let library = app.buttons["open-library"]
         let libraryReady = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label CONTAINS %@ AND value == %@",
-                                   "选择照片", "authorization-required"), object: library)
+            predicate: NSPredicate(format: "value == %@", "authorization-required"), object: library)
         XCTAssertEqual(XCTWaiter.wait(for: [libraryReady], timeout: 15), .completed)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         XCTAssertFalse(springboard.alerts.firstMatch.exists)
@@ -142,7 +141,7 @@ final class PresentationNavigationTests: XCTestCase {
             else { expectHittable(caption) }
             assertHomeControls()
             XCTAssertEqual(library.value as? String, "authorization-required")
-            XCTAssertTrue(library.label.contains("选择照片"))
+            XCTAssertTrue(library.label.contains("我的图库"))
             XCTAssertFalse(library.label.contains("正在更新索引"))
             XCTAssertFalse(springboard.alerts.firstMatch.exists)
         }
@@ -432,60 +431,69 @@ final class PresentationNavigationTests: XCTestCase {
             XCTAssertFalse(springboard.alerts.firstMatch.exists)
         }
 
-        func openTextSettings() throws -> XCUIElement {
+        func assertHomeOptIn() {
             let library = app.buttons["open-library"]
             let ready = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "label CONTAINS %@ AND value == %@",
-                                       "选择照片", "authorization-required"), object: library)
+                predicate: NSPredicate(format: "value == %@", "authorization-required"), object: library)
             XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
             assertNoWorkOrPermissionPrompt()
-            app.buttons["open-settings"].tap()
-            expectHittable(done)
-            let form = try sheetForm()
-            scrollTo(toggle, in: form)
+            expectHittable(toggle)
             XCTAssertEqual(app.switches.matching(identifier: "photo-text-search-enabled").count, 1)
             XCTAssertTrue(toggle.isEnabled, "The optional preference must not require Photos permission")
-            return form
+            XCTAssertEqual(toggle.label, "照片文字")
+            let explanation = app.staticTexts["photo-text-search-explanation"]
+            expectHittable(explanation)
+            XCTAssertEqual(explanation.label, "用照片里的文字进行搜索")
+            XCTAssertGreaterThanOrEqual(explanation.frame.minX, toggle.frame.maxX,
+                                       "The explanation is on the switch's right, not a footer")
+            XCTAssertTrue(app.frame.contains(explanation.frame))
         }
 
-        func tapOptIn(_ enabled: Bool, in form: XCUIElement) {
-            scrollTo(toggle, in: form, swipeUp: false)
+        func tapOptIn(_ enabled: Bool) {
+            expectHittable(toggle)
             expectSwitch(toggle, enabled: !enabled)
-            // Same native SwiftUI Form Toggle and full-row AX frame as the
-            // captured show-debug-tools case above: tap its trailing thumb.
-            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-            scrollTo(toggle, in: form, swipeUp: false)
+            // The identifier now belongs only to the unscaled native switch,
+            // not a Form row containing the label or the explanation.
+            toggle.tap()
             expectSwitch(toggle, enabled: enabled)
             assertNoWorkOrPermissionPrompt()
         }
 
-        // Best-effort cleanup if an assertion exits while Settings is still
-        // open. Only a captured ON value authorizes a tap; never write defaults
-        // or inject a production launch flag, and never interact with OS alerts.
+        // Restore the persisted preference through the real home control only.
         defer {
-            if app.state == .runningForeground, done.exists,
-               !app.alerts.firstMatch.exists, !springboard.alerts.firstMatch.exists,
-               let form = try? sheetForm() {
-                scrollTo(toggle, in: form, swipeUp: false)
-                if toggle.value as? String == "1" { tapOptIn(false, in: form) }
+            if app.state == .runningForeground,
+               !app.alerts.firstMatch.exists, !springboard.alerts.firstMatch.exists {
+                if done.exists && done.isHittable { done.tap(); expectAbsent(done) }
+                if toggle.exists && toggle.isHittable && toggle.value as? String == "1" { tapOptIn(false) }
             }
         }
 
-        var form = try openTextSettings()
+        assertHomeOptIn()
         let initialValue = try XCTUnwrap(toggle.value as? String)
         XCTAssertTrue(initialValue == "0" || initialValue == "1", "Read the actual switch before recovering a prior crash")
-        if initialValue == "1" { tapOptIn(false, in: form) }
+        if initialValue == "1" { tapOptIn(false) }
         expectSwitch(toggle, enabled: false)
         expectAbsent(update)
         assertNoWorkOrPermissionPrompt()
 
-        tapOptIn(true, in: form)
-        scrollTo(update, in: form, allowDisabled: true)
-        XCTAssertTrue(update.exists)
+        tapOptIn(true)
+        XCTAssertTrue(update.waitForExistence(timeout: 5))
         XCTAssertTrue(update.label.contains("文字索引"))
         XCTAssertFalse(update.isEnabled, "Opt-in alone cannot authorize Photos or start indexing")
         assertNoWorkOrPermissionPrompt()
 
+        app.buttons["primary-cleanup-tab"].tap()
+        expectAbsent(toggle)
+        XCTAssertFalse(update.exists, "The hidden search page must not expose its manual action")
+        app.buttons["primary-search-tab"].tap()
+        assertHomeOptIn()
+        expectSwitch(toggle, enabled: true)
+        app.buttons["open-settings"].tap()
+        expectHittable(done)
+        var form = try sheetForm()
+        XCTAssertFalse(toggle.exists, "Settings manages the index, not a second primary switch")
+        scrollTo(update, in: form, allowDisabled: true)
+        XCTAssertFalse(update.isEnabled)
         // Check production privacy text via the real XCUI tree, not in-process
         // SwiftUI AX or a copied presentation fixture. Match stable fragments.
         let privacy = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "识别文字仅保存在本机")).firstMatch
@@ -502,22 +510,22 @@ final class PresentationNavigationTests: XCTestCase {
         app.terminate()
         launch()
         assertHomeControls()
-        form = try openTextSettings()
+        assertHomeOptIn()
         expectSwitch(toggle, enabled: true)
-        scrollTo(update, in: form, allowDisabled: true)
-        XCTAssertTrue(update.exists)
+        XCTAssertTrue(update.waitForExistence(timeout: 5))
         XCTAssertFalse(update.isEnabled)
         assertNoWorkOrPermissionPrompt()
-        tapOptIn(false, in: form)
+        tapOptIn(false)
         expectAbsent(update)
-        done.tap()
-        expectAbsent(done)
         assertHomeControls()
 
-        // Leave OFF, including after sheet reconstruction, for every later test.
-        form = try openTextSettings()
-        expectSwitch(toggle, enabled: false)
-        expectAbsent(update)
+        // OFF keeps the saved-count/privacy management and disables its action.
+        app.buttons["open-settings"].tap()
+        expectHittable(done)
+        form = try sheetForm()
+        XCTAssertFalse(toggle.exists)
+        scrollTo(update, in: form, allowDisabled: true)
+        XCTAssertFalse(update.isEnabled)
         assertNoWorkOrPermissionPrompt()
         done.tap()
         expectAbsent(done)
@@ -530,10 +538,11 @@ final class PresentationNavigationTests: XCTestCase {
         libraryDone.tap()
         expectAbsent(libraryDone)
         assertHomeControls()
+        expectSwitch(toggle, enabled: false)
         XCTAssertEqual(app.buttons["open-library"].value as? String, "authorization-required")
     }
 
-    func testSimilarCleanupEntryDoesNotScanOrDeleteWithoutPermission() throws {
+    func testPrimaryCleanupAndSharedThresholdSettingsWithoutPermission() throws {
         // The existing helper's model-free recovery route is not model readiness.
         if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
             throw XCTSkip("Live similar cleanup navigation requires the real bundled models")
@@ -542,8 +551,7 @@ final class PresentationNavigationTests: XCTestCase {
         assertHomeControls()
         let library = app.buttons["open-library"]
         let ready = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label CONTAINS %@ AND value == %@",
-                                   "选择照片", "authorization-required"), object: library)
+            predicate: NSPredicate(format: "value == %@", "authorization-required"), object: library)
         XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         XCTAssertFalse(springboard.alerts.firstMatch.exists)
@@ -557,17 +565,17 @@ final class PresentationNavigationTests: XCTestCase {
         expectHittable(keyboardDone)
         keyboardDone.tap()
         expectAbsent(app.keyboards.firstMatch)
-        let entry = app.buttons["open-similar-cleanup"]
+        let entry = app.buttons["primary-cleanup-tab"]
         expectHittable(entry)
         entry.tap()
 
-        let done = app.buttons["close-similar-cleanup"]
-        expectHittable(done)
-        XCTAssertEqual(done.label, "完成")
-        XCTAssertTrue(app.navigationBars["相似照片清理"].exists)
+        XCTAssertTrue(app.navigationBars["相似清理"].waitForExistence(timeout: 5))
+        expectAbsent(field)
+        XCTAssertFalse(field.isHittable)
+        XCTAssertTrue(entry.isSelected)
+        XCTAssertFalse(app.buttons["close-similar-cleanup"].exists)
         let threshold = app.sliders["similar-cleanup-threshold"]
-        XCTAssertTrue(threshold.waitForExistence(timeout: 5))
-        XCTAssertTrue(threshold.isEnabled)
+        XCTAssertFalse(threshold.exists, "The production embedded page has no threshold slider")
         let start = app.buttons["start-similar-grouping"]
 
         func assertNoWorkOrPrompt() {
@@ -611,31 +619,68 @@ final class PresentationNavigationTests: XCTestCase {
             // An inset-to-inset drag reached .51 rather than the asserted .50.
             let end = endValue == 0.50
                 ? origin.withOffset(CGVector(dx: 0, dy: frame.height / 2))
-                : origin.withOffset(CGVector(dx: frame.width, dy: frame.height / 2))
+                : endValue == 0.99
+                    ? origin.withOffset(CGVector(dx: frame.width, dy: frame.height / 2))
+                    : thumbCenter(endValue)
             thumbCenter(startValue).press(forDuration: 0.1, thenDragTo: end)
         }
 
-        expectThreshold(0.96)
         XCTAssertTrue(app.staticTexts["请先在“我的图库”中允许照片访问。"].waitForExistence(timeout: 5))
         assertNoWorkOrPrompt()
+        // The cleanup header opens the same full Settings as the search header.
+        app.buttons["open-settings"].tap()
+        let done = app.buttons["close-settings"]
+        expectHittable(done)
+        let form = try sheetForm()
+        scrollTo(threshold, in: form)
+        XCTAssertTrue(threshold.isEnabled)
+        let initialText = try XCTUnwrap(threshold.value as? String)
+        let initial = try XCTUnwrap(Double(initialText.replacingOccurrences(of: ",", with: ".")))
+        XCTAssertTrue((0.50...0.99).contains(initial))
+        // Production persists this preference. Recover a prior interrupted test
+        // through the actual slider, rather than pretending each launch is fresh.
+        if abs(initial - 0.80) > 0.0001 { dragThreshold(from: initial, to: 0.80) }
+        expectThreshold(0.80)
+        defer {
+            if done.exists && done.isHittable && threshold.exists && threshold.isHittable,
+               let text = threshold.value as? String,
+               let current = Double(text.replacingOccurrences(of: ",", with: ".")),
+               abs(current - 0.80) > 0.0001 {
+                dragThreshold(from: current, to: 0.80)
+                expectThreshold(0.80)
+            }
+        }
         expectHittable(threshold)
-        // This slider's accessibilityValue is COSINE (0.96), not a normalized
-        // thumb position (46/49). Capture inside the thumb; only the gesture's
+        // This slider's accessibilityValue is COSINE (0.80), not a normalized
+        // thumb position (30/49). Capture inside the thumb; only the gesture's
         // destination uses the outer endpoint to fully saturate native travel.
-        dragThreshold(from: 0.96, to: 0.99)
+        dragThreshold(from: 0.80, to: 0.99)
         expectThreshold(0.99)
-        assertNoWorkOrPrompt()
         dragThreshold(from: 0.99, to: 0.50)
         expectThreshold(0.50)
         expectHittable(app.staticTexts["similar-cleanup-broad-threshold-note"])
-        assertNoWorkOrPrompt()
-        // Do not tap Start, prepare/confirm deletion, grant Photos access or add
-        // a third review screenshot. This is navigation of the real empty sheet.
+        dragThreshold(from: 0.50, to: 0.80)
+        expectThreshold(0.80)
         done.tap()
         expectAbsent(done)
+        XCTAssertFalse(threshold.exists)
+        // A threshold edit can require regrouping, but must not run anything
+        // while permission is absent. No deletion or authorization is exercised.
+        XCTAssertFalse(start.isEnabled)
+        XCTAssertFalse(app.buttons["cancel-similar-grouping"].exists)
+        XCTAssertFalse(app.buttons["prepare-similar-deletion"].exists)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        app.buttons["primary-search-tab"].tap()
         expectHittable(field)
         XCTAssertEqual(field.value as? String, query)
         assertHomeControls()
+        app.buttons["open-settings"].tap()
+        expectHittable(done)
+        scrollTo(threshold, in: try sheetForm())
+        expectThreshold(0.80)
+        done.tap()
+        expectAbsent(done)
+        XCTAssertEqual(field.value as? String, query)
         XCTAssertEqual(library.value as? String, "authorization-required")
         XCTAssertFalse(springboard.alerts.firstMatch.exists)
     }
@@ -800,6 +845,19 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertTrue(app.scrollViews["library-scroll"].exists, file: file, line: line)
         XCTAssertTrue(app.buttons["open-library"].isHittable, file: file, line: line)
         XCTAssertTrue(app.buttons["open-settings"].isHittable, file: file, line: line)
+        XCTAssertEqual(app.buttons.matching(identifier: "open-library").count, 1, file: file, line: line)
+        XCTAssertEqual(app.buttons.matching(identifier: "open-settings").count, 1, file: file, line: line)
+        let search = app.buttons["primary-search-tab"]
+        let cleanup = app.buttons["primary-cleanup-tab"]
+        XCTAssertTrue(search.isHittable && cleanup.isHittable, file: file, line: line)
+        XCTAssertTrue(search.isSelected, file: file, line: line)
+        XCTAssertEqual(search.label, "照片搜索", file: file, line: line)
+        XCTAssertEqual(cleanup.label, "相似清理", file: file, line: line)
+        XCTAssertEqual(search.frame.width, cleanup.frame.width, accuracy: 1, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(search.frame.height, 44, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(cleanup.frame.height, 44, file: file, line: line)
+        XCTAssertFalse(app.buttons["open-similar-cleanup"].exists, file: file, line: line)
+        XCTAssertFalse(app.sliders["similar-cleanup-threshold"].exists, file: file, line: line)
         XCTAssertFalse(app.sliders["location-weight"].exists, file: file, line: line)
         XCTAssertFalse(app.buttons["index-photos"].exists, file: file, line: line)
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "result-limit").firstMatch.exists,

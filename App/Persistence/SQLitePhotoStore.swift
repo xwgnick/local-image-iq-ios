@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SQLite3
 import ImageIQCore
@@ -5,6 +6,13 @@ import ImageIQCore
 struct CachedPhoto: Sendable {
     let photo: IndexedPhoto
     let geographyVersion: String
+}
+
+/// Cleanup identity deliberately excludes places, geography, OCR and SQLite file
+/// layout. Revisions include stale active-model rows for accurate coverage counts.
+struct SimilarGroupingInputSnapshot: Sendable, Equatable {
+    let revisions: [String: PhotoRevision]
+    let imagePayloadSignature: Data
 }
 
 /// A single actor owns one SQLite connection. No images or GPS are stored.
@@ -143,6 +151,112 @@ actor SQLitePhotoStore {
             }
             try Task.checkCancellation()
             return revisions
+        }
+    }
+
+    /// One read-only SELECT, BINARY UTF-8 ordering and length-framed hashing.
+    /// Only authorized active-model rows enter the digest; image BLOBs are hashed
+    /// row by row WITHOUT JSON decoding or retaining all source vector bytes.
+    func groupingInputSnapshot(modelVersion: String, accessibleIDs: Set<String>,
+                               authority: SimilarGroupingSourceAuthority? = nil) throws -> SimilarGroupingInputSnapshot {
+        guard readOnly else { throw AppFailure.storage("Grouping requires a read-only connection.") }
+        defer { connection = nil }
+        try Task.checkCancellation()
+        try authority?.validate()
+        var hash = SHA256()
+        SimilarGroupingDigest.frame(Data("grouping-image-input-v1".utf8), into: &hash)
+        SimilarGroupingDigest.frame(Data(modelVersion.utf8), into: &hash)
+        var revisions: [String: PhotoRevision] = [:]
+        let file = directory.appendingPathComponent("index.sqlite3")
+        // Unlike fileExists, an unreadable existing index is not an empty index.
+        if try SimilarGroupingCache.regularFileExists(file) {
+            let db = try database()
+            let exactIDs = Set(accessibleIDs.map { Data($0.utf8) })
+            try db.statement("SELECT id, revision, creation_time, model_version, image_embedding FROM photos WHERE model_version = ? ORDER BY id COLLATE BINARY") { statement in
+                try db.bind(modelVersion, at: 1, to: statement)
+                while try db.next(statement) {
+                    try Task.checkCancellation()
+                    let id = try db.groupingString(statement, at: 0)
+                    guard exactIDs.contains(Data(id.utf8)) else { continue }
+                    let model = try db.groupingString(statement, at: 3)
+                    guard Data(model.utf8) == Data(modelVersion.utf8) else { continue }
+                    let revision = PhotoRevision(id: id, modificationTime: sqlite3_column_double(statement, 1),
+                                                 creationTime: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2))
+                    try SimilarGroupingDigest.validate(revision)
+                    guard revisions[id] == nil else { throw AppFailure.storage("Duplicate grouping input identity.") }
+                    revisions[id] = revision
+                    SimilarGroupingDigest.revision(revision, into: &hash)
+                    SimilarGroupingDigest.frame(Data(model.utf8), into: &hash)
+                    // A malformed/empty stale BLOB can still be fingerprinted.
+                    // Eligible vectors are validated only by groupingImageRecords.
+                    let count = Int(sqlite3_column_bytes(statement, 4))
+                    let bytes: Data
+                    if count == 0 { bytes = Data() }
+                    else { bytes = try db.blob(statement, at: 4) }
+                    SimilarGroupingDigest.frame(bytes, into: &hash)
+                }
+            }
+        }
+        SimilarGroupingDigest.frame(SimilarGroupingDigest.bits(UInt64(revisions.count)), into: &hash)
+        try Task.checkCancellation()
+        try authority?.validate()
+        return SimilarGroupingInputSnapshot(revisions: revisions, imagePayloadSignature: Data(hash.finalize()))
+    }
+
+    /// Manual grouping's image-only reader: no place JOIN/JSON, even if an
+    /// irrelevant location BLOB is malformed. Restore never calls this method.
+    func groupingImageRecords(modelVersion: String, accessibleIDs: Set<String>, eligibleIDs: Set<String>,
+                              expectedSnapshot: SimilarGroupingInputSnapshot,
+                              authority: SimilarGroupingSourceAuthority? = nil) throws -> [IndexedPhoto] {
+        guard readOnly else { throw AppFailure.storage("Grouping requires a read-only connection.") }
+        defer { connection = nil }
+        try Task.checkCancellation()
+        try authority?.validate()
+        guard try SimilarGroupingCache.regularFileExists(directory.appendingPathComponent("index.sqlite3")) else {
+            guard expectedSnapshot.revisions.isEmpty else { throw AppFailure.storage("The image index changed during grouping.") }
+            try authority?.validate()
+            return []
+        }
+        let db = try database()
+        let exactIDs = Set(accessibleIDs.map { Data($0.utf8) })
+        let exactEligibleIDs = Set(eligibleIDs.map { Data($0.utf8) })
+        return try db.statement("SELECT id, revision, creation_time, model_version, image_embedding FROM photos WHERE model_version = ? ORDER BY id COLLATE BINARY") { statement in
+            try db.bind(modelVersion, at: 1, to: statement)
+            var photos: [IndexedPhoto] = []
+            var revisions: [String: PhotoRevision] = [:]
+            var hash = SHA256()
+            SimilarGroupingDigest.frame(Data("grouping-image-input-v1".utf8), into: &hash)
+            SimilarGroupingDigest.frame(Data(modelVersion.utf8), into: &hash)
+            while try db.next(statement) {
+                try Task.checkCancellation()
+                let id = try db.groupingString(statement, at: 0)
+                guard exactIDs.contains(Data(id.utf8)) else { continue }
+                let model = try db.groupingString(statement, at: 3)
+                guard Data(model.utf8) == Data(modelVersion.utf8) else { continue }
+                let revision = PhotoRevision(id: id, modificationTime: sqlite3_column_double(statement, 1),
+                                             creationTime: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2))
+                try SimilarGroupingDigest.validate(revision)
+                guard revisions[id] == nil else { throw AppFailure.storage("Duplicate grouping input identity.") }
+                revisions[id] = revision
+                SimilarGroupingDigest.revision(revision, into: &hash)
+                SimilarGroupingDigest.frame(Data(model.utf8), into: &hash)
+                let bytes: Data
+                if sqlite3_column_bytes(statement, 4) == 0 { bytes = Data() }
+                else { bytes = try db.blob(statement, at: 4) }
+                SimilarGroupingDigest.frame(bytes, into: &hash)
+                guard exactEligibleIDs.contains(Data(id.utf8)) else { continue }
+                let vector = try Self.decodeEmbedding(bytes)
+                try EmbeddingValidation.validateUnit(vector, dimension: 768)
+                photos.append(IndexedPhoto(id: id, modificationTime: revision.modificationTime,
+                                           modelVersion: model, imageEmbedding: vector, location: nil,
+                                           creationTime: revision.creationTime))
+            }
+            SimilarGroupingDigest.frame(SimilarGroupingDigest.bits(UInt64(revisions.count)), into: &hash)
+            let actual = SimilarGroupingInputSnapshot(revisions: revisions, imagePayloadSignature: Data(hash.finalize()))
+            guard actual == expectedSnapshot else { throw AppFailure.storage("The image index changed during grouping.") }
+            try Task.checkCancellation()
+            try authority?.validate()
+            return photos
         }
     }
 
@@ -433,6 +547,15 @@ private final class SQLiteConnection {
     func string(_ statement: OpaquePointer, at index: Int32) throws -> String {
         guard let value = sqlite3_column_text(statement, index) else { throw AppFailure.storage("Missing text column.") }
         return String(cString: value)
+    }
+
+    /// Exact UTF-8 (including framing-sensitive bytes), rather than C-string
+    /// termination. Kept local to the new cleanup reads; legacy APIs are intact.
+    func groupingString(_ statement: OpaquePointer, at index: Int32) throws -> String {
+        guard let pointer = sqlite3_column_text(statement, index) else { throw AppFailure.storage("Missing grouping metadata.") }
+        let bytes = Data(bytes: pointer, count: Int(sqlite3_column_bytes(statement, index)))
+        guard let value = String(data: bytes, encoding: .utf8) else { throw AppFailure.storage("Invalid grouping metadata.") }
+        return value
     }
 
     func blob(_ statement: OpaquePointer, at index: Int32) throws -> Data {

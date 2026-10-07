@@ -38,7 +38,7 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
         XCTAssertEqual(gate.trace.accessThreads, [false], "The default cheap fence must not repeat validation")
         XCTAssertEqual(gate.trace.successfulReturnsCancelled, [false])
         XCTAssertTrue(gate.trace.epochThreads.isEmpty)
-        XCTAssertEqual(f.grouping.thresholds, [0.96])
+        XCTAssertEqual(f.grouping.thresholds, [SimilarPhotoGroupingPolicy.defaultThreshold])
     }
 
     func testThresholdInvalidatesImmediatelyWhileIdleWaiterStillDrainsLateValidationSuccess() async throws {
@@ -65,7 +65,7 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
             XCTAssertFalse(gate.isReleased)
             self.assertUnpublished(f.state)
         }
-        XCTAssertEqual(f.grouping.thresholds, [0.96], "Changing the slider never starts a replacement")
+        XCTAssertEqual(f.grouping.thresholds, [SimilarPhotoGroupingPolicy.defaultThreshold], "Changing the slider never starts a replacement")
         gate.release() // Uncooperative sync validation returns SUCCESS, not cancellation.
         await waiter.value
         XCTAssertTrue(drained)
@@ -92,13 +92,13 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
             XCTAssertTrue(f.state.isGrouping)
             XCTAssertFalse(f.state.isValidating, "A queued replacement has not begun validation")
             self.assertUnpublished(f.state)
-            XCTAssertEqual(f.grouping.thresholds, [0.96])
+            XCTAssertEqual(f.grouping.thresholds, [SimilarPhotoGroupingPolicy.defaultThreshold])
         }
         old.release()
         try await entered(next)
         XCTAssertEqual(old.trace.successfulReturnsCancelled, [true])
         XCTAssertTrue(old.trace.epochThreads.isEmpty)
-        XCTAssertEqual(f.grouping.thresholds, [0.96, 0.75])
+        XCTAssertEqual(f.grouping.thresholds, [SimilarPhotoGroupingPolicy.defaultThreshold, 0.75])
         XCTAssertEqual(f.grouping.predecessorsReturnedAtEntry, [true, true],
                        "Checked in the service itself, not inferred from task scheduling order")
         assertValidating(f.state)
@@ -189,7 +189,7 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
         try await heartbeat {
             XCTAssertFalse(gate.isReleased)
             XCTAssertFalse(f.state.isValidating)
-            XCTAssertEqual(f.grouping.thresholds, [0.96])
+            XCTAssertEqual(f.grouping.thresholds, [SimilarPhotoGroupingPolicy.defaultThreshold])
         }
         gate.release()
         await f.state.waitUntilIdle()
@@ -198,7 +198,7 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
         assertUnpublished(f.state)
         XCTAssertFalse(f.state.isValidating)
         XCTAssertNil(f.state.message)
-        XCTAssertEqual(f.grouping.thresholds, [0.96])
+        XCTAssertEqual(f.grouping.thresholds, [SimilarPhotoGroupingPolicy.defaultThreshold])
     }
 
     func testHostedActualSheetStaysPresentedAfterGroupsAndLibraryEpochClearsGroupsWithoutDismissal() async throws {

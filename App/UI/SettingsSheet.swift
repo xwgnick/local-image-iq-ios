@@ -3,15 +3,22 @@ import SwiftUI
 @MainActor
 struct SettingsSheet: View {
     @ObservedObject var state: AppState
+    private let cleanup: SimilarPhotoCleanupState?
     @Environment(\.dismiss) private var dismiss
     @State private var confirmClear = false
     @State private var advancedExpanded = false
     @State private var diagnosticsExpanded = false
 
+    init(state: AppState, cleanup: SimilarPhotoCleanupState? = nil) {
+        self.state = state
+        self.cleanup = cleanup
+    }
+
     var body: some View {
         NavigationStack {
             Form {
                 searchSection
+                if let cleanup { SimilarCleanupSettingsSection(state: cleanup) }
                 translationSection
                 PhotoTextIndexSection(state: state)
                 maintenanceSection
@@ -297,5 +304,48 @@ struct SettingsSheet: View {
             return "\(coverage) 边界可能不完整或属于历史数据，并非全球覆盖。"
         }
         return "地点标签取决于离线包覆盖范围和照片中可用的定位信息。"
+    }
+}
+
+/// Observes the same controller as the retained cleanup page. Legacy Settings
+/// fixtures may omit it; production never constructs a second cleanup state.
+@MainActor
+struct SimilarCleanupSettingsSection: View {
+    @ObservedObject var state: SimilarPhotoCleanupState
+
+    var thresholdBinding: Binding<Double> {
+        Binding(get: { (Double(state.threshold) * 100).rounded() }, set: { value in
+            guard !state.isDeleting, !state.isSelecting else { return }
+            state.threshold = Float(value.rounded()) / 100
+        })
+    }
+
+    var body: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("相似度阈值").fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Text(String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), Double(state.threshold)))
+                        .monospacedDigit().foregroundStyle(IQStyle.accent)
+                }
+                Slider(value: thresholdBinding, in: SimilarPhotoGroupingPolicy.sliderTicks, step: 1)
+                    .disabled(state.isDeleting || state.isSelecting)
+                    .accessibilityLabel("相似度阈值，越高越严格")
+                    .accessibilityValue(String(format: "%.2f", Double(state.threshold)))
+                    .accessibilityIdentifier("similar-cleanup-threshold")
+            }
+            if state.threshold < 0.90 {
+                Text("已放宽相似范围，可能包含仅场景相近的照片。请逐张核对后再勾选删除。")
+                    .font(.footnote).foregroundStyle(IQStyle.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("similar-cleanup-broad-threshold-note")
+            }
+        } header: {
+            Text("相似清理")
+        } footer: {
+            Text("默认0.80，范围0.50–0.99；越高越严格，不是重复概率。修改后请在相似清理页手动重新分组，不会自动删除照片。")
+        }
+        .listRowBackground(IQStyle.surface)
     }
 }

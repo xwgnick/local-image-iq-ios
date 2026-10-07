@@ -877,7 +877,7 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         await fixture.cleanup.waitUntilIdle()
         XCTAssertTrue(fixture.cleanup.hasScanned)
         XCTAssertEqual(fixture.grouping.scans, 1)
-        XCTAssertEqual(fixture.cleanup.threshold, 0.96)
+        XCTAssertEqual(fixture.cleanup.threshold, SimilarPhotoGroupingPolicy.defaultThreshold)
         return fixture
     }
 

@@ -29,12 +29,17 @@ struct SimilarPhotoGroupingResult: Sendable {
     let validateAccess: @Sendable () throws -> Void
     let validatePhotos: @Sendable ([String]) throws -> Void
     let validatePublicationEpoch: @Sendable () throws -> Void
+    /// Valid fresh groups can still be used when optional persistence fails.
+    /// Nil means no persistence failure was reported, not an unconditional claim
+    /// that a synthetic/legacy result was written to disk.
+    let persistenceIssue: String?
 
     init(groups: [SimilarPhotoGroup], candidateCount: Int, staleCount: Int,
          unindexedCount: Int, threshold: Float,
          validateAccess: @escaping @Sendable () throws -> Void = {},
          validatePhotos: @escaping @Sendable ([String]) throws -> Void = { _ in },
-         validatePublicationEpoch: @escaping @Sendable () throws -> Void = {}) {
+         validatePublicationEpoch: @escaping @Sendable () throws -> Void = {},
+         persistenceIssue: String? = nil) {
         self.groups = groups
         self.candidateCount = candidateCount
         self.staleCount = staleCount
@@ -43,6 +48,7 @@ struct SimilarPhotoGroupingResult: Sendable {
         self.validateAccess = validateAccess
         self.validatePhotos = validatePhotos
         self.validatePublicationEpoch = validatePublicationEpoch
+        self.persistenceIssue = persistenceIssue
     }
 
     /// This non-actor async method runs on Swift 5's generic executor, including
@@ -55,13 +61,25 @@ struct SimilarPhotoGroupingResult: Sendable {
     }
 }
 
+enum SimilarPhotoGroupingRestore: Sendable {
+    case missing
+    case restored(SimilarPhotoGroupingResult)
+    case stale
+}
+
 protocol SimilarPhotoGrouping: Sendable {
+    func restore(threshold: Float) async throws -> SimilarPhotoGroupingRestore
     func group(threshold: Float,
                progress: @escaping @Sendable (SimilarPhotoGroupingProgress) async -> Void) async throws -> SimilarPhotoGroupingResult
 }
 
+extension SimilarPhotoGrouping {
+    func restore(threshold: Float) async throws -> SimilarPhotoGroupingRestore { .missing }
+}
+
 enum SimilarPhotoGroupingPolicy {
-    static let defaultThreshold: Float = 0.96
+    static let defaultThreshold: Float = 0.80
+    static let algorithmVersion = "greedy-disjoint-pairwise-cosine-v1"
     static let thresholdRange: ClosedRange<Float> = 0.50...0.99
     /// Exact integer ticks; shared by the slider and its boundary tests.
     static let sliderTicks: ClosedRange<Double> = 50...99
@@ -222,12 +240,76 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
     private let library: any PhotoLibraryIndexing
     private let directory: URL?
     private let encoders: any PhotoEncoding
+    private let suppliedCache: SimilarGroupingCache?
+    private var operationID = UUID()
+    /// Completed data only: no old Photos scope, live monitor or validation
+    /// closures. Pausing UI need not discard valid work after a disk-write error.
+    private var resident: (payload: SimilarGroupingCachePayload, persistenceIssue: String?)?
 
     init(library: any PhotoLibraryIndexing, directory: URL? = nil,
-         encoders: any PhotoEncoding = CoreMLEncoders()) {
+         encoders: any PhotoEncoding = CoreMLEncoders(), cache: SimilarGroupingCache? = nil) {
         self.library = library
         self.directory = directory
         self.encoders = encoders
+        self.suppliedCache = cache
+    }
+
+    /// Cold reuse reads metadata and opaque SQLite image BLOBs twice for durable
+    /// identity. It never decodes source JSON, computes similarities, prepares a
+    /// model, requests pixels, indexes, performs OCR, repairs or writes a cache.
+    func restore(threshold: Float) async throws -> SimilarPhotoGroupingRestore {
+        try Task.checkCancellation()
+        try SimilarPhotoGroupingPolicy.validate(threshold: threshold)
+        guard library.canReadImages else { throw AppFailure.permission }
+        let ticket = UUID()
+        operationID = ticket
+        let access = SimilarGroupingAccess(library: library, authorization: library.authorizationStatusRawValue,
+                                           generation: library.changeGeneration)
+        let initial = try access.snapshot()
+        let manifest = try await encoders.inspectResources()
+        try check(ticket, access: access)
+        try manifest.validate()
+        let model = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
+        let root = try directory ?? SQLitePhotoStore.defaultDirectory(create: false)
+        let cache = suppliedCache ?? SimilarGroupingCache(directory: root)
+        let reader = SQLitePhotoStore(directory: root, readOnly: true)
+        let authority = try SimilarGroupingSourceAuthority(directory: root)
+        try check(ticket, access: access, authority: authority)
+        let source = try await reader.groupingInputSnapshot(modelVersion: model, accessibleIDs: Set(initial.keys), authority: authority)
+        try check(ticket, access: access, authority: authority)
+        let key = try SimilarGroupingCacheKey(authorized: initial, imagePayloadSignature: source.imagePayloadSignature,
+                                             modelVersion: model, authorization: access.authorization, threshold: threshold)
+        let saved: SimilarGroupingCacheRead
+        let persistenceIssue: String?
+        if let resident, resident.payload.key == key {
+            saved = .restored(try resident.payload.validated(authorized: initial, indexed: source.revisions))
+            persistenceIssue = resident.persistenceIssue
+        } else {
+            saved = try cache.read(key: key, authorized: initial, indexed: source.revisions)
+            persistenceIssue = nil
+        }
+        try check(ticket, access: access, authority: authority)
+        try access.requireSnapshot(initial)
+        try check(ticket, access: access, authority: authority)
+        let finalSource = try await reader.groupingInputSnapshot(modelVersion: model, accessibleIDs: Set(initial.keys), authority: authority)
+        try check(ticket, access: access, authority: authority)
+        guard finalSource == source else { throw Self.indexChanged() }
+        switch saved {
+        // A previous in-memory completion with a different key is stale, not a
+        // cold first entry, even if that completion could not be written to disk.
+        case .missing: return resident == nil ? .missing : .stale
+        case .stale: return .stale
+        case .restored(let value):
+            let result = try makeResult(groups: value.groups, candidateCount: value.candidateCount,
+                                        staleCount: value.staleCount, unindexedCount: value.unindexedCount,
+                                        threshold: value.threshold, initial: initial, access: access,
+                                        authority: authority, persistenceIssue: persistenceIssue)
+            let payload = try SimilarGroupingCachePayload(groups: value.groups, candidateCount: value.candidateCount,
+                staleCount: value.staleCount, unindexedCount: value.unindexedCount, key: key)
+            try check(ticket, access: access, authority: authority)
+            resident = (payload, persistenceIssue)
+            return .restored(result)
+        }
     }
 
     func group(threshold: Float,
@@ -235,40 +317,107 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
         try Task.checkCancellation()
         try SimilarPhotoGroupingPolicy.validate(threshold: threshold)
         guard library.canReadImages else { throw AppFailure.permission }
+        let ticket = UUID()
+        operationID = ticket
         let access = SimilarGroupingAccess(library: library, authorization: library.authorizationStatusRawValue,
                                            generation: library.changeGeneration)
         let initial = try access.snapshot() // Full snapshot 1: access and revisions.
         let manifest = try await encoders.inspectResources() // Metadata only, not prepare/inference.
-        try access.validateEpoch()
+        try check(ticket, access: access)
         try manifest.validate()
         let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
-        let reader = SQLitePhotoStore(directory: try directory ?? SQLitePhotoStore.defaultDirectory(create: false), readOnly: true)
-        let indexed = try await reader.searchPhotoRevisions(modelVersion: cacheVersion, accessibleIDs: Set(initial.keys))
-        try access.validateEpoch()
+        let root = try directory ?? SQLitePhotoStore.defaultDirectory(create: false)
+        let reader = SQLitePhotoStore(directory: root, readOnly: true)
+        let authority = try SimilarGroupingSourceAuthority(directory: root)
+        try check(ticket, access: access, authority: authority)
+        let source = try await reader.groupingInputSnapshot(modelVersion: cacheVersion, accessibleIDs: Set(initial.keys), authority: authority)
+        let indexed = source.revisions
+        try check(ticket, access: access, authority: authority)
         var eligible = Set<String>()
         for (id, revision) in initial {
             try Task.checkCancellation()
-            if indexed[id] == revision { eligible.insert(id) }
+            if let stored = indexed[id], SimilarGroupingDigest.sameRevision(stored, revision) { eligible.insert(id) }
         }
         // Exclude STALE modification OR creation times before any vector decoding.
         // Old models and inaccessible rows likewise cannot cause a vector error here.
-        let records = try await reader.searchRecords(modelVersion: cacheVersion, accessibleIDs: eligible)
-        try access.validateEpoch()
-        guard records.count == eligible.count else { throw AppFailure.storage("The image index changed during grouping. Try again.") }
+        try check(ticket, access: access, authority: authority)
+        let records = try await reader.groupingImageRecords(modelVersion: cacheVersion, accessibleIDs: Set(initial.keys),
+                        eligibleIDs: eligible, expectedSnapshot: source, authority: authority)
+        try check(ticket, access: access, authority: authority)
+        guard records.count == eligible.count else { throw Self.indexChanged() }
         for record in records {
             try Task.checkCancellation()
-            let cachedRevision = PhotoRevision(id: record.photo.id, modificationTime: record.photo.modificationTime,
-                                               creationTime: record.photo.creationTime)
-            guard let revision = initial[record.photo.id], eligible.contains(record.photo.id),
-                  cachedRevision == revision else {
-                throw AppFailure.storage("The image index changed during grouping. Try again.")
+            let cachedRevision = PhotoRevision(id: record.id, modificationTime: record.modificationTime,
+                                               creationTime: record.creationTime)
+            guard let revision = initial[record.id], eligible.contains(record.id),
+                  SimilarGroupingDigest.sameRevision(cachedRevision, revision) else {
+                throw Self.indexChanged()
             }
         }
-        guard try access.snapshot() == initial else { throw SimilarGroupingAccess.changed() } // Full snapshot 2: pre-compute.
-        let groups = try await SimilarPhotoGrouper.compute(photos: records.map(\.photo), threshold: threshold,
-                                                         progress: progress, checkAccess: { try access.validateEpoch() })
+        try access.requireSnapshot(initial) // Full snapshot 2: pre-compute.
+        try check(ticket, access: access, authority: authority)
+        let groups = try await SimilarPhotoGrouper.compute(photos: records, threshold: threshold,
+            progress: progress, checkAccess: {
+                try access.validateEpoch()
+                try authority.validate()
+                try access.validateEpoch()
+            })
+        try check(ticket, access: access, authority: authority)
+        try access.requireSnapshot(initial) // Full snapshot 3: final.
+        try check(ticket, access: access, authority: authority)
+        let finalSource = try await reader.groupingInputSnapshot(modelVersion: cacheVersion, accessibleIDs: Set(initial.keys), authority: authority)
+        try check(ticket, access: access, authority: authority)
+        guard finalSource == source else { throw Self.indexChanged() }
+        let key = try SimilarGroupingCacheKey(authorized: initial, imagePayloadSignature: source.imagePayloadSignature,
+                                             modelVersion: cacheVersion, authorization: access.authorization, threshold: threshold)
+        let payload = try SimilarGroupingCachePayload(groups: groups, candidateCount: eligible.count,
+            staleCount: indexed.count - eligible.count, unindexedCount: initial.count - indexed.count, key: key)
+        _ = try payload.validated(authorized: initial, indexed: indexed)
+        let cache = suppliedCache ?? SimilarGroupingCache(directory: root)
+        var persistenceIssue: String?
+        do {
+            try cache.save(groups: groups, candidateCount: eligible.count, staleCount: indexed.count - eligible.count,
+                           unindexedCount: initial.count - indexed.count, key: key,
+                           authorized: initial, indexed: indexed,
+                           validate: {
+                               try access.validateEpoch()
+                               try authority.validate()
+                               try access.validateEpoch()
+                           })
+        } catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            // Optional cache I/O may fail, but a changed source is NOT a warning
+            // authorizing stale groups. Recheck BOTH authorities before recovery.
+            try check(ticket, access: access, authority: authority)
+            persistenceIssue = "本次分组可正常使用，但未能保存；下次打开可能需要重新分组。"
+        }
+        try check(ticket, access: access, authority: authority)
+        let result = try makeResult(groups: groups, candidateCount: eligible.count, staleCount: indexed.count - eligible.count,
+                              unindexedCount: initial.count - indexed.count, threshold: threshold,
+                              initial: initial, access: access, authority: authority, persistenceIssue: persistenceIssue)
+        try check(ticket, access: access, authority: authority)
+        resident = (payload, persistenceIssue)
+        return result
+    }
+
+    private static func indexChanged() -> AppFailure {
+        .storage("The image index changed during grouping. Try again.")
+    }
+
+    private func check(_ ticket: UUID, access: SimilarGroupingAccess,
+                       authority: SimilarGroupingSourceAuthority? = nil) throws {
         try access.validateEpoch()
-        guard try access.snapshot() == initial else { throw SimilarGroupingAccess.changed() } // Full snapshot 3: final.
+        try authority?.validate()
+        try access.validateEpoch()
+        guard ticket == operationID else { throw CancellationError() }
+    }
+
+    /// Identical fresh closures for computed and restored results. Never persist
+    /// closures or reuse an old generation. prepareForPublication stays off-main.
+    private func makeResult(groups: [SimilarPhotoGroup], candidateCount: Int, staleCount: Int,
+                            unindexedCount: Int, threshold: Float, initial: [String: PhotoRevision],
+                            access: SimilarGroupingAccess, authority: SimilarGroupingSourceAuthority,
+                            persistenceIssue: String? = nil) throws -> SimilarPhotoGroupingResult {
         var returned: [String: PhotoRevision] = [:]
         for group in groups {
             for photo in group.photos {
@@ -278,13 +427,21 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
         }
         let returnedRevisions = returned
         let returnedIDs = returned.keys.sorted()
-        let validatePhotos: @Sendable ([String]) throws -> Void = { ids in
+        let validateLive: @Sendable () throws -> Void = {
             try access.validateEpoch()
+            try authority.validate()
+            // Preserve the existing final Photos epoch read even if a Photos
+            // notification arrives during the cheap SQLite checks.
+            try access.validateEpoch()
+        }
+        let validatePhotos: @Sendable ([String]) throws -> Void = { ids in
+            try validateLive()
             var requestedIDs: [String] = []
             var requested = Set<String>()
             for id in ids {
                 try Task.checkCancellation()
-                guard !id.isEmpty, returnedRevisions[id] != nil else {
+                    guard !id.isEmpty, let expected = returnedRevisions[id],
+                        Data(id.utf8) == Data(expected.id.utf8) else {
                     throw SimilarGroupingAccess.changed()
                 }
                 if requested.insert(id).inserted { requestedIDs.append(id) }
@@ -292,21 +449,23 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             if !requestedIDs.isEmpty {
                 if let batch = access.library as? any PhotoRevisionBatchReading {
                     let revisions = try batch.currentRevisions(ids: requestedIDs)
-                    try access.validateEpoch()
+                    try validateLive()
                     guard revisions.count == requestedIDs.count else { throw SimilarGroupingAccess.changed() }
                     var remaining = requested
                     for revision in revisions {
                         try Task.checkCancellation()
                         guard remaining.remove(revision.id) != nil,
-                              returnedRevisions[revision.id] == revision else {
+                            let expected = returnedRevisions[revision.id],
+                            SimilarGroupingDigest.sameRevision(expected, revision) else {
                             throw SimilarGroupingAccess.changed()
                         }
                     }
                     guard remaining.isEmpty else { throw SimilarGroupingAccess.changed() }
                 } else {
-                    for id in ids {
+                    for id in requestedIDs {
                         try Task.checkCancellation()
-                        guard access.library.currentRevision(id: id) == returnedRevisions[id] else {
+                        guard let current = access.library.currentRevision(id: id), let expected = returnedRevisions[id],
+                              SimilarGroupingDigest.sameRevision(current, expected) else {
                             throw SimilarGroupingAccess.changed()
                         }
                     }
@@ -314,14 +473,22 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             }
             // PhotoKit notifications may change the epoch during synchronous
             // metadata reads. Nil generations still check actual full revisions.
-            try access.validateEpoch()
+            try validateLive()
         }
-        try access.validateEpoch()
-        return SimilarPhotoGroupingResult(groups: groups, candidateCount: eligible.count,
-                                          staleCount: indexed.count - eligible.count,
-                                          unindexedCount: initial.count - indexed.count, threshold: threshold,
-                                          validateAccess: { try validatePhotos(returnedIDs) }, validatePhotos: validatePhotos,
-                                          validatePublicationEpoch: { try access.validateEpoch() })
+        try validateLive()
+        return SimilarPhotoGroupingResult(groups: groups, candidateCount: candidateCount,
+                          staleCount: staleCount,
+                          unindexedCount: unindexedCount, threshold: threshold,
+                          validateAccess: {
+                              try validatePhotos(returnedIDs)
+                              // No notification generation means member-only reads
+                              // cannot protect singleton/unindexed/zero-group counts.
+                              // prepareForPublication performs this OFF MainActor.
+                              if access.generation == nil { try access.requireSnapshot(initial) }
+                              try validateLive()
+                          }, validatePhotos: validatePhotos,
+                          validatePublicationEpoch: validateLive,
+                          persistenceIssue: persistenceIssue)
     }
 }
 
@@ -357,5 +524,17 @@ private struct SimilarGroupingAccess: Sendable {
         }
         try validateEpoch()
         return result
+    }
+
+    func requireSnapshot(_ expected: [String: PhotoRevision]) throws {
+        let current = try snapshot()
+        guard current.count == expected.count else { throw Self.changed() }
+        for (id, revision) in current {
+            try Task.checkCancellation()
+            guard let original = expected[id], SimilarGroupingDigest.sameRevision(original, revision) else {
+                throw Self.changed()
+            }
+        }
+        try validateEpoch()
     }
 }

@@ -20,7 +20,8 @@ final class SearchToolsPresentationTests: XCTestCase {
     func testRealResultsNormalAndSelectionDarkSnapshotsAreRenderOnly() async throws {
         let c = try await readyContext()
         let session = try XCTUnwrap(c.state.resultSessionID)
-        let hosted = try await mount(ContentView(state: c.state, photoActionService: c.actions), size: phone)
+        let hosted = try await mount(ContentView(state: c.state, photoActionService: c.actions,
+                             cleanupPreferences: nil), size: phone)
         defer { hosted.close() }
 
         let bounds = hosted.controller.view.bounds
@@ -128,7 +129,7 @@ final class SearchToolsPresentationTests: XCTestCase {
         let selectedIDs = Set(c.worker.hits.prefix(12).map(\.id))
         XCTAssertEqual(c.state.selectedResultIDs, selectedIDs)
         let size = CGSize(width: 320, height: 852)
-        let hosted = try await mount(ContentView(state: c.state, photoActionService: c.actions),
+        let hosted = try await mount(ContentView(state: c.state, photoActionService: c.actions, cleanupPreferences: nil),
                                      size: size, dynamicType: .accessibility5, watermark: false)
         defer { hosted.close() }
         XCTAssertEqual(hosted.window.bounds.size, size)
@@ -354,16 +355,11 @@ final class SearchToolsPresentationTests: XCTestCase {
 
     /// Public UIKit backing scroll geometry, not SwiftUI accessibility traversal.
     private func verticalScroll(in hosted: SearchToolsReviewHost) throws -> UIScrollView {
-        func descendants(_ view: UIView) -> [UIScrollView] {
-            let own = (view as? UIScrollView).map { [$0] } ?? []
-            return own + view.subviews.flatMap { descendants($0) }
-        }
-        let candidates = descendants(hosted.controller.view).filter {
-            !$0.isHidden && $0.alpha > 0 && $0.window === hosted.window &&
-                $0.bounds.width > 0 && $0.bounds.height > 0 && $0.contentSize.height > $0.bounds.height
-        }
-        XCTAssertEqual(candidates.count, 1, "The real results screen must provide one vertical native scroll view")
-        return try XCTUnwrap(candidates.first, "No laid-out vertical results UIScrollView")
+        // The shared helper asserts exactly one search anchor and a nonnil
+        // native owner, not one scroll view across two retained page trees.
+        let scroll = try primarySearchScrollView(in: hosted.controller.view)
+        XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height)
+        return scroll
     }
 
     private func visibleTileFrames(_ layout: SearchToolsReviewGridLayout, in hosted: SearchToolsReviewHost,

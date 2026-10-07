@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import ImageIO
 import XCTest
@@ -49,6 +50,34 @@ final class SimilarGroupingPublicationTests: XCTestCase {
         return result
     }
 
+    /// Explicit grouping may add only its completed cache. All existing files
+    /// must remain byte-identical, with no source writes or leftover sidecars.
+    private func assertOnlyDerivedCacheAdded(_ directory: URL, since before: [String: Data],
+                                            file: StaticString = #filePath, line: UInt = #line) throws {
+        let cacheName = SimilarGroupingCache.fileName
+        XCTAssertEqual(cacheName, "similar-groups-v1.bin", file: file, line: line)
+        XCTAssertNil(before[cacheName], "These fixtures start without a completed grouping cache.", file: file, line: line)
+        let after = try disk(directory)
+        XCTAssertEqual(after.filter { $0.key != cacheName }, before,
+                       "Only the derived grouping cache may be added; every original byte must be unchanged.", file: file, line: line)
+        let bytes = try XCTUnwrap(after[cacheName], "Successful fixture grouping must persist its completed cache.",
+                                  file: file, line: line)
+        XCTAssertTrue(bytes.starts(with: Data("bplist00".utf8)), file: file, line: line)
+        let envelope = try PropertyListDecoder().decode(SimilarGroupingCacheEnvelope.self, from: bytes)
+        XCTAssertEqual(envelope.magic, SimilarGroupingCacheEnvelope.magicValue, file: file, line: line)
+        XCTAssertEqual(envelope.schema, 1, file: file, line: line)
+        XCTAssertEqual(envelope.payloadSHA256, Data(SHA256.hash(data: envelope.payload)), file: file, line: line)
+        for url in [directory, directory.appendingPathComponent(cacheName)] {
+            XCTAssertEqual(try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup,
+                           true, file: file, line: line)
+            #if !targetEnvironment(simulator)
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            XCTAssertEqual(attributes[.protectionKey] as? FileProtectionType,
+                           .completeUntilFirstUserAuthentication, file: file, line: line)
+            #endif
+        }
+    }
+
     private func assertMetadataOnly(_ c: PublicationContext,
                                     file: StaticString = #filePath, line: UInt = #line) async {
         let calls = await c.encoders.calls()
@@ -88,7 +117,7 @@ final class SimilarGroupingPublicationTests: XCTestCase {
         try result.validatePublicationEpoch()
         XCTAssertEqual(c.library.events, [.full, .full, .full, .batch(expectedIDs)],
                        "The immediate MainActor fence must not fetch Photos again.")
-        XCTAssertEqual(try disk(c.directory), before)
+        try assertOnlyDerivedCacheAdded(c.directory, since: before)
         await assertMetadataOnly(c)
     }
 
@@ -106,6 +135,8 @@ final class SimilarGroupingPublicationTests: XCTestCase {
         XCTAssertEqual(result.unindexedCount, 1)
         try await result.prepareForPublication()
         XCTAssertEqual(c.library.batchRequests, [["a", "b", "c", "d"]])
+        XCTAssertEqual(c.library.events, [.full, .full, .full, .batch(["a", "b", "c", "d"]), .full],
+                   "Nil-generation publication rechecks the full library after member validation succeeds.")
 
         c.library.setRevision("c", modification: 124, creation: 100)
         try result.validatePhotos(["b", "a", "b"])
@@ -117,8 +148,10 @@ final class SimilarGroupingPublicationTests: XCTestCase {
         XCTAssertEqual(c.library.batchRequests.count, 2, "Reject invalid scope before any batch read.")
         XCTAssertThrowsError(try result.validateAccess(), "Full access still checks the changed, unselected group.")
         XCTAssertEqual(c.library.batchRequests.last, ["a", "b", "c", "d"])
-        XCTAssertEqual(c.library.enumerationCount, 3)
-        XCTAssertEqual(try disk(c.directory), before)
+        // Three grouping snapshots plus one successful publication snapshot;
+        // the later changed member fails batch validation before another full read.
+        XCTAssertEqual(c.library.enumerationCount, 4)
+        try assertOnlyDerivedCacheAdded(c.directory, since: before)
         await assertMetadataOnly(c)
     }
 
@@ -132,12 +165,13 @@ final class SimilarGroupingPublicationTests: XCTestCase {
         for reply in invalid {
             c.library.overrideBatch(reply)
             await expectFailure { try await result.prepareForPublication() }
+            XCTAssertEqual(c.library.enumerationCount, 3, "Invalid batches fail before the global snapshot.")
         }
         c.library.overrideBatch([b, a])
         try await result.prepareForPublication()
         XCTAssertEqual(c.library.batchRequests.count, invalid.count + 1)
         for request in c.library.batchRequests { XCTAssertEqual(request, ["a", "b"]) }
-        XCTAssertEqual(c.library.enumerationCount, 3)
+        XCTAssertEqual(c.library.enumerationCount, 4, "Only the successful reversed batch reaches the global snapshot.")
         await assertMetadataOnly(c)
     }
 
@@ -145,16 +179,18 @@ final class SimilarGroupingPublicationTests: XCTestCase {
         let c = try context(photos: [photo("a"), photo("b")], generation: nil)
         let result = try await c.service.group(threshold: 0.96) { _ in }
         try await result.prepareForPublication()
+        XCTAssertEqual(c.library.enumerationCount, 4, "Successful nil-generation publication adds one global snapshot.")
         let changes: [(modification: Double, creation: Double?)] = [(124, 100), (123, 101), (123, nil)]
         for change in changes {
             c.library.setRevision("a", modification: change.modification, creation: change.creation)
             await expectFailure { try await result.prepareForPublication() }
+            XCTAssertEqual(c.library.enumerationCount, 4, "Changed member revisions fail before another global snapshot.")
         }
         c.library.setRevision("a", modification: 123, creation: 100)
         c.library.remove("b")
         await expectFailure { try await result.prepareForPublication() }
         XCTAssertEqual(c.library.batchRequests.count, 5)
-        XCTAssertEqual(c.library.enumerationCount, 3)
+        XCTAssertEqual(c.library.enumerationCount, 4, "Missing members also fail before another global snapshot.")
         await assertMetadataOnly(c)
     }
 

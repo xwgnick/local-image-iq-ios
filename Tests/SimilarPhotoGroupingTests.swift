@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import ImageIO
 import XCTest
@@ -50,6 +51,33 @@ final class SimilarPhotoGroupingTests: XCTestCase {
         return try Dictionary(uniqueKeysWithValues: files.map { ($0.lastPathComponent, try Data(contentsOf: $0)) })
     }
 
+    /// Only successful explicit grouping may add this optional derived file.
+    /// Keep every prior entry byte-identical; no other new files are allowed.
+    private func assertOnlyDerivedCacheAdded(_ directory: URL, since before: [String: Data],
+                                            file: StaticString = #filePath, line: UInt = #line) throws {
+        let cacheName = "similar-groups-v1.bin"
+        XCTAssertEqual(SimilarGroupingCache.fileName, cacheName, file: file, line: line)
+        XCTAssertNil(before[cacheName], "These fixtures start without a completed grouping cache.", file: file, line: line)
+        let after = try disk(directory)
+        XCTAssertEqual(after.filter { $0.key != cacheName }, before,
+                       "No pruning, migration, sidecars, source index, OCR or original-file writes.", file: file, line: line)
+        guard let bytes = after[cacheName] else { return } // Persistence failure must not invalidate fresh groups.
+        XCTAssertTrue(bytes.starts(with: Data("bplist00".utf8)), file: file, line: line)
+        let envelope = try PropertyListDecoder().decode(SimilarGroupingCacheEnvelope.self, from: bytes)
+        XCTAssertEqual(envelope.magic, SimilarGroupingCacheEnvelope.magicValue, file: file, line: line)
+        XCTAssertEqual(envelope.schema, 1, file: file, line: line)
+        XCTAssertEqual(envelope.payloadSHA256, Data(SHA256.hash(data: envelope.payload)), file: file, line: line)
+        for url in [directory, directory.appendingPathComponent(cacheName)] {
+            XCTAssertEqual(try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup,
+                           true, file: file, line: line)
+            #if !targetEnvironment(simulator)
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            XCTAssertEqual(attributes[.protectionKey] as? FileProtectionType,
+                           .completeUntilFirstUserAuthentication, file: file, line: line)
+            #endif
+        }
+    }
+
     private func failure(_ operation: () async throws -> Void, file: StaticString = #filePath, line: UInt = #line) async {
         do { try await operation(); XCTFail("Expected failure.", file: file, line: line) }
         catch { }
@@ -65,7 +93,7 @@ final class SimilarPhotoGroupingTests: XCTestCase {
     }
 
     func testPolicyInclusiveEndpointsFiniteValuesAndProgressFraction() throws {
-        XCTAssertEqual(SimilarPhotoGroupingPolicy.defaultThreshold, 0.96)
+        XCTAssertEqual(SimilarPhotoGroupingPolicy.defaultThreshold, 0.80)
         XCTAssertEqual(SimilarPhotoGroupingPolicy.thresholdRange, Float(0.50)...Float(0.99))
         let valid: [Float] = [0.50, 0.75, 0.90, 0.96, 0.99]
         for value in valid { XCTAssertNoThrow(try SimilarPhotoGroupingPolicy.validate(threshold: value)) }
@@ -95,10 +123,10 @@ final class SimilarPhotoGroupingTests: XCTestCase {
             XCTAssertEqual((Double(threshold) * 100).rounded(), tick)
         }
         let defaultTick = (Double(SimilarPhotoGroupingPolicy.defaultThreshold) * 100).rounded()
-        XCTAssertEqual(defaultTick, 96)
+        XCTAssertEqual(defaultTick, 80)
         XCTAssertEqual(Float(defaultTick) / 100, SimilarPhotoGroupingPolicy.defaultThreshold)
         let position = (defaultTick - ticks.lowerBound) / (ticks.upperBound - ticks.lowerBound)
-        XCTAssertEqual(position, 46.0 / 49.0, accuracy: 0.000000000001)
+        XCTAssertEqual(position, 30.0 / 49.0, accuracy: 0.000000000001)
     }
 
     func testCosinePointEightIsAbsentAtPointNineAndPresentAtPointSevenFive() async throws {
@@ -310,12 +338,14 @@ final class SimilarPhotoGroupingTests: XCTestCase {
         }
     }
 
-    func testServiceInitIsIdleAndMissingDirectoryOrDatabaseIsNeverCreated() async throws {
+    func testServiceInitIsIdleAndExplicitGroupingNeverCreatesSourceDatabase() async throws {
         for missingDirectory in [false, true] {
             let c = try context(["new"], missingDirectory: missingDirectory, seed: false)
             XCTAssertEqual(c.library.enumerationCount, 0)
             await assertMetadataOnly(c, inspections: 0)
             let before = try disk(c.directory)
+            XCTAssertTrue(before.isEmpty, "Initialization must not create even a derived cache.")
+            if missingDirectory { XCTAssertFalse(FileManager.default.fileExists(atPath: c.directory.path)) }
             let trace = GroupingProgressTrace()
             let result = try await c.service.group(threshold: 0.96) { await trace.append($0) }
             XCTAssertTrue(result.groups.isEmpty)
@@ -323,9 +353,8 @@ final class SimilarPhotoGroupingTests: XCTestCase {
             XCTAssertEqual(result.staleCount, 0)
             XCTAssertEqual(result.unindexedCount, 1)
             XCTAssertEqual(c.library.enumerationCount, 3)
-            XCTAssertEqual(try disk(c.directory), before)
+            try assertOnlyDerivedCacheAdded(c.directory, since: before)
             XCTAssertFalse(FileManager.default.fileExists(atPath: c.directory.appendingPathComponent("index.sqlite3").path))
-            if missingDirectory { XCTAssertFalse(FileManager.default.fileExists(atPath: c.directory.path)) }
             let states = await trace.values()
             XCTAssertEqual(states, [SimilarPhotoGroupingProgress()])
             try result.validateAccess()
@@ -354,7 +383,7 @@ final class SimilarPhotoGroupingTests: XCTestCase {
         XCTAssertEqual(result.threshold, 0.97)
         XCTAssertEqual(c.library.enumerationCount, 3)
         try result.validateAccess()
-        XCTAssertEqual(try disk(c.directory), before, "No pruning, migration, sidecars, index or OCR writes.")
+        try assertOnlyDerivedCacheAdded(c.directory, since: before)
         await assertMetadataOnly(c)
     }
 
@@ -435,7 +464,7 @@ final class SimilarPhotoGroupingTests: XCTestCase {
             try result.validatePhotos(["a", "b"])
             XCTAssertThrowsError(try result.validatePhotos(["creation-stale"]))
             XCTAssertEqual(c.library.enumerationCount, 3)
-            XCTAssertEqual(try disk(c.directory), before, "Creation-only stale rows must not trigger decoding or writes.")
+            try assertOnlyDerivedCacheAdded(c.directory, since: before)
             await assertMetadataOnly(c)
         }
     }
@@ -515,7 +544,10 @@ final class SimilarPhotoGroupingTests: XCTestCase {
         XCTAssertThrowsError(try result.validatePhotos(["a"]))
         c.library.remove("b")
         XCTAssertThrowsError(try result.validatePhotos(["b"]))
-        XCTAssertEqual(c.library.enumerationCount, 3, "Publication guards use synchronous member revisions, not new full snapshots.")
+        // Nil-generation publication preserves a strong global revision check:
+        // successful validateAccess adds one full snapshot after member checks;
+        // the later changed member fails before another, and subset checks stay local.
+        XCTAssertEqual(c.library.enumerationCount, 4, "Successful nil-generation publication must recheck the full library, including ungrouped photos.")
     }
 
     func testResultGuardsRecheckEpochBeforeAndAfterSynchronousRevisionReads() async throws {

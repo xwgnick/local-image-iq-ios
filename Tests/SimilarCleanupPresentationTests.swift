@@ -20,7 +20,7 @@ final class SimilarCleanupPresentationTests: XCTestCase {
         let host = try await mount(c)
         defer { host.close() }
         assertUnscanned(c.cleanup)
-        XCTAssertEqual(c.cleanup.threshold, 0.96)
+        XCTAssertEqual(c.cleanup.threshold, SimilarPhotoGroupingPolicy.defaultThreshold)
         assertServices(c, scans: 0)
 
         // Only this explicit controller action obtains the fixture groups.
@@ -287,7 +287,7 @@ final class SimilarCleanupPresentationTests: XCTestCase {
 
     private func assertServices(_ c: SimilarCleanupReviewContext, scans: Int, refreshes: Int = 1,
                                 file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertEqual(c.grouping.thresholds, Array(repeating: Float(0.96), count: scans), file: file, line: line)
+        XCTAssertEqual(c.grouping.thresholds, Array(repeating: SimilarPhotoGroupingPolicy.defaultThreshold, count: scans), file: file, line: line)
         XCTAssertTrue(c.deletion.calls.isEmpty, "Rendering/preparing must never submit deletion", file: file, line: line)
         XCTAssertEqual(c.worker.refreshCount, refreshes, file: file, line: line)
         XCTAssertEqual(c.worker.unexpectedCalls, 0, file: file, line: line)

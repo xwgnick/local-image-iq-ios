@@ -6,6 +6,7 @@ struct ContentView: View {
     @ObservedObject var state: AppState
     @StateObject private var photoActions: ResultPhotoActionsState
     @StateObject private var similarCleanup: SimilarPhotoCleanupState
+    @StateObject private var navigation: PrimaryNavigationPresentation
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var showFilters = false
@@ -13,23 +14,101 @@ struct ContentView: View {
     @State private var albumActionIDs: [String] = []
     @State private var showLibrary = false
     @State private var showSettings = false
-    @State private var showSimilarCleanup = false
+    @State private var photoWriteInFlight = false
     @State private var compactGrid = false
     @State private var visiblePageBoundary: ResultPageBoundaryValue?
     @FocusState private var isSearchFocused: Bool
     private var showingResults: Bool { state.completedQuery != nil || state.activity == .searching }
 
-        init(state: AppState, photoActionService: (any PhotoLibraryActions)? = nil,
-            similarCleanupState: SimilarPhotoCleanupState? = nil) {
+    init(state: AppState, photoActionService: (any PhotoLibraryActions)? = nil,
+         similarCleanupState: SimilarPhotoCleanupState? = nil,
+         navigation: PrimaryNavigationPresentation? = nil,
+         cleanupPreferences: UserDefaults? = .standard) {
         self.state = state
+        _navigation = StateObject(wrappedValue: navigation ?? PrimaryNavigationPresentation())
         _photoActions = StateObject(wrappedValue: ResultPhotoActionsState(
             service: photoActionService ?? SystemPhotoLibraryActions(library: state.library)))
         _similarCleanup = StateObject(wrappedValue: similarCleanupState ?? SimilarPhotoCleanupState(
             grouping: SimilarPhotoGroupingService(library: state.library),
-            deletion: SystemPhotoDeletionService(library: state.library)))
+            deletion: SystemPhotoDeletionService(library: state.library), preferences: cleanupPreferences))
     }
 
     var body: some View {
+        ZStack {
+            searchPage.modifier(RetainedPrimaryPage(active: navigation.page == .search))
+            SimilarPhotoCleanupSheet(state: similarCleanup, appState: state,
+                                    embedded: true, isPageActive: navigation.page == .cleanup,
+                                    openLibrary: openLibrary, openSettings: openSettings)
+                .modifier(RetainedPrimaryPage(active: navigation.page == .cleanup))
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            PrimaryNavigationBar(page: navigation.page, switchingDisabled: switchingDisabled) { page in
+                guard !switchingDisabled else { return }
+                isSearchFocused = false
+                navigation.select(page)
+            }
+        }
+        .onChange(of: navigation.page) { _, _ in isSearchFocused = false }
+        .sheet(isPresented: $showLibrary) { LibrarySheet(state: state) }
+        .sheet(isPresented: $showSettings) { SettingsSheet(state: state, cleanup: similarCleanup) }
+        .sheet(isPresented: $showFilters) {
+            SearchFiltersSheet(filters: state.searchFilters, albums: photoActions.albums,
+                               albumsLoading: photoActions.albumsLoading, albumIssue: photoActions.albumIssue) {
+                state.applySearchFilters($0)
+            }
+        }
+        .sheet(isPresented: $showAlbumAction) {
+            AlbumActionSheet(albums: photoActions.albums, isLoading: photoActions.albumsLoading,
+                             issue: photoActions.albumIssue) { action in
+                performPhotoAction(action, ids: albumActionIDs)
+                showAlbumAction = false
+            }
+        }
+        .sheet(item: $photoActions.share) { prepared in
+            if photoActions.canPresent(prepared) {
+                BatchPhotoShareSheet(share: prepared,
+                    validate: { photoActions.beginPresentation(prepared) },
+                    finished: { photoActions.dismissShare(id: $0) })
+            } else {
+                ContentUnavailableView("照片访问权限已更改", systemImage: "lock")
+                    .onAppear { photoActions.dismissShare(id: prepared.id) }
+            }
+        }
+        .alert("照片操作", isPresented: Binding(get: { photoActions.message != nil },
+                                             set: { if !$0 { photoActions.dismissMessage() } })) {
+            Button("好") { photoActions.dismissMessage() }
+        } message: { Text(photoActions.message ?? "") }
+        .onReceive(photoActions.$isBusy) { busy in
+            // Observe every publication, including a write that completes
+            // before SwiftUI renders the intermediate busy frame.
+            if !busy { photoWriteInFlight = false }
+        }
+        .onChange(of: state.resultSessionID) { _, _ in
+            // A share extension may still own files when background clears results.
+            if photoActions.share != nil || photoActions.sharingPresented { photoActions.libraryChanged() }
+            else { photoActions.invalidateSelection() }
+            showAlbumAction = false
+            albumActionIDs = []
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { photoActions.pause() }
+            else { photoActions.libraryChanged() }
+        }
+        // Cleanup owns its access/scene observers, including while hidden. Do
+        // not invalidate the same library epoch from both parent and child.
+        .fullScreenCover(item: $state.selection) { selection in
+            PhotoResultsViewer(hits: state.results, initialID: selection.id,
+                               library: state.library, networkAllowed: state.allowICloudDownload, state: state)
+        }
+        .tint(IQStyle.accent)
+        .background {
+            if let service = state.appleTranslationService {
+                AppleQueryTranslationHost(service: service, purpose: .search)
+            }
+        }
+    }
+
+    private var searchPage: some View {
         NavigationStack {
             GeometryReader { viewport in
             ScrollViewReader { proxy in
@@ -47,6 +126,14 @@ struct ContentView: View {
                     }
                     .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 24)
                     .frame(maxWidth: 800).frame(maxWidth: .infinity)
+                    .background {
+                        // Inside the content, so native ownership resolves to
+                        // this ScrollView even while its retained page is hidden.
+                        PrimarySearchScrollAnchor()
+                            .frame(height: 0)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .coordinateSpace(name: ResultPageBoundary.coordinateSpace)
@@ -56,6 +143,9 @@ struct ContentView: View {
                 }
                 .onChange(of: state.isBusy) { _, busy in
                     if !busy { requestVisiblePage(visiblePageBoundary, viewportHeight: viewport.size.height) }
+                }
+                .onChange(of: navigation.page) { _, page in
+                    if page == .search { requestVisiblePage(visiblePageBoundary, viewportHeight: viewport.size.height) }
                 }
                 .accessibilityIdentifier("library-scroll")
                 .onChange(of: state.completedQuery) { _, query in
@@ -69,30 +159,28 @@ struct ContentView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if state.isSelectingResults { selectionToolbar }
                 else {
-                libraryStatus
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 8)
-                    .background(IQStyle.background)
+                    libraryStatus
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
+                        .background(IQStyle.background)
                 }
             }
-            .navigationTitle("Image IQ")
+            .navigationTitle(showingResults ? "照片搜索" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(IQStyle.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if isSearchFocused {
-                        Button("完成") { isSearchFocused = false }
-                            .accessibilityLabel("收起键盘").accessibilityIdentifier("hide-search-keyboard")
-                    } else {
-                        Image(systemName: "magnifyingglass").foregroundStyle(IQStyle.accent).accessibilityHidden(true)
-                    }
+                    PrimaryLibraryButton(canRead: state.canRead, action: openLibrary)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { isSearchFocused = false; showSettings = true } label: {
-                        Image(systemName: "slider.horizontal.3").frame(minWidth: 44, minHeight: 44)
+                    PrimarySettingsButton(action: openSettings)
+                }
+                if isSearchFocused {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("完成") { isSearchFocused = false }
+                            .accessibilityLabel("收起键盘").accessibilityIdentifier("hide-search-keyboard")
                     }
-                    .accessibilityLabel("设置").accessibilityIdentifier("open-settings")
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -100,110 +188,27 @@ struct ContentView: View {
                         .accessibilityLabel("收起键盘").accessibilityIdentifier("keyboard-done")
                 }
             }
-            .sheet(isPresented: $showLibrary) { LibrarySheet(state: state) }
-            .sheet(isPresented: $showSettings) { SettingsSheet(state: state) }
-            .sheet(isPresented: $showSimilarCleanup, onDismiss: { similarCleanup.pause() }) {
-                SimilarPhotoCleanupSheet(state: similarCleanup, appState: state)
-            }
-            .sheet(isPresented: $showFilters) {
-                SearchFiltersSheet(filters: state.searchFilters, albums: photoActions.albums,
-                                   albumsLoading: photoActions.albumsLoading, albumIssue: photoActions.albumIssue) {
-                    state.applySearchFilters($0)
-                }
-            }
-            .sheet(isPresented: $showAlbumAction) {
-                AlbumActionSheet(albums: photoActions.albums, isLoading: photoActions.albumsLoading,
-                                 issue: photoActions.albumIssue) { action in
-                    photoActions.perform(action, ids: albumActionIDs)
-                    showAlbumAction = false
-                }
-            }
-            .sheet(item: $photoActions.share) { prepared in
-                if photoActions.canPresent(prepared) {
-                    BatchPhotoShareSheet(share: prepared,
-                        validate: { photoActions.beginPresentation(prepared) },
-                        finished: { photoActions.dismissShare(id: $0) })
-                } else {
-                    ContentUnavailableView("照片访问权限已更改", systemImage: "lock")
-                        .onAppear { photoActions.dismissShare(id: prepared.id) }
-                }
-            }
-            .alert("照片操作", isPresented: Binding(get: { photoActions.message != nil },
-                                                 set: { if !$0 { photoActions.dismissMessage() } })) {
-                Button("好") { photoActions.dismissMessage() }
-            } message: { Text(photoActions.message ?? "") }
-            .onChange(of: state.resultSessionID) { _, _ in
-                // Background clearing must not remove files already handed to
-                // a share extension. Presence/access is rechecked independently.
-                if photoActions.share != nil || photoActions.sharingPresented { photoActions.libraryChanged() }
-                else { photoActions.invalidateSelection() }
-                showAlbumAction = false
-                albumActionIDs = []
-            }
-            .onChange(of: scenePhase) { _, phase in
-                if phase != .active { photoActions.pause() }
-                else { photoActions.libraryChanged() }
-            }
-            .onChange(of: state.photoLibraryEpoch) { _, _ in similarCleanup.invalidateAccess() }
-            .fullScreenCover(item: $state.selection) { selection in
-                PhotoResultsViewer(hits: state.results, initialID: selection.id,
-                                   library: state.library, networkAllowed: state.allowICloudDownload, state: state)
-            }
-        }.tint(IQStyle.accent)
-        .background {
-            if let service = state.appleTranslationService {
-                AppleQueryTranslationHost(service: service, purpose: .search)
-            }
         }
     }
 
     private var filterControl: some View {
-        cleanupEntryLayout {
-        HStack {
-            Button {
-                isSearchFocused = false
-                photoActions.loadAlbums()
-                showFilters = true
-            } label: {
-                Label(state.searchFilters.isEmpty ? "筛选" : "已筛选", systemImage: "line.3.horizontal.decrease")
-                    .font(.subheadline)
-                    .frame(minHeight: 44)
-            }
-            .disabled(state.isBusy || photoActions.isBusy)
-            .accessibilityIdentifier("open-search-filters")
-            if !state.searchFilters.isEmpty {
-                Text(filterSummary).font(.caption).foregroundStyle(IQStyle.secondary).lineLimit(2)
-            }
-            Spacer(minLength: 0)
-            if state.similarPhotoID != nil {
-                Text("相似照片").font(.caption).foregroundStyle(IQStyle.accent)
-            }
-        }
-        Button {
+        SearchPhotoTextTools(state: state, filtersDisabled: photoActions.isBusy) {
             isSearchFocused = false
-            similarCleanup.resume()
-            showSimilarCleanup = true
-        } label: {
-            Label("相似照片清理", systemImage: "square.on.square")
-                .font(.subheadline).frame(minHeight: 44)
-        }
-        .disabled(state.isBusy || photoActions.isBusy)
-        .accessibilityIdentifier("open-similar-cleanup")
+            photoActions.loadAlbums()
+            showFilters = true
         }
     }
 
-    private var cleanupEntryLayout: AnyLayout {
-        dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-            : AnyLayout(HStackLayout(spacing: 12))
-    }
+    private var switchingDisabled: Bool { similarCleanup.isDeleting || (photoWriteInFlight && photoActions.isBusy) }
+    private func openLibrary() { isSearchFocused = false; showLibrary = true }
+    private func openSettings() { isSearchFocused = false; showSettings = true }
 
-    private var filterSummary: String {
-        var parts: [String] = []
-        if state.searchFilters.startDate != nil || state.searchFilters.endDateExclusive != nil { parts.append("日期") }
-        if state.searchFilters.albumID != nil { parts.append("相册") }
-        if state.searchFilters.imageKind != .all { parts.append(state.searchFilters.imageKind.title) }
-        return parts.joined(separator: " · ")
+    private func performPhotoAction(_ action: PhotoBatchAction, ids: [String]) {
+        guard !photoActions.isBusy else { return }
+        photoActions.perform(action, ids: ids)
+        // Only an accepted write locks navigation, not searching/album reads or
+        // share preparation. The controller still owns the uncancellable write.
+        photoWriteInFlight = photoActions.isBusy
     }
 
     private var selectionToolbar: some View {
@@ -229,8 +234,8 @@ struct ContentView: View {
                 .accessibilityIdentifier("share-selected-photos")
                 .frame(minWidth: 44, minHeight: 44)
                 Menu {
-                    Button("加入收藏") { photoActions.perform(.favorite(true), ids: state.orderedSelectedResultIDs) }
-                    Button("取消收藏") { photoActions.perform(.favorite(false), ids: state.orderedSelectedResultIDs) }
+                    Button("加入收藏") { performPhotoAction(.favorite(true), ids: state.orderedSelectedResultIDs) }
+                    Button("取消收藏") { performPhotoAction(.favorite(false), ids: state.orderedSelectedResultIDs) }
                 } label: { Label("收藏", systemImage: "heart") }
                 .accessibilityIdentifier("favorite-selected-photos")
                 .frame(minWidth: 44, minHeight: 44)
@@ -290,37 +295,22 @@ struct ContentView: View {
 
     private var introduction: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("找回那一刻。")
+            Text("照片搜索")
                 .font(.system(.largeTitle, design: .rounded, weight: .bold))
                 .foregroundStyle(IQStyle.text)
-            Text("不用记住日期，记得画面就好。")
+            Text("用一句话，找到你记得的照片。")
                 .font(.subheadline).foregroundStyle(IQStyle.secondary)
         }.padding(.vertical, 8)
     }
 
     private var libraryStatus: some View {
-        Button { isSearchFocused = false; showLibrary = true } label: {
-            HStack(spacing: 10) {
-                Image(systemName: state.canRead ? "photo.stack" : "photo.badge.plus")
-                    .font(.body.weight(.medium)).foregroundStyle(IQStyle.accent)
-                    .frame(width: 24, height: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(libraryTitle).font(.subheadline.weight(.medium)).foregroundStyle(IQStyle.text)
-                    Text(librarySubtitle).font(.caption).foregroundStyle(IQStyle.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if state.activity == .indexing { ProgressView(value: state.progress.fraction).tint(IQStyle.accent) }
-                }
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(IQStyle.secondary)
-            }
-            .frame(minHeight: 44)
-            .padding(.top, 10)
-            .overlay(alignment: .top) { Rectangle().fill(IQStyle.line).frame(height: 1) }
-            // The compact row has no filled card background. Make its Spacer
-            // tappable too, rather than only the visible glyph/text fragments.
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityIdentifier("open-library")
-            .accessibilityValue(!state.canRead ? "authorization-required" : "library-accessible")
+        VStack(alignment: .leading, spacing: 2) {
+            Text(libraryTitle).font(.caption).foregroundStyle(IQStyle.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if state.activity == .indexing { ProgressView(value: state.progress.fraction).tint(IQStyle.accent) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("library-status")
     }
 
     var libraryTitle: String {
@@ -473,7 +463,8 @@ struct ContentView: View {
     private func submitSearch() { isSearchFocused = false; state.search() }
 
     private func requestVisiblePage(_ boundary: ResultPageBoundaryValue?, viewportHeight: CGFloat) {
-        guard let boundary, boundary.frame.minY < viewportHeight, boundary.frame.maxY > 0 else { return }
+          guard navigation.page == .search,
+              let boundary, boundary.frame.minY < viewportHeight, boundary.frame.maxY > 0 else { return }
         state.loadMoreResults(sessionID: boundary.sessionID, after: boundary.visibleCount)
     }
 }

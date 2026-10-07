@@ -24,7 +24,7 @@ struct LibrarySheet: View {
                 }
                 errorSection
                 cloudSection
-                if state.textSearchEnabled { PhotoTextIndexSection(state: state) }
+                PhotoTextIndexSection(state: state)
                 if state.debugToolsEnabled {
                     detailsSection
                 }

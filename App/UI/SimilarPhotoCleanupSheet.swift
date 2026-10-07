@@ -1,7 +1,8 @@
 import SwiftUI
 import ImageIQCore
 
-/// The parent owns this sheet-local controller. Opening/resuming never scans.
+/// Production uses embedded mode in a retained primary page. The default
+/// standalone host preserves the original manual sheet contract for old tests.
 @MainActor
 struct SimilarPhotoCleanupSheet: View {
     @ObservedObject var state: SimilarPhotoCleanupState
@@ -13,6 +14,11 @@ struct SimilarPhotoCleanupSheet: View {
     @StateObject private var browser: SimilarPhotoGroupBrowser
     private let thumbnailContent: ((IndexedPhoto) -> AnyView)?
     private let comparisonImageSource: SimilarComparisonImageSource?
+    let embedded: Bool
+    let isPageActive: Bool
+    private let openLibrary: () -> Void
+    private let openSettings: () -> Void
+    @State private var previousInput: CleanupPresentationInput?
     @State private var hasRequestedGrouping = false
     @State private var confirmationIntent: SimilarPhotoDeletionIntent?
     @State private var showsConfirmation = false
@@ -20,7 +26,9 @@ struct SimilarPhotoCleanupSheet: View {
     init(state: SimilarPhotoCleanupState, appState: AppState,
          browser: SimilarPhotoGroupBrowser? = nil,
          thumbnailContent: ((IndexedPhoto) -> AnyView)? = nil,
-         comparisonImageSource: SimilarComparisonImageSource? = nil) {
+         comparisonImageSource: SimilarComparisonImageSource? = nil,
+         embedded: Bool = false, isPageActive: Bool = true,
+         openLibrary: @escaping () -> Void = {}, openSettings: @escaping () -> Void = {}) {
         self.state = state
         self.appState = appState
         _browser = StateObject(wrappedValue: browser ?? SimilarPhotoGroupBrowser())
@@ -28,12 +36,20 @@ struct SimilarPhotoCleanupSheet: View {
         // the existing revision/network-aware HQ224-fallback thumbnail cache.
         self.thumbnailContent = thumbnailContent
         self.comparisonImageSource = comparisonImageSource
+        self.embedded = embedded
+        self.isPageActive = isPageActive
+        self.openLibrary = openLibrary
+        self.openSettings = openSettings
+    }
+
+    private var libraryReady: Bool {
+        scenePhase != .background && appState.isForeground && appState.canRead && appState.modelsReady
+            && appState.summary.indexStatisticsKnown && appState.summary.indexedCount > 0 && !appState.isBusy
     }
 
     private var canScan: Bool {
-        scenePhase == .active && appState.canRead && appState.modelsReady
-            && appState.summary.indexStatisticsKnown && appState.summary.indexedCount > 0 && !appState.isBusy
-            && !state.isGrouping && !state.isDeleting && !state.isSelecting
+        libraryReady && (!embedded || isPageActive)
+            && !state.isGrouping && !state.isRestoring && !state.isDeleting && !state.isSelecting
     }
 
     private var thresholdBinding: Binding<Double> {
@@ -73,11 +89,21 @@ struct SimilarPhotoCleanupSheet: View {
                     .accessibilityHidden(true)
             }
             .background(IQStyle.background.ignoresSafeArea())
-            .navigationTitle("相似照片清理")
+            .navigationTitle(embedded ? "相似清理" : "相似照片清理")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(IQStyle.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
+                if embedded {
+                    ToolbarItem(placement: .topBarLeading) {
+                        PrimaryLibraryButton(canRead: appState.canRead, action: openLibrary)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        PrimarySettingsButton(action: openSettings)
+                    }
+                }
                 if browser.detailRoute != nil {
-                    ToolbarItem(placement: .navigationBarLeading) {
+                    ToolbarItem(placement: .topBarLeading) {
                         Button("所有分组", systemImage: "chevron.left") {
                             state.cancelRangeSelection()
                             browser.closeDetail()
@@ -86,10 +112,12 @@ struct SimilarPhotoCleanupSheet: View {
                         .accessibilityIdentifier("similar-cleanup-all-groups")
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
-                        .disabled(state.isDeleting)
-                        .accessibilityIdentifier("close-similar-cleanup")
+                if !embedded {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("完成") { dismiss() }
+                            .disabled(state.isDeleting)
+                            .accessibilityIdentifier("close-similar-cleanup")
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -157,34 +185,59 @@ struct SimilarPhotoCleanupSheet: View {
             if let route = browser.detailRoute, !ids.contains(route.groupID) { browser.closeDetail() }
         }
         .onChange(of: state.selectionSessionID) { _, session in browser.invalidate(sessionID: session) }
-        .onChange(of: appState.photoLibraryEpoch) { _, _ in invalidateAccess() }
-        .onChange(of: appState.authorization) { _, _ in invalidateAccess() }
-        .onChange(of: scenePhase, initial: true) { _, phase in
-            switch phase {
-            case .background:
-                browser.closeDetail()
-                showsConfirmation = false
-                state.cancelRangeSelection()
-                state.pause()
-            case .active:
-                state.resume()
-            default:
-                // PhotoKit confirmation makes the scene inactive, not background.
-                break
+        .onChange(of: presentationInput, initial: true) { _, input in updateLifecycle(input) }
+        // Do not pause onDisappear: a gallery/comparison cover can disappear
+        // this root without leaving cleanup. The tab input owns page activity;
+        // only an actual background transition pauses the controller.
+    }
+
+    private var presentationInput: CleanupPresentationInput {
+        CleanupPresentationInput(epoch: appState.photoLibraryEpoch, authorization: appState.authorization.rawValue,
+                                 ready: libraryReady, pageActive: isPageActive, phase: scenePhase)
+    }
+
+    private func updateLifecycle(_ input: CleanupPresentationInput) {
+        let old = previousInput
+        previousInput = input
+        let accessChanged = old.map { $0.epoch != input.epoch || $0.authorization != input.authorization } ?? false
+        if embedded, old?.pageActive == true, !input.pageActive {
+            showsConfirmation = false
+            state.cancelRangeSelection()
+            state.leavePage()
+        }
+        if input.phase == .background, old?.phase != .background {
+            browser.closeDetail()
+            showsConfirmation = false
+            state.cancelRangeSelection()
+            state.pause()
+        }
+        // Suppress automatic entry until this same update's readiness has been
+        // applied. Never start a restore using the previous authorization/busy
+        // value only to cancel it in a second observer for the same publication.
+        if accessChanged {
+            if embedded { state.availabilityChanged(ready: false) }
+            invalidateAccess()
+        }
+        if embedded {
+            if input.pageActive, old?.pageActive != true {
+                state.enterPage(ready: input.ready)
+            } else {
+                state.availabilityChanged(ready: input.ready && input.pageActive)
             }
         }
-        .onAppear {
-            if scenePhase == .active { state.resume() }
-        }
-        // Do not pause onDisappear: a gallery/comparison cover can disappear
-        // this root without dismissing cleanup. ContentView.sheet's onDismiss
-        // owns actual dismissal; background above remains an explicit pause.
+        if input.phase == .active, old?.phase != .active { state.resume() }
+        // Inactive (e.g. a PhotoKit confirmation) is not background and must not
+        // cancel the live grouping/selection session.
     }
 
     private var overview: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
                 controls
+                if state.isRestoring {
+                    ProgressView("正在恢复分组…").tint(IQStyle.accent)
+                        .accessibilityIdentifier("similar-cleanup-restoring")
+                }
                 if state.isGrouping { groupingProgress }
                 if state.hasScanned { summary }
                 if scenePhase != .background {
@@ -196,40 +249,51 @@ struct SimilarPhotoCleanupSheet: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .accessibilityIdentifier("similar-cleanup-scroll")
     }
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if embedded {
+                Text("相似清理").font(.system(.largeTitle, design: .rounded, weight: .bold))
+            }
             Text("全组每两张均达阈值。只是建议，删除前请核对。")
                 .font(.subheadline)
                 .foregroundStyle(IQStyle.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("阈值\(String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), Double(state.threshold)))（越高越严格）")
-                    .font(.subheadline.weight(.medium))
-                    .monospacedDigit()
-                    .fixedSize(horizontal: false, vertical: true)
-                Slider(value: thresholdBinding, in: SimilarPhotoGroupingPolicy.sliderTicks, step: 1)
-                    .disabled(state.isDeleting || state.isSelecting)
-                    .accessibilityLabel("相似度阈值，越高越严格")
-                    .accessibilityValue(String(format: "%.2f", Double(state.threshold)))
-                    .accessibilityIdentifier("similar-cleanup-threshold")
-            }
-                    if state.threshold < 0.90 {
+            if !embedded {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("阈值\(String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), Double(state.threshold)))（越高越严格）")
+                        .font(.subheadline.weight(.medium))
+                        .monospacedDigit()
+                        .fixedSize(horizontal: false, vertical: true)
+                    Slider(value: thresholdBinding, in: SimilarPhotoGroupingPolicy.sliderTicks, step: 1)
+                        .disabled(state.isDeleting || state.isSelecting)
+                        .accessibilityLabel("相似度阈值，越高越严格")
+                        .accessibilityValue(String(format: "%.2f", Double(state.threshold)))
+                        .accessibilityIdentifier("similar-cleanup-threshold")
+                }
+                if state.threshold < 0.90 {
                     Text("已放宽相似范围，可能包含仅场景相近的照片。请逐张核对后再勾选删除。")
                         .font(.footnote).foregroundStyle(IQStyle.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("similar-cleanup-broad-threshold-note")
-                    }
-            Button(hasRequestedGrouping || state.hasScanned ? "重新分组" : "开始分组") {
+                }
+            }
+            if state.needsRegroup {
+                Text("照片有变化，重新分组")
+                    .font(.subheadline).foregroundStyle(IQStyle.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("similar-cleanup-needs-regroup")
+            }
+            Button(hasRequestedGrouping || state.hasScanned || state.needsRegroup ? "重新分组" : "开始分组") {
                 guard canScan else { return }
                 hasRequestedGrouping = true
                 state.scan()
             }
             .font(.body.weight(.semibold))
             .frame(minHeight: 44)
-            .buttonStyle(.borderedProminent)
-            .foregroundStyle(IQStyle.onAccent)
+            .buttonStyle(.bordered)
             .disabled(!canScan)
             .accessibilityIdentifier("start-similar-grouping")
             if let readinessHint {
@@ -237,6 +301,15 @@ struct SimilarPhotoCleanupSheet: View {
                     .font(.footnote)
                     .foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if embedded, !appState.canRead {
+                Button("选择照片", action: openLibrary)
+                    .frame(minHeight: 44).accessibilityIdentifier("cleanup-choose-photos")
+            }
+            if let issue = state.persistenceIssue {
+                Text(issue).font(.footnote).foregroundStyle(IQStyle.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("similar-cleanup-persistence-issue")
             }
         }
     }
@@ -247,7 +320,8 @@ struct SimilarPhotoCleanupSheet: View {
         if !appState.summary.indexStatisticsKnown { return "索引统计待确认，请先刷新本机统计。" }
         if appState.summary.indexedCount == 0 { return "请先手动更新图片索引。" }
         if appState.isBusy { return "请等待当前任务完成后开始分组。" }
-        return state.hasScanned || state.isGrouping ? nil : "仅使用已有图片索引，不会自动更新。"
+        if state.hasScanned || state.isGrouping || state.isRestoring { return nil }
+        return embedded ? "首次进入就绪后自动分组，仅使用已有图片索引。" : "仅使用已有图片索引，不会自动更新。"
     }
 
     private var groupingProgress: some View {
@@ -289,7 +363,8 @@ struct SimilarPhotoCleanupSheet: View {
                 .font(.footnote)
                 .foregroundStyle(IQStyle.secondary)
             if state.groups.isEmpty {
-                Text("当前阈值下没有相似照片组。可调低阈值后点“重新分组”。")
+                Text(embedded ? "当前阈值下没有相似照片组。可在设置中调低阈值后点“重新分组”。"
+                     : "当前阈值下没有相似照片组。可调低阈值后点“重新分组”。")
                     .font(.subheadline)
                     .padding(.top, 4)
             }
@@ -412,4 +487,12 @@ struct SimilarPhotoCleanupSheet: View {
         state.cancelRangeSelection()
         state.invalidateAccess()
     }
+}
+
+private struct CleanupPresentationInput: Equatable {
+    let epoch: UUID
+    let authorization: Int
+    let ready: Bool
+    let pageActive: Bool
+    let phase: ScenePhase
 }

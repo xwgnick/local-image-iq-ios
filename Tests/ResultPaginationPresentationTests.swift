@@ -202,7 +202,7 @@ final class ResultPaginationPresentationTests: XCTestCase {
             Text("TEST • synthetic results / no Photos")
                 .font(.caption2.weight(.semibold)).foregroundStyle(.white)
                 .padding(.vertical, 4).frame(maxWidth: .infinity).background(Color.black)
-            ContentView(state: state)
+            ContentView(state: state, cleanupPreferences: nil)
                 // A legitimate ancestor preference observer. No replacement
                 // sentinel, onAppear hook or mutation of observable view state.
                 // ContentView keeps its own preference reader and busy retry.
@@ -291,19 +291,7 @@ final class ResultPaginationPresentationTests: XCTestCase {
     }
 
     private func verticalScroll(in hosted: ResultPaginationPresentationHost) throws -> UIScrollView {
-        func descendants(_ view: UIView) -> [UIScrollView] {
-            let own = (view as? UIScrollView).map { [$0] } ?? []
-            return own + view.subviews.flatMap { descendants($0) }
-        }
-        // SwiftUI may not expose its AX identifier on the backing UIScrollView.
-        // Limit the fallback to visible, laid-out VERTICAL scroll descendants.
-        let candidates = descendants(hosted.host.view).filter {
-            !$0.isHidden && $0.alpha > 0 && $0.window === hosted.window &&
-                $0.bounds.width > 0 && $0.bounds.height > 0 && $0.contentSize.height > $0.bounds.height
-        }
-        return try XCTUnwrap(candidates.first(where: { $0.accessibilityIdentifier == "library-scroll" }) ??
-                             candidates.max(by: { $0.contentSize.height < $1.contentSize.height }),
-                             "The real vertical result UIScrollView must exist; no fake scroll fallback")
+        try primarySearchScrollView(in: hosted.host.view)
     }
 
     private func assertOffscreenBoundary(in hosted: ResultPaginationPresentationHost, scroll: UIScrollView,
