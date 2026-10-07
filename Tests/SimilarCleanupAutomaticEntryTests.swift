@@ -233,8 +233,14 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
             })
             await enter(f.state)
             assertUnknown(f.state)
-            if cancellation { XCTAssertNil(f.state.message) }
-            else { XCTAssertEqual(f.state.message, automaticFailureMessage) }
+            if cancellation {
+                XCTAssertNil(f.state.message)
+                XCTAssertNil(f.state.failureDiagnostic)
+                XCTAssertNil(f.state.failureOperation)
+            } else {
+                assertFailure(f.state, code: .unknown, phase: .compute, operation: .group,
+                              reason: "原因尚未确定")
+            }
             await exerciseLifecycle(f.state)
             XCTAssertEqual(f.service.trace.events, ["restore", "group"])
         }
@@ -247,7 +253,10 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
                 throw automaticPrivateError()
             })
             await enter(f.state)
-            XCTAssertEqual(f.state.message, automaticFailureMessage)
+            // This injected restore has no service phase; State knows only the Photos boundary.
+            assertFailure(f.state, code: permission ? .permissionDenied : .unknown,
+                          phase: .photos, operation: .restore,
+                          reason: permission ? "系统设置" : "原因尚未确定")
             XCTAssertFalse(f.state.message?.contains("private") ?? true)
             assertUnknown(f.state)
             await exerciseLifecycle(f.state)
@@ -464,7 +473,8 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
             f.state.threshold = value
             f.state.scan()
             await f.state.waitUntilIdle()
-            XCTAssertNotNil(f.state.message)
+            assertFailure(f.state, code: .invalidIndex, phase: .compute, operation: .group,
+                          reason: "图片索引数据未通过分组校验")
             XCTAssertEqual(defaults.integer(forKey: "similarCleanupThreshold.v1"), 73)
             XCTAssertTrue(f.service.trace.events.isEmpty)
             if value.isNaN { XCTAssertTrue(f.state.threshold.isNaN) }
@@ -476,7 +486,8 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         let firstEntry = fixture()
         firstEntry.state.threshold = .nan
         await enter(firstEntry.state)
-        XCTAssertNotNil(firstEntry.state.message)
+        assertFailure(firstEntry.state, code: .invalidIndex, phase: .photos, operation: .restore,
+                  reason: "图片索引数据未通过分组校验")
         XCTAssertTrue(firstEntry.service.trace.events.isEmpty)
     }
 
@@ -633,7 +644,8 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         await enter(f.state)
         f.state.invalidateAccess()
         await f.state.waitUntilIdle()
-        XCTAssertEqual(f.state.message, automaticFailureMessage)
+        assertFailure(f.state, code: .permissionDenied, phase: .photos, operation: .restore,
+                  reason: "系统设置")
         await exerciseLifecycle(f.state)
         XCTAssertEqual(f.service.trace.events, ["restore", "restore"])
         assertUnknown(f.state)
@@ -669,7 +681,10 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
             })
             await enter(f.state)
             assertUnknown(f.state)
-            XCTAssertEqual(f.state.message, automaticFailureMessage)
+            // AutomaticTestError.stale is untyped, not proof of lost photo access.
+            assertFailure(f.state, code: wrongThreshold ? .invalidIndex : .unknown,
+                          phase: .publication, operation: .publication,
+                          reason: wrongThreshold ? "图片索引数据未通过分组校验" : "原因尚未确定")
             f.state.toggleSelection("a")
             XCTAssertFalse(f.state.canSelect)
             XCTAssertTrue(validation.trace.photoIDs.isEmpty)
@@ -745,6 +760,24 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
 
     // MARK: Deterministic fixtures; timeouts bound tests only, not app work.
 
+    private func assertFailure(_ state: SimilarPhotoCleanupState, code: SimilarCleanupDiagnostic.Code,
+                               phase: SimilarCleanupPhase, operation: SimilarCleanupOperation, reason: String,
+                               file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(state.failureDiagnostic, SimilarCleanupDiagnostic(phase: phase, code: code), file: file, line: line)
+        XCTAssertNil(state.failureDiagnostic?.nativeCode, file: file, line: line)
+        XCTAssertEqual(state.failureOperation, operation, file: file, line: line)
+        XCTAssertTrue(state.message?.hasPrefix("\(code.rawValue) · \(phase.rawValue)\n") == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains(reason) == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains("本次未删除照片") == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains("已有索引未清除") == true, file: file, line: line)
+        for privateText in ["synthetic-private", "private asset", "/private/library/photo.jpg"] {
+            XCTAssertFalse(state.message?.contains(privateText) ?? true, file: file, line: line)
+        }
+        if code != .permissionDenied {
+            XCTAssertFalse(state.message?.contains("照片权限") ?? true, file: file, line: line)
+        }
+    }
+
     private func fixture(service: AutomaticGrouping? = nil,
                          restore: @escaping AutomaticGrouping.Restore = { _, _ in .missing },
                          group: @escaping AutomaticGrouping.Group = { _, threshold in automaticResult(threshold) },
@@ -809,7 +842,6 @@ private struct AutomaticFixture {
     let deletion: AutomaticDeletion
 }
 
-private let automaticFailureMessage = "未能完成相似照片分组，请确认照片访问权限后手动重新分组。"
 private enum AutomaticTestError: Error { case missingEvent, mainThread, stale }
 
 private func automaticPrivateError() -> Error {

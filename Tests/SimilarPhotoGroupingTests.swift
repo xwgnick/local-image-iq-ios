@@ -483,7 +483,9 @@ final class SimilarPhotoGroupingTests: XCTestCase {
         let c = try context(["a"], seed: false)
         c.library.setReadable(false)
         do { _ = try await c.service.group(threshold: 0.96) { _ in }; XCTFail("Permission must be required.") }
-        catch AppFailure.permission { }
+        catch {
+            XCTAssertEqual(error as? SimilarCleanupDiagnostic, .init(phase: .photos, code: .permissionDenied))
+        }
         c.library.setReadable(true)
         await failure { _ = try await c.service.group(threshold: Float(0.50).nextDown) { _ in } }
         XCTAssertEqual(c.library.enumerationCount, 0)

@@ -130,7 +130,7 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
         assertUnpublished(f.state)
         XCTAssertFalse(f.state.isGrouping)
         XCTAssertFalse(f.state.isValidating)
-        XCTAssertEqual(f.state.message, cleanupPublicationFailureMessage)
+        assertFailure(f.state, code: .photoAccessChanged, reason: "照片的可访问范围或内容已变化")
 
         let legacy = CleanupPublicationGate(epochFails: true)
         let control = fixture([CleanupPublicationPlan(gate: legacy)])
@@ -144,7 +144,7 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
         XCTAssertTrue(legacy.trace.epochThreads.isEmpty)
     }
 
-    func testValidationFailureKeepsCountsUnknownAndGenericMessageUnlikeSuccessfulEmptyResult() async throws {
+    func testValidationFailureKeepsCountsUnknownAndTypedDiagnosticUnlikeSuccessfulEmptyResult() async throws {
         let failed = CleanupPublicationGate(blocked: true, accessFails: true)
         let f = fixture([CleanupPublicationPlan(gate: failed, stale: 2, unindexed: 4, checksEpoch: true)])
         f.state.scan()
@@ -156,7 +156,7 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
         XCTAssertFalse(f.state.isGrouping)
         XCTAssertFalse(f.state.isValidating)
         XCTAssertEqual(f.state.progress, SimilarPhotoGroupingProgress())
-        XCTAssertEqual(f.state.message, cleanupPublicationFailureMessage)
+        assertFailure(f.state, code: .unknown, reason: "原因尚未确定")
         XCTAssertFalse(f.state.message?.contains("synthetic-private") ?? true)
         XCTAssertTrue(failed.trace.epochThreads.isEmpty)
 
@@ -277,6 +277,20 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
     }
 
     // MARK: Deterministic controller fixtures
+
+    private func assertFailure(_ state: SimilarPhotoCleanupState, code: SimilarCleanupDiagnostic.Code, reason: String,
+                               file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(state.failureDiagnostic, SimilarCleanupDiagnostic(phase: .publication, code: code), file: file, line: line)
+        XCTAssertNil(state.failureDiagnostic?.nativeCode, file: file, line: line)
+        XCTAssertEqual(state.failureOperation, .publication, file: file, line: line)
+        XCTAssertTrue(state.message?.hasPrefix("\(code.rawValue) · publication\n") == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains(reason) == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains("本次未删除照片") == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains("已有索引未清除") == true, file: file, line: line)
+        XCTAssertFalse(state.message?.contains("synthetic-private") ?? true, file: file, line: line)
+        XCTAssertFalse(state.message?.contains("metadata detail") ?? true, file: file, line: line)
+        XCTAssertFalse(state.message?.contains("照片权限") ?? true, file: file, line: line)
+    }
 
     private func fixture(_ plans: [CleanupPublicationPlan]) -> CleanupPublicationFixture {
         let grouping = CleanupPublicationGrouping(plans: plans)
@@ -456,7 +470,6 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
     }
 }
 
-fileprivate let cleanupPublicationFailureMessage = "未能完成相似照片分组，请确认照片访问权限后手动重新分组。"
 fileprivate enum CleanupPublicationFailure: Error { case expectation, readablePhotos, drawing, unexpected, mainThread }
 
 fileprivate func cleanupPublicationGroups(_ suffix: String = "old") -> [SimilarPhotoGroup] {

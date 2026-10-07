@@ -190,7 +190,7 @@ final class SimilarPhotoSelectionCommitTests: XCTestCase {
         await f.state.waitUntilIdle()
         assertInvalidated(f.state)
         XCTAssertEqual(publications, [base, Set<String>()])
-        XCTAssertEqual(f.state.message, PhotoDeletionError.accessChanged.localizedDescription)
+        assertFailure(f.state, code: .unknown, reason: "原因尚未确定")
         XCTAssertFalse(f.state.message?.contains("synthetic-private") ?? true)
         XCTAssertEqual(f.probes[0].trace.epochThreads.count, epochsAfterBegin)
         XCTAssertTrue(f.deletion.calls.isEmpty)
@@ -202,7 +202,7 @@ final class SimilarPhotoSelectionCommitTests: XCTestCase {
         f.probes[0].epochFails = true
         XCTAssertNil(f.state.beginRangeSelection(groupID: "first"))
         assertInvalidated(f.state)
-        XCTAssertEqual(f.state.message, PhotoDeletionError.accessChanged.localizedDescription)
+        assertFailure(f.state, code: .photoAccessChanged, reason: "照片的可访问范围或内容已变化")
         XCTAssertTrue(f.probes[0].trace.photoIDs.isEmpty)
         XCTAssertTrue(f.deletion.calls.isEmpty)
     }
@@ -223,7 +223,7 @@ final class SimilarPhotoSelectionCommitTests: XCTestCase {
         XCTAssertEqual(gate.returnedCancelled, [false], "The metadata batch itself returned successfully")
         XCTAssertEqual(f.probes[0].trace.epochThreads.count, before + 1)
         assertInvalidated(f.state)
-        XCTAssertEqual(f.state.message, PhotoDeletionError.accessChanged.localizedDescription)
+        assertFailure(f.state, code: .photoAccessChanged, reason: "照片的可访问范围或内容已变化")
         XCTAssertTrue(f.deletion.calls.isEmpty)
     }
 
@@ -527,6 +527,20 @@ final class SimilarPhotoSelectionCommitTests: XCTestCase {
     }
 
     // MARK: Deterministic gates; timeouts bound tests only, never app work.
+
+    private func assertFailure(_ state: SimilarPhotoCleanupState, code: SimilarCleanupDiagnostic.Code, reason: String,
+                               file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(state.failureDiagnostic, SimilarCleanupDiagnostic(phase: .selection, code: code), file: file, line: line)
+        XCTAssertNil(state.failureDiagnostic?.nativeCode, file: file, line: line)
+        XCTAssertEqual(state.failureOperation, .selection, file: file, line: line)
+        XCTAssertTrue(state.message?.hasPrefix("\(code.rawValue) · selection\n") == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains(reason) == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains("本次未删除照片") == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains("已有索引未清除") == true, file: file, line: line)
+        XCTAssertFalse(state.message?.contains("synthetic-private") ?? true, file: file, line: line)
+        XCTAssertFalse(state.message?.contains("asset metadata") ?? true, file: file, line: line)
+        XCTAssertFalse(state.message?.contains("照片权限") ?? true, file: file, line: line)
+    }
 
     private func fixture(probes: [SelectionCommitProbe] = [SelectionCommitProbe()],
                          checksEpoch: Bool = true) -> SelectionCommitFixture {

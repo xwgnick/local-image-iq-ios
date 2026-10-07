@@ -82,7 +82,8 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
             await f.state.waitUntilIdle()
             assertEmpty(f.state)
             XCTAssertFalse(f.state.isGrouping)
-            XCTAssertNotNil(f.state.message)
+            assertFailure(f.state, code: .invalidIndex, phase: .compute, operation: .group,
+                          reason: "图片索引数据未通过分组校验")
             if threshold.isNaN { XCTAssertTrue(f.state.threshold.isNaN) }
             else { XCTAssertEqual(f.state.threshold, threshold) }
         }
@@ -209,9 +210,20 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
             await scan(state)
             assertEmpty(state)
             XCTAssertFalse(state.isGrouping)
-            if mode == 2 { XCTAssertNil(state.message) }
-            else {
-                XCTAssertEqual(state.message, "未能完成相似照片分组，请确认照片访问权限后手动重新分组。")
+            switch mode {
+            case 0:
+                assertFailure(state, code: .unknown, phase: .publication, operation: .publication,
+                              reason: "原因尚未确定")
+            case 1:
+                assertFailure(state, code: .unknown, phase: .compute, operation: .group,
+                              reason: "原因尚未确定")
+            case 2:
+                XCTAssertNil(state.message)
+                XCTAssertNil(state.failureDiagnostic)
+                XCTAssertNil(state.failureOperation)
+            default:
+                assertFailure(state, code: .invalidIndex, phase: .publication, operation: .publication,
+                              reason: "图片索引数据未通过分组校验")
             }
             XCTAssertEqual(validation.accessChecks, mode == 0 ? 1 : 0)
         }
@@ -240,7 +252,8 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
         f.validation.photoError = cleanupPrivateError()
         f.state.toggleSelection("c")
         assertEmpty(f.state)
-        XCTAssertEqual(f.state.message, PhotoDeletionError.accessChanged.localizedDescription)
+        assertFailure(f.state, code: .unknown, phase: .selection, operation: .selection,
+                  reason: "原因尚未确定")
         XCTAssertTrue(f.deletion.calls.isEmpty)
 
         for prepare in [false, true] {
@@ -251,7 +264,8 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
             if prepare { denied.state.prepareDeletion() }
             else { denied.state.selectGroup("first") }
             assertEmpty(denied.state)
-            XCTAssertEqual(denied.state.message, PhotoDeletionError.accessChanged.localizedDescription)
+            assertFailure(denied.state, code: .unknown, phase: .selection, operation: .selection,
+                          reason: "原因尚未确定")
             XCTAssertTrue(denied.deletion.calls.isEmpty)
         }
     }
@@ -436,7 +450,9 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
             XCTAssertEqual(f.validation.photoChecks, [["b"], ["z"], ["z", "b"], ["z", "b"]])
             assertEmpty(f.state)
             XCTAssertTrue(f.deletion.calls.isEmpty)
-            XCTAssertEqual(f.state.message, PhotoDeletionError.accessChanged.localizedDescription)
+            assertFailure(f.state, code: mode == 0 ? .unknown : .photoAccessChanged,
+                          phase: .selection, operation: .selection,
+                          reason: mode == 0 ? "原因尚未确定" : "照片的可访问范围或内容已变化")
         }
     }
 
@@ -660,6 +676,22 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
     }
 
     // MARK: Deterministic helpers (timeouts bound tests only, never app work)
+
+    private func assertFailure(_ state: SimilarPhotoCleanupState, code: SimilarCleanupDiagnostic.Code,
+                               phase: SimilarCleanupPhase, operation: SimilarCleanupOperation, reason: String,
+                               file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(state.failureDiagnostic, SimilarCleanupDiagnostic(phase: phase, code: code), file: file, line: line)
+        XCTAssertNil(state.failureDiagnostic?.nativeCode, file: file, line: line)
+        XCTAssertEqual(state.failureOperation, operation, file: file, line: line)
+        XCTAssertTrue(state.message?.hasPrefix("\(code.rawValue) · \(phase.rawValue)\n") == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains(reason) == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains("本次未删除照片") == true, file: file, line: line)
+        XCTAssertTrue(state.message?.contains("已有索引未清除") == true, file: file, line: line)
+        for privateText in ["synthetic-private", "asset z", "/private/photo.jpg"] {
+            XCTAssertFalse(state.message?.contains(privateText) ?? true, file: file, line: line)
+        }
+        XCTAssertFalse(state.message?.contains("照片权限") ?? true, file: file, line: line)
+    }
 
     private func scan(_ state: SimilarPhotoCleanupState) async {
         state.scan()

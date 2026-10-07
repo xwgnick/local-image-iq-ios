@@ -34,9 +34,12 @@ actor SQLitePhotoStore {
         return support.appendingPathComponent("LocalImageIQIndex", isDirectory: true)
     }
 
-    private func database() throws -> SQLiteConnection {
-        if let connection { return connection }
-        let opened = try SQLiteConnection(directory: directory, readOnly: readOnly)
+    private func database(cleanupDiagnostics: Bool = false) throws -> SQLiteConnection {
+        if let connection, connection.cleanupDiagnostics == cleanupDiagnostics { return connection }
+        // Do not leak cleanup's typed errors into normal search/write callers,
+        // or reuse a legacy diagnostic mode for a cleanup read.
+        connection = nil
+        let opened = try SQLiteConnection(directory: directory, readOnly: readOnly, cleanupDiagnostics: cleanupDiagnostics)
         connection = opened
         return opened
     }
@@ -159,7 +162,7 @@ actor SQLitePhotoStore {
     /// row by row WITHOUT JSON decoding or retaining all source vector bytes.
     func groupingInputSnapshot(modelVersion: String, accessibleIDs: Set<String>,
                                authority: SimilarGroupingSourceAuthority? = nil) throws -> SimilarGroupingInputSnapshot {
-        guard readOnly else { throw AppFailure.storage("Grouping requires a read-only connection.") }
+        guard readOnly else { throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexUnavailable) }
         defer { connection = nil }
         try Task.checkCancellation()
         try authority?.validate()
@@ -169,8 +172,8 @@ actor SQLitePhotoStore {
         var revisions: [String: PhotoRevision] = [:]
         let file = directory.appendingPathComponent("index.sqlite3")
         // Unlike fileExists, an unreadable existing index is not an empty index.
-        if try SimilarGroupingCache.regularFileExists(file) {
-            let db = try database()
+        if try Self.groupingFileExists(file) {
+            let db = try database(cleanupDiagnostics: true)
             let exactIDs = Set(accessibleIDs.map { Data($0.utf8) })
             try db.statement("SELECT id, revision, creation_time, model_version, image_embedding FROM photos WHERE model_version = ? ORDER BY id COLLATE BINARY") { statement in
                 try db.bind(modelVersion, at: 1, to: statement)
@@ -183,7 +186,9 @@ actor SQLitePhotoStore {
                     let revision = PhotoRevision(id: id, modificationTime: sqlite3_column_double(statement, 1),
                                                  creationTime: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2))
                     try SimilarGroupingDigest.validate(revision)
-                    guard revisions[id] == nil else { throw AppFailure.storage("Duplicate grouping input identity.") }
+                    guard revisions[id] == nil else {
+                        throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexDuplicateIdentity)
+                    }
                     revisions[id] = revision
                     SimilarGroupingDigest.revision(revision, into: &hash)
                     SimilarGroupingDigest.frame(Data(model.utf8), into: &hash)
@@ -208,16 +213,18 @@ actor SQLitePhotoStore {
     func groupingImageRecords(modelVersion: String, accessibleIDs: Set<String>, eligibleIDs: Set<String>,
                               expectedSnapshot: SimilarGroupingInputSnapshot,
                               authority: SimilarGroupingSourceAuthority? = nil) throws -> [IndexedPhoto] {
-        guard readOnly else { throw AppFailure.storage("Grouping requires a read-only connection.") }
+        guard readOnly else { throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexUnavailable) }
         defer { connection = nil }
         try Task.checkCancellation()
         try authority?.validate()
-        guard try SimilarGroupingCache.regularFileExists(directory.appendingPathComponent("index.sqlite3")) else {
-            guard expectedSnapshot.revisions.isEmpty else { throw AppFailure.storage("The image index changed during grouping.") }
+        guard try Self.groupingFileExists(directory.appendingPathComponent("index.sqlite3")) else {
+            guard expectedSnapshot.revisions.isEmpty else {
+                throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexSnapshotChanged)
+            }
             try authority?.validate()
             return []
         }
-        let db = try database()
+        let db = try database(cleanupDiagnostics: true)
         let exactIDs = Set(accessibleIDs.map { Data($0.utf8) })
         let exactEligibleIDs = Set(eligibleIDs.map { Data($0.utf8) })
         return try db.statement("SELECT id, revision, creation_time, model_version, image_embedding FROM photos WHERE model_version = ? ORDER BY id COLLATE BINARY") { statement in
@@ -236,7 +243,9 @@ actor SQLitePhotoStore {
                 let revision = PhotoRevision(id: id, modificationTime: sqlite3_column_double(statement, 1),
                                              creationTime: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2))
                 try SimilarGroupingDigest.validate(revision)
-                guard revisions[id] == nil else { throw AppFailure.storage("Duplicate grouping input identity.") }
+                guard revisions[id] == nil else {
+                    throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexDuplicateIdentity)
+                }
                 revisions[id] = revision
                 SimilarGroupingDigest.revision(revision, into: &hash)
                 SimilarGroupingDigest.frame(Data(model.utf8), into: &hash)
@@ -253,10 +262,20 @@ actor SQLitePhotoStore {
             }
             SimilarGroupingDigest.frame(SimilarGroupingDigest.bits(UInt64(revisions.count)), into: &hash)
             let actual = SimilarGroupingInputSnapshot(revisions: revisions, imagePayloadSignature: Data(hash.finalize()))
-            guard actual == expectedSnapshot else { throw AppFailure.storage("The image index changed during grouping.") }
+            guard actual == expectedSnapshot else {
+                throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexSnapshotChanged)
+            }
             try Task.checkCancellation()
             try authority?.validate()
             return photos
+        }
+    }
+
+    private static func groupingFileExists(_ file: URL) throws -> Bool {
+        do { return try SimilarGroupingCache.regularFileExists(file) }
+        catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            throw SimilarCleanupDiagnostic.classify(error, phase: .indexRead)
         }
     }
 
@@ -436,8 +455,10 @@ actor SQLitePhotoStore {
 private final class SQLiteConnection {
     private var handle: OpaquePointer?
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    let cleanupDiagnostics: Bool
 
-    init(directory: URL, readOnly: Bool = false) throws {
+    init(directory: URL, readOnly: Bool = false, cleanupDiagnostics: Bool = false) throws {
+        self.cleanupDiagnostics = cleanupDiagnostics
         let manager = FileManager.default
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
@@ -453,7 +474,13 @@ private final class SQLiteConnection {
         let flags = readOnly ? SQLITE_OPEN_READONLY : (SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE)
         let result = sqlite3_open_v2(file.path, &pointer, flags | SQLITE_OPEN_FULLMUTEX, nil)
         guard result == SQLITE_OK, let pointer else {
+            let native = cleanupDiagnostics ? Self.nativeCode(pointer, status: result) : result
             if let pointer { sqlite3_close(pointer) }
+            if cleanupDiagnostics {
+                throw SimilarCleanupDiagnostic(phase: .indexRead,
+                    code: result == SQLITE_OK ? .indexUnavailable : .indexOpen,
+                    nativeCode: result == SQLITE_OK ? nil : native)
+            }
             throw AppFailure.storage("Unable to open SQLite (\(result)).")
         }
         handle = pointer
@@ -468,11 +495,17 @@ private final class SQLiteConnection {
                 try exec("PRAGMA secure_delete = ON")
             }
             let version = try statement("PRAGMA user_version") { statement -> Int32 in
-                guard try next(statement) else { throw AppFailure.storage("Missing schema version.") }
+                guard try next(statement) else {
+                    if cleanupDiagnostics { throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexSchemaMissing) }
+                    throw AppFailure.storage("Missing schema version.")
+                }
                 return sqlite3_column_int(statement, 0)
             }
             if readOnly {
-                guard version == 1 else { throw AppFailure.storage("Unsupported cache schema version.") }
+                guard version == 1 else {
+                    if cleanupDiagnostics { throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexSchemaUnsupported) }
+                    throw AppFailure.storage("Unsupported cache schema version.")
+                }
                 return
             }
             guard version == 0 || version == 1 else { throw AppFailure.storage("Unsupported cache schema version.") }
@@ -510,7 +543,15 @@ private final class SQLiteConnection {
     func statement<T>(_ sql: String, _ operation: (OpaquePointer) throws -> T) throws -> T {
         var statement: OpaquePointer?
         let status = sqlite3_prepare_v2(handle, sql, -1, &statement, nil)
-        guard status == SQLITE_OK, let statement else { throw failure() }
+        guard status == SQLITE_OK, let statement else {
+            if cleanupDiagnostics {
+                let diagnostic = failure(code: status == SQLITE_OK ? .indexUnavailable : .indexPrepare,
+                                         status: status == SQLITE_OK ? nil : status)
+                if let statement { sqlite3_finalize(statement) }
+                throw diagnostic
+            }
+            throw failure()
+        }
         defer { sqlite3_finalize(statement) }
         return try operation(statement)
     }
@@ -519,7 +560,7 @@ private final class SQLiteConnection {
         let status = sqlite3_step(statement)
         if status == SQLITE_ROW { return true }
         if status == SQLITE_DONE { return false }
-        throw failure()
+        throw failure(code: .indexStep, status: status)
     }
 
     func execute(_ statement: OpaquePointer) throws {
@@ -531,7 +572,7 @@ private final class SQLiteConnection {
         if let value {
             status = value.withCString { sqlite3_bind_text(statement, index, $0, -1, transient) }
         } else { status = sqlite3_bind_null(statement, index) }
-        guard status == SQLITE_OK else { throw failure() }
+        guard status == SQLITE_OK else { throw failure(code: .indexBind, status: status) }
     }
 
     func bind(_ value: Double?, at index: Int32, to statement: OpaquePointer) throws {
@@ -552,20 +593,39 @@ private final class SQLiteConnection {
     /// Exact UTF-8 (including framing-sensitive bytes), rather than C-string
     /// termination. Kept local to the new cleanup reads; legacy APIs are intact.
     func groupingString(_ statement: OpaquePointer, at index: Int32) throws -> String {
-        guard let pointer = sqlite3_column_text(statement, index) else { throw AppFailure.storage("Missing grouping metadata.") }
+        guard let pointer = sqlite3_column_text(statement, index) else {
+            if cleanupDiagnostics { throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexMetadataMissing) }
+            throw AppFailure.storage("Missing grouping metadata.")
+        }
         let bytes = Data(bytes: pointer, count: Int(sqlite3_column_bytes(statement, index)))
-        guard let value = String(data: bytes, encoding: .utf8) else { throw AppFailure.storage("Invalid grouping metadata.") }
+        guard let value = String(data: bytes, encoding: .utf8) else {
+            if cleanupDiagnostics { throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexMetadataInvalid) }
+            throw AppFailure.storage("Invalid grouping metadata.")
+        }
         return value
     }
 
     func blob(_ statement: OpaquePointer, at index: Int32) throws -> Data {
         let count = Int(sqlite3_column_bytes(statement, index))
-        guard count > 0, let pointer = sqlite3_column_blob(statement, index) else { throw AppFailure.storage("Missing embedding column.") }
+        guard count > 0, let pointer = sqlite3_column_blob(statement, index) else {
+            if cleanupDiagnostics { throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexBlobMissing) }
+            throw AppFailure.storage("Missing embedding column.")
+        }
         return Data(bytes: pointer, count: count)
     }
 
-    private func failure() -> AppFailure {
+    private static func nativeCode(_ handle: OpaquePointer?, status: Int32) -> Int32 {
+        guard let handle else { return status }
+        let extended = sqlite3_extended_errcode(handle)
+        return extended != SQLITE_OK && (extended & 0xff) == (status & 0xff) ? extended : status
+    }
+
+    private func failure(code: SimilarCleanupDiagnostic.Code = .indexUnavailable, status: Int32? = nil) -> Error {
+        if cleanupDiagnostics {
+            return SimilarCleanupDiagnostic(phase: .indexRead, code: code,
+                nativeCode: status.map { Self.nativeCode(handle, status: $0) })
+        }
         let message = sqlite3_errmsg(handle).map { String(cString: $0) } ?? "Unknown SQLite error"
-        return .storage(message)
+        return AppFailure.storage(message)
     }
 }

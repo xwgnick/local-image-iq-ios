@@ -58,18 +58,43 @@ final class SimilarGroupingReuseTests: XCTestCase {
         catch { }
     }
 
-    private func storageFailure(_ operation: () async throws -> Void,
-                                file: StaticString = #filePath, line: UInt = #line) async {
-        do { try await operation(); XCTFail("Source invalidation must throw storage, not return a warning.", file: file, line: line) }
-        catch AppFailure.storage { }
-        catch { XCTFail("Wrong failure: \(error).", file: file, line: line) }
+    private func diagnosticFailure(_ expected: SimilarCleanupDiagnostic, _ operation: () async throws -> Void,
+                                   file: StaticString = #filePath, line: UInt = #line) async {
+        do { try await operation(); XCTFail("Expected typed failure, not fallback computation.", file: file, line: line) }
+        catch let issue as SimilarCleanupDiagnostic {
+            XCTAssertEqual(issue, expected, file: file, line: line)
+            XCTAssertEqual(issue.nativeCode, expected.nativeCode, file: file, line: line)
+        }
+        catch { XCTFail("Expected SimilarCleanupDiagnostic, received \(type(of: error)).", file: file, line: line) }
     }
 
-    private func assertStorage(_ operation: () throws -> Void,
+    // A committed rewrite may be observed by file identity or the retained
+    // connection's data_version. Neither unrelated diagnostics nor legacy
+    // AppFailure.storage are accepted as evidence that this source changed.
+    private func storageFailure(codes: [SimilarCleanupDiagnostic.Code] = [.sourceFileIdentityChanged, .sourceDataVersionChanged],
+                                _ operation: () async throws -> Void,
+                                file: StaticString = #filePath, line: UInt = #line) async {
+        do { try await operation(); XCTFail("Source invalidation must throw a typed source diagnostic, not return a warning.", file: file, line: line) }
+        catch let issue as SimilarCleanupDiagnostic {
+            XCTAssertTrue(issue.isSourceFailure, file: file, line: line)
+            XCTAssertTrue(codes.contains(issue.code), "Unexpected source code: \(issue.code.rawValue)", file: file, line: line)
+            XCTAssertEqual(issue.phase, .sourceCheck, file: file, line: line)
+            XCTAssertNil(issue.nativeCode, file: file, line: line)
+        }
+        catch { XCTFail("Expected typed source diagnostic, received \(type(of: error)).", file: file, line: line) }
+    }
+
+    private func assertStorage(codes: [SimilarCleanupDiagnostic.Code] = [.sourceFileIdentityChanged, .sourceDataVersionChanged],
+                               _ operation: () throws -> Void,
                                file: StaticString = #filePath, line: UInt = #line) {
-        do { try operation(); XCTFail("Expected storage failure.", file: file, line: line) }
-        catch AppFailure.storage { }
-        catch { XCTFail("Wrong failure: \(error).", file: file, line: line) }
+        do { try operation(); XCTFail("Expected typed source failure.", file: file, line: line) }
+        catch let issue as SimilarCleanupDiagnostic {
+            XCTAssertTrue(issue.isSourceFailure, file: file, line: line)
+            XCTAssertTrue(codes.contains(issue.code), "Unexpected source code: \(issue.code.rawValue)", file: file, line: line)
+            XCTAssertEqual(issue.phase, .sourceCheck, file: file, line: line)
+            XCTAssertNil(issue.nativeCode, file: file, line: line)
+        }
+        catch { XCTFail("Expected typed source diagnostic, received \(type(of: error)).", file: file, line: line) }
     }
 
     private func assertNoInference(_ c: ReuseContext, file: StaticString = #filePath, line: UInt = #line) async {
@@ -106,6 +131,40 @@ final class SimilarGroupingReuseTests: XCTestCase {
         assertMissing(try await service.restore(threshold: 0.80))
         XCTAssertEqual(c.library.enumerations, 2)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+        await assertNoInference(c)
+    }
+
+    func testFirstRestoreWithNoCompletedCacheStillExposesSourceSidecarBeforeMissingClassification() async throws {
+        let c = try context()
+        let source = c.directory.appendingPathComponent("index.sqlite3")
+        let before = try Data(contentsOf: source)
+        let sidecar = c.directory.appendingPathComponent("index.sqlite3-journal")
+        try Data().write(to: sidecar)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path))
+        await diagnosticFailure(.init(phase: .sourceCheck, code: .sourceJournalPresent)) {
+            _ = try await c.service().restore(threshold: 0.80)
+        }
+        XCTAssertEqual(c.library.enumerations, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path))
+        XCTAssertEqual(try Data(contentsOf: source), before)
+        XCTAssertEqual(try Data(contentsOf: sidecar), Data())
+        await assertNoInference(c)
+    }
+
+    func testTypedSaveFailureRemainsFirstCauseWhenLaterPhotosCheckWouldAlsoFail() async throws {
+        let c = try context()
+        let source = c.directory.appendingPathComponent("index.sqlite3")
+        let before = try Data(contentsOf: source)
+        let library = c.library
+        let original = SimilarCleanupDiagnostic(phase: .sourceCheck, code: .sourceLockCheckFailed, nativeCode: SQLITE_IOERR)
+        let cache = SimilarGroupingCache(directory: c.directory, beforeCommit: {
+            library.setReadable(false)
+            throw original
+        })
+        await diagnosticFailure(original) { _ = try await fresh(c, cache: cache) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path))
+        XCTAssertEqual(try Data(contentsOf: source), before)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: c.directory.path).filter { $0.hasSuffix(".tmp") }, [])
         await assertNoInference(c)
     }
 
@@ -254,8 +313,9 @@ final class SimilarGroupingReuseTests: XCTestCase {
         _ = try await fresh(c)
         c.library.setReadable(false)
         let before = try Data(contentsOf: c.cacheURL)
-        do { _ = try await c.service().restore(threshold: 0.80); XCTFail("Expected permission.") }
-        catch AppFailure.permission { }
+        await diagnosticFailure(.init(phase: .photos, code: .permissionDenied)) {
+            _ = try await c.service().restore(threshold: 0.80)
+        }
         XCTAssertEqual(c.library.enumerations, 3)
         XCTAssertEqual(try Data(contentsOf: c.cacheURL), before)
         c.library.setReadable(true)
@@ -270,8 +330,9 @@ final class SimilarGroupingReuseTests: XCTestCase {
             if duringInspection { await c.encoders.onInspection { library.setReadable(false) } }
             else { library.onEnumeration { number in if number == 5 { library.setReadable(false) } } }
             defer { library.onEnumeration(nil) }
-            do { _ = try await c.service().restore(threshold: 0.80); XCTFail("Expected permission classification.") }
-            catch AppFailure.permission { }
+            await diagnosticFailure(.init(phase: duringInspection ? .sourceCheck : .photos, code: .permissionDenied)) {
+                _ = try await c.service().restore(threshold: 0.80)
+            }
             await assertNoInference(c)
         }
     }
@@ -291,7 +352,9 @@ final class SimilarGroupingReuseTests: XCTestCase {
                 }
             }
             defer { library.onEnumeration(nil) }
-            await failure { _ = try await c.service().restore(threshold: 0.80) }
+            await diagnosticFailure(.init(phase: change == 0 ? .sourceCheck : .photos, code: .photoAccessChanged)) {
+                _ = try await c.service().restore(threshold: 0.80)
+            }
             await assertNoInference(c)
         }
     }
@@ -304,7 +367,9 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let library = c.library
         library.onEnumeration { number in if number == 5 { library.setRevision("new", modification: 123, creation: 101) } }
         defer { library.onEnumeration(nil) }
-        await failure { _ = try await c.service().restore(threshold: 0.80) }
+        await diagnosticFailure(.init(phase: .photos, code: .photoAccessChanged)) {
+            _ = try await c.service().restore(threshold: 0.80)
+        }
         XCTAssertEqual(library.enumerations, 5)
     }
 
@@ -355,7 +420,8 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let result = try restored(await c.service().restore(threshold: 0.80))
         XCTAssertEqual(result.groups[0].photos[0].imageEmbedding.count, 768)
         XCTAssertEqual(c.library.enumerations, 2)
-        await failure { _ = try await fresh(c) } // Manual computation MUST decode/validate source vectors.
+        // Manual computation MUST decode/validate source vectors at indexRead, not blame Photos.
+        await diagnosticFailure(.init(phase: .indexRead, code: .invalidIndex)) { _ = try await fresh(c) }
         await assertNoInference(c)
     }
 
@@ -387,7 +453,9 @@ final class SimilarGroupingReuseTests: XCTestCase {
             _ = try await fresh(c)
             try ReuseSQL.execute(c.directory, mutation)
             if mutation.contains("user_version") {
-                await failure { _ = try await c.service().restore(threshold: 0.80) }
+                await diagnosticFailure(.init(phase: .indexRead, code: .indexSchemaUnsupported)) {
+                    _ = try await c.service().restore(threshold: 0.80)
+                }
             } else { assertStale(try await c.service().restore(threshold: 0.80)) }
         }
         let c = try context()
@@ -409,7 +477,9 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let reversed = try await snapshot(c, ids: Set(["new", "old", "stale", "b", "a"]))
         XCTAssertEqual(source, reversed)
         let writer = SQLitePhotoStore(directory: c.directory)
-        await failure { _ = try await writer.groupingInputSnapshot(modelVersion: model, accessibleIDs: ["a"]) }
+        await diagnosticFailure(.init(phase: .indexRead, code: .indexUnavailable)) {
+            _ = try await writer.groupingInputSnapshot(modelVersion: model, accessibleIDs: ["a"])
+        }
         XCTAssertEqual(c.library.enumerations, 0)
         await assertNoInference(c)
     }
@@ -420,7 +490,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let encoded = try JSONEncoder().encode(TestFixtures.vector(axis: 1))
         try ReuseSQL.setImage(c.directory, id: "a", bytes: encoded)
         let reader = SQLitePhotoStore(directory: c.directory, readOnly: true)
-        await failure {
+        await diagnosticFailure(.init(phase: .indexRead, code: .indexSnapshotChanged)) {
             _ = try await reader.groupingImageRecords(modelVersion: model, accessibleIDs: ["a", "b"],
                                                        eligibleIDs: ["a", "b"], expectedSnapshot: source)
         }
@@ -432,7 +502,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let directory = c.directory
         let rewritten = try JSONEncoder().encode(TestFixtures.vector(axis: 1))
         let mutation = ReuseOnce()
-        await failure {
+        await storageFailure {
             _ = try await c.service().group(threshold: 0.80) { state in
                 if state.completed == state.total, mutation.take() {
                     do { try ReuseSQL.setImage(directory, id: "a", bytes: rewritten) }
@@ -452,7 +522,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let rewritten = try JSONEncoder().encode(TestFixtures.vector(axis: 1))
         c.library.onEnumeration { number in if number == 5 { try ReuseSQL.setImage(directory, id: "a", bytes: rewritten) } }
         defer { c.library.onEnumeration(nil) }
-        await failure { _ = try await c.service().restore(threshold: 0.80) }
+        await storageFailure { _ = try await c.service().restore(threshold: 0.80) }
         XCTAssertEqual(c.library.enumerations, 5)
         await assertNoInference(c)
     }
@@ -687,8 +757,9 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let before = try Data(contentsOf: c.cacheURL)
         let library = c.library
         let denied = SimilarGroupingCache(directory: c.directory, beforeCommit: { library.setReadable(false) })
-        do { _ = try await fresh(c, threshold: 0.90, cache: denied); XCTFail("Permission must not become a persistence warning.") }
-        catch AppFailure.permission { }
+        await diagnosticFailure(.init(phase: .sourceCheck, code: .permissionDenied)) {
+            _ = try await fresh(c, threshold: 0.90, cache: denied)
+        }
         XCTAssertEqual(try Data(contentsOf: c.cacheURL), before)
     }
 
@@ -830,7 +901,9 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let cache = SimilarGroupingCache(directory: directory, beforeCommit: {
             try TestFixtures.seedRawCache(rows, directory: directory)
         })
-        await storageFailure { _ = try await c.service(cache: cache).group(threshold: 0.80) { _ in } }
+        await storageFailure(codes: [.sourceFileIdentityChanged]) {
+            _ = try await c.service(cache: cache).group(threshold: 0.80) { _ in }
+        }
         XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("index.sqlite3").path))
     }
@@ -862,7 +935,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try authority.validate() // Creating only the optional cache directory is fine.
         try TestFixtures.seedRawCache([], directory: root)
-        assertStorage { try authority.validate() }
+        assertStorage(codes: [.sourceFileIdentityChanged]) { try authority.validate() }
     }
 
     func testSameBytesDatabaseReplacementInvalidatesLiveButFreshRestoreCanReuse() async throws {
@@ -877,7 +950,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
         try bytes.write(to: source)
         try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: source.path)
         XCTAssertEqual(try Data(contentsOf: source), bytes)
-        assertStorage { try first.validatePublicationEpoch() }
+        assertStorage(codes: [.sourceFileIdentityChanged]) { try first.validatePublicationEpoch() }
         let reused = try restored(await c.service().restore(threshold: 0.80))
         try await reused.prepareForPublication()
         XCTAssertEqual(reused.groups.map(\.id), first.groups.map(\.id))
@@ -889,12 +962,12 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let bytes = try Data(contentsOf: source)
         let alias = c.directory.appendingPathComponent("directory-alias", isDirectory: true)
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: c.directory)
-        assertStorage { _ = try SimilarGroupingSourceAuthority(directory: alias) }
+        assertStorage(codes: [.sourceParentSymlink]) { _ = try SimilarGroupingSourceAuthority(directory: alias) }
         let target = c.directory.appendingPathComponent("actual.sqlite3")
         try FileManager.default.moveItem(at: source, to: target)
         try FileManager.default.createSymbolicLink(at: source, withDestinationURL: target)
-        assertStorage { _ = try SimilarGroupingSourceAuthority(directory: c.directory) }
-        await storageFailure { _ = try await c.service().restore(threshold: 0.80) }
+        assertStorage(codes: [.sourceFileSymlink]) { _ = try SimilarGroupingSourceAuthority(directory: c.directory) }
+        await storageFailure(codes: [.sourceFileSymlink]) { _ = try await c.service().restore(threshold: 0.80) }
         XCTAssertEqual(try Data(contentsOf: target), bytes)
     }
 
@@ -904,8 +977,8 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let bytes = try Data(contentsOf: c.directory.appendingPathComponent("index.sqlite3"))
         try ReuseSQL.withPendingWriter(c.directory) {
             XCTAssertFalse(FileManager.default.fileExists(atPath: c.directory.appendingPathComponent("index.sqlite3-journal").path))
-            assertStorage { try authority.validate() }
-            assertStorage { _ = try SimilarGroupingSourceAuthority(directory: c.directory) }
+            assertStorage(codes: [.sourceWriterReserved]) { try authority.validate() }
+            assertStorage(codes: [.sourceWriterReserved]) { _ = try SimilarGroupingSourceAuthority(directory: c.directory) }
         }
         XCTAssertEqual(try Data(contentsOf: c.directory.appendingPathComponent("index.sqlite3")), bytes)
         let fresh = try SimilarGroupingSourceAuthority(directory: c.directory)
@@ -1079,11 +1152,16 @@ final class SimilarGroupingReuseTests: XCTestCase {
 
     func testInvalidThresholdAndDuplicatePhotoMetadataFailWithoutCreatingCache() async throws {
         let c = try context()
-        await failure { _ = try await c.service().restore(threshold: .nan) }
+        // The service policy's private InvalidThreshold error is not an AppFailure.
+        await diagnosticFailure(.init(phase: .photos, code: .unknown)) {
+            _ = try await c.service().restore(threshold: .nan)
+        }
         XCTAssertEqual(c.library.enumerations, 0)
         let a = PhotoRevision(id: "a", modificationTime: 123, creationTime: 100)
         c.library.replace([a, a])
-        await failure { _ = try await c.service().restore(threshold: 0.80) }
+        await diagnosticFailure(.init(phase: .photos, code: .photoAccessChanged)) {
+            _ = try await c.service().restore(threshold: 0.80)
+        }
         XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path))
         let counts = await c.encoders.counts()
         XCTAssertEqual(counts.inspections, 0)
