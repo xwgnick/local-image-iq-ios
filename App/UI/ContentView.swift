@@ -20,6 +20,14 @@ struct ContentView: View {
     @FocusState private var isSearchFocused: Bool
     private var showingResults: Bool { state.completedQuery != nil || state.activity == .searching }
     private var isSearchPageActive: Bool { navigation.page == .search }
+    // Presentation only changes AX exposure, never logical tab activity or
+    // cleanup readiness (which would cancel/invalidate retained grouping work).
+    private var hasPresentedSurface: Bool {
+        showLibrary || showSettings || showFilters || showAlbumAction
+            || photoActions.share != nil || photoActions.sharingPresented
+            || state.selection != nil || photoActions.message != nil
+    }
+    private var isSearchPageAccessible: Bool { isSearchPageActive && !hasPresentedSurface }
 
     init(state: AppState, photoActionService: (any PhotoLibraryActions)? = nil,
          similarCleanupState: SimilarPhotoCleanupState? = nil,
@@ -39,6 +47,7 @@ struct ContentView: View {
             searchPage.modifier(RetainedPrimaryPage(active: navigation.page == .search))
             SimilarPhotoCleanupSheet(state: similarCleanup, appState: state,
                                     embedded: true, isPageActive: navigation.page == .cleanup,
+                                    accessibilityActive: !hasPresentedSurface,
                                     openLibrary: openLibrary, openSettings: openSettings)
                 .modifier(RetainedPrimaryPage(active: navigation.page == .cleanup))
         }
@@ -48,6 +57,8 @@ struct ContentView: View {
                 isSearchFocused = false
                 navigation.select(page)
             }
+            // These SwiftUI controls live outside either page's native scope.
+            .accessibilityHidden(hasPresentedSurface)
         }
         .onChange(of: navigation.page) { _, _ in isSearchFocused = false }
         .sheet(isPresented: $showLibrary) { LibrarySheet(state: state) }
@@ -130,14 +141,14 @@ struct ContentView: View {
                     .background {
                         // Inside the content, so native ownership resolves to
                         // this ScrollView even while its retained page is hidden.
-                        PrimarySearchScrollAnchor(active: isSearchPageActive)
+                        PrimarySearchScrollAnchor(active: isSearchPageAccessible)
                             .frame(height: 0)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }
                     // Inside the navigation/scroll AX boundaries, including
                     // the query, OCR switch and its manual indexing action.
-                    .accessibilityHidden(!isSearchPageActive)
+                    .accessibilityHidden(!isSearchPageAccessible)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .coordinateSpace(name: ResultPageBoundary.coordinateSpace)
@@ -162,13 +173,13 @@ struct ContentView: View {
             .foregroundStyle(IQStyle.text)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if state.isSelectingResults {
-                    selectionToolbar.accessibilityHidden(!isSearchPageActive)
+                    selectionToolbar.accessibilityHidden(!isSearchPageAccessible)
                 } else {
                     libraryStatus
                         .padding(.horizontal, 20)
                         .padding(.vertical, 8)
                         .background(IQStyle.background)
-                        .accessibilityHidden(!isSearchPageActive)
+                        .accessibilityHidden(!isSearchPageAccessible)
                 }
             }
             .navigationTitle(showingResults ? "照片搜索" : "")

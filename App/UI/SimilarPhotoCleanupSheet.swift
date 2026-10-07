@@ -16,6 +16,7 @@ struct SimilarPhotoCleanupSheet: View {
     private let comparisonImageSource: SimilarComparisonImageSource?
     let embedded: Bool
     let isPageActive: Bool
+    let accessibilityActive: Bool
     private let openLibrary: () -> Void
     private let openSettings: () -> Void
     @State private var previousInput: CleanupPresentationInput?
@@ -28,6 +29,7 @@ struct SimilarPhotoCleanupSheet: View {
          thumbnailContent: ((IndexedPhoto) -> AnyView)? = nil,
          comparisonImageSource: SimilarComparisonImageSource? = nil,
          embedded: Bool = false, isPageActive: Bool = true,
+         accessibilityActive: Bool = true,
          openLibrary: @escaping () -> Void = {}, openSettings: @escaping () -> Void = {}) {
         self.state = state
         self.appState = appState
@@ -38,6 +40,7 @@ struct SimilarPhotoCleanupSheet: View {
         self.comparisonImageSource = comparisonImageSource
         self.embedded = embedded
         self.isPageActive = isPageActive
+        self.accessibilityActive = accessibilityActive
         self.openLibrary = openLibrary
         self.openSettings = openSettings
     }
@@ -52,7 +55,13 @@ struct SimilarPhotoCleanupSheet: View {
             && !state.isGrouping && !state.isRestoring && !state.isDeleting && !state.isSelecting
     }
 
-    private var isPageAccessible: Bool { !embedded || isPageActive }
+    // Gate only the base NavigationStack. Its separately presented surfaces
+    // remain accessible; none of these flags participates in updateLifecycle.
+    private var isPageAccessible: Bool {
+        (!embedded || isPageActive) && accessibilityActive
+            && browser.comparisonGroup == nil && browser.viewer == nil
+            && !showsConfirmation && state.message == nil
+    }
 
     private var thresholdBinding: Binding<Double> {
         // Integer slider ticks avoid Float-to-Double roundoff at decimal steps.
