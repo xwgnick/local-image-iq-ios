@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import ImageIO
 import ImageIQCore
@@ -108,6 +109,325 @@ final class SimilarGroupingReuseTests: XCTestCase {
         let reader = SQLitePhotoStore(directory: c.directory, readOnly: true)
         return try await reader.groupingInputSnapshot(modelVersion: model ?? self.model,
                                                       accessibleIDs: ids ?? Set(c.library.values().map(\.id)))
+    }
+
+    private func aliasContext(photos: [IndexedPhoto]? = nil) throws -> ReuseAliasContext {
+        let input = photos ?? [photo("a"), photo("b")]
+        let owner = try context(photos: input, seed: false)
+        // Resolve ONLY the temporary fixture root, independently of production's
+        // location resolver. Seed at the final path before opening any authority:
+        // moving an already-open database would change ctime and confound races.
+        let path = try XCTUnwrap(owner.directory.path.withCString { Darwin.realpath($0, nil) })
+        defer { free(path) }
+        let root = URL(fileURLWithPath: String(cString: path), isDirectory: true)
+        let physical = root.appendingPathComponent("physical", isDirectory: true)
+        let alternate = root.appendingPathComponent("alternate", isDirectory: true)
+        let base = physical.appendingPathComponent("ApplicationSupport", isDirectory: true)
+        let directory = base.appendingPathComponent("LocalImageIQIndex", isDirectory: true)
+        let alias = root.appendingPathComponent("ancestor-alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: alternate.appendingPathComponent("ApplicationSupport", isDirectory: true),
+                                                withIntermediateDirectories: true)
+        try TestFixtures.seedRawCache(input.map { CachedPhoto(photo: $0, geographyVersion: "geo-v1") }, directory: directory)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: physical)
+        let c = ReuseContext(directory: directory, library: owner.library, encoders: owner.encoders)
+        return ReuseAliasContext(context: c, ancestorAlias: alias, physicalAncestor: physical, alternateAncestor: alternate)
+    }
+
+    private func assertExactGroups(_ actual: SimilarPhotoGroupingResult, _ expected: SimilarPhotoGroupingResult,
+                                   file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(actual.groups.map(\.id), expected.groups.map(\.id), file: file, line: line)
+        XCTAssertEqual(actual.candidateCount, expected.candidateCount, file: file, line: line)
+        XCTAssertEqual(actual.staleCount, expected.staleCount, file: file, line: line)
+        XCTAssertEqual(actual.unindexedCount, expected.unindexedCount, file: file, line: line)
+        XCTAssertEqual(actual.threshold.bitPattern, expected.threshold.bitPattern, file: file, line: line)
+        for (group, original) in zip(actual.groups, expected.groups) {
+            XCTAssertEqual(group.minimumSimilarity.bitPattern, original.minimumSimilarity.bitPattern, file: file, line: line)
+            XCTAssertEqual(group.photos.map(\.id), original.photos.map(\.id), file: file, line: line)
+            for (photo, saved) in zip(group.photos, original.photos) {
+                XCTAssertEqual(photo.imageEmbedding.map(\.bitPattern), saved.imageEmbedding.map(\.bitPattern), file: file, line: line)
+                XCTAssertEqual(photo.modificationTime.bitPattern, saved.modificationTime.bitPattern, file: file, line: line)
+                XCTAssertEqual(photo.creationTime?.bitPattern, saved.creationTime?.bitPattern, file: file, line: line)
+                XCTAssertEqual(photo.modelVersion, saved.modelVersion, file: file, line: line)
+                XCTAssertNil(photo.location, file: file, line: line)
+            }
+        }
+    }
+
+    func testDefaultAliasRestoresOldCanonicalCacheWithExactGroupsAndUnchangedFiles() async throws {
+        var vector = TestFixtures.vector()
+        vector[0] = 0.6
+        vector[1] = -0.8
+        let fixture = try aliasContext(photos: [photo("d", axis: 2), photo("b", creation: nil, vector: vector, place: true),
+            photo("single", axis: 4), photo("a", vector: vector, place: true), photo("c", axis: 2)])
+        let c = fixture.context
+        let source = c.directory.appendingPathComponent("index.sqlite3")
+        let indexBytes = try Data(contentsOf: source)
+        // Real completed binary from the legacy explicit canonical path, not a
+        // synthetic restore result and not a cache first written through aliases.
+        let old = try await fresh(c)
+        XCTAssertEqual(old.groups.map(\.id), ["a", "c"])
+        XCTAssertEqual(old.groups.map { $0.photos.map(\.id) }, [["a", "b"], ["c", "d"]])
+        XCTAssertNil(old.persistenceIssue)
+        let cacheBytes = try Data(contentsOf: c.cacheURL)
+        let calls = ReuseCounter()
+        let base = fixture.aliasBase
+        let service = SimilarPhotoGroupingService(library: c.library, encoders: c.encoders, defaultLocation: {
+            try calls.record { try SimilarGroupingLocation.applicationSupport(base) }
+        })
+        XCTAssertEqual(calls.count, 0)
+        let value = try restored(await service.restore(threshold: 0.80))
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(c.library.enumerations, 5, "Legacy group 3 + cold default-path restore 2.")
+        assertExactGroups(value, old)
+        XCTAssertNil(value.persistenceIssue)
+        try await value.prepareForPublication()
+        try value.validatePublicationEpoch()
+        XCTAssertEqual(calls.count, 1, "Live validation retains the operation's location, not a new resolver call.")
+        XCTAssertEqual(try Data(contentsOf: c.cacheURL), cacheBytes)
+        XCTAssertEqual(try Data(contentsOf: source), indexBytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: c.directory.path).sorted(),
+                       ["index.sqlite3", SimilarGroupingCache.fileName].sorted())
+        let counts = await c.encoders.counts()
+        XCTAssertEqual(counts.inspections, 2)
+        await assertNoInference(c)
+    }
+
+    func testDefaultAliasFirstMissingThenGroupWritesCanonicalBinaryAndColdRestoresIncludingZeroGroups() async throws {
+        let inputs = [[photo("a"), photo("b")], [photo("a"), photo("b", axis: 1)]]
+        for (index, input) in inputs.enumerated() {
+            let fixture = try aliasContext(photos: input)
+            let c = fixture.context
+            let source = c.directory.appendingPathComponent("index.sqlite3")
+            let indexBytes = try Data(contentsOf: source)
+            let calls = ReuseCounter()
+            let base = fixture.aliasBase
+            let service = SimilarPhotoGroupingService(library: c.library, encoders: c.encoders, defaultLocation: {
+                try calls.record { try SimilarGroupingLocation.applicationSupport(base) }
+            })
+            XCTAssertEqual(calls.count, 0)
+            XCTAssertEqual(c.library.enumerations, 0)
+            let idle = await c.encoders.counts()
+            XCTAssertEqual(idle.inspections, 0)
+            assertMissing(try await service.restore(threshold: 0.80))
+            XCTAssertEqual(calls.count, 1)
+            XCTAssertEqual(c.library.enumerations, 2)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: c.directory.path), ["index.sqlite3"])
+            let computed = try await service.group(threshold: 0.80) { _ in }
+            XCTAssertEqual(calls.count, 2)
+            XCTAssertEqual(computed.groups.count, index == 0 ? 1 : 0)
+            XCTAssertEqual(computed.candidateCount, 2)
+            XCTAssertNil(computed.persistenceIssue)
+            let cacheBytes = try Data(contentsOf: c.cacheURL)
+            XCTAssertTrue(cacheBytes.starts(with: Data("bplist00".utf8)))
+            XCTAssertEqual(try Data(contentsOf: base.appendingPathComponent("LocalImageIQIndex")
+                .appendingPathComponent(SimilarGroupingCache.fileName)), cacheBytes)
+            let cold = SimilarPhotoGroupingService(library: c.library, encoders: c.encoders, defaultLocation: {
+                try calls.record { try SimilarGroupingLocation.applicationSupport(base) }
+            })
+            XCTAssertEqual(calls.count, 2)
+            let value = try restored(await cold.restore(threshold: 0.80))
+            XCTAssertEqual(calls.count, 3)
+            XCTAssertEqual(c.library.enumerations, 7, "Missing 2 + manual grouping 3 + fresh-instance restore 2.")
+            assertExactGroups(value, computed)
+            XCTAssertNil(value.persistenceIssue)
+            try await value.prepareForPublication()
+            try value.validatePublicationEpoch()
+            XCTAssertEqual(calls.count, 3)
+            XCTAssertEqual(try Data(contentsOf: c.cacheURL), cacheBytes)
+            XCTAssertEqual(try Data(contentsOf: source), indexBytes)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: c.directory.path).sorted(),
+                           ["index.sqlite3", SimilarGroupingCache.fileName].sorted())
+            let counts = await c.encoders.counts()
+            XCTAssertEqual(counts.inspections, 3)
+            await assertNoInference(c)
+        }
+    }
+
+    func testDefaultLocationIsIdleOnDeniedAccessAndExplicitDirectoriesStrictlyBypassIt() async throws {
+        let fixture = try aliasContext()
+        let c = fixture.context
+        let source = c.directory.appendingPathComponent("index.sqlite3")
+        let indexBytes = try Data(contentsOf: source)
+        let calls = ReuseCounter()
+        let forbiddenLocation: @Sendable () throws -> SimilarGroupingLocation = {
+            try calls.record { throw ReuseFailure.test }
+        }
+        let automatic = SimilarPhotoGroupingService(library: c.library, encoders: c.encoders, defaultLocation: forbiddenLocation)
+        XCTAssertEqual(calls.count, 0)
+        XCTAssertEqual(c.library.enumerations, 0)
+        let idle = await c.encoders.counts()
+        XCTAssertEqual(idle.inspections, 0)
+        c.library.setReadable(false)
+        await diagnosticFailure(.init(phase: .photos, code: .permissionDenied)) {
+            _ = try await automatic.restore(threshold: 0.80)
+        }
+        await diagnosticFailure(.init(phase: .photos, code: .permissionDenied)) {
+            _ = try await automatic.group(threshold: 0.80) { _ in }
+        }
+        XCTAssertEqual(calls.count, 0)
+        XCTAssertEqual(c.library.enumerations, 0)
+        let denied = await c.encoders.counts()
+        XCTAssertEqual(denied.inspections, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path))
+
+        c.library.setReadable(true)
+        let explicit = SimilarPhotoGroupingService(library: c.library, directory: c.directory,
+            encoders: c.encoders, defaultLocation: forbiddenLocation)
+        let computed = try await explicit.group(threshold: 0.80) { _ in }
+        let cacheBytes = try Data(contentsOf: c.cacheURL)
+        let value = try restored(await explicit.restore(threshold: 0.80))
+        assertExactGroups(value, computed)
+        try await value.prepareForPublication()
+        try value.validatePublicationEpoch()
+        XCTAssertEqual(calls.count, 0, "An explicit directory must never evaluate the default closure.")
+
+        // The very same ancestor alias is NOT trusted when passed as directory.
+        // Keep SQLite NOFOLLOW's extended SQLITE_CANTOPEN_SYMLINK (1550).
+        let strict = SimilarPhotoGroupingService(library: c.library,
+            directory: fixture.aliasBase.appendingPathComponent("LocalImageIQIndex", isDirectory: true),
+            encoders: c.encoders, defaultLocation: forbiddenLocation)
+        await diagnosticFailure(.init(phase: .sourceOpen, code: .sourceOpen, nativeCode: 1550)) {
+            _ = try await strict.restore(threshold: 0.80)
+        }
+        await diagnosticFailure(.init(phase: .sourceOpen, code: .sourceOpen, nativeCode: 1550)) {
+            _ = try await strict.group(threshold: 0.80) { _ in }
+        }
+        XCTAssertEqual(calls.count, 0)
+        XCTAssertEqual(try Data(contentsOf: c.cacheURL), cacheBytes)
+        XCTAssertEqual(try Data(contentsOf: source), indexBytes)
+        await assertNoInference(c)
+    }
+
+    func testDefaultAliasRetargetBetweenRestoreSourcePassesRejectsAlreadyReadCache() async throws {
+        let fixture = try aliasContext()
+        let c = fixture.context
+        _ = try await fresh(c)
+        let source = c.directory.appendingPathComponent("index.sqlite3")
+        let indexBytes = try Data(contentsOf: source)
+        let cacheBytes = try Data(contentsOf: c.cacheURL)
+        let calls = ReuseCounter()
+        let mutations = ReuseCounter()
+        let base = fixture.aliasBase
+        let service = SimilarPhotoGroupingService(library: c.library, encoders: c.encoders, defaultLocation: {
+            try calls.record { try SimilarGroupingLocation.applicationSupport(base) }
+        })
+        // Restore has read the first source snapshot AND the completed cache.
+        // Retarget at its final Photos snapshot, before the second source pass.
+        c.library.onEnumeration { number in
+            if number == 5 { try mutations.record { try fixture.retarget(toAlternate: true) } }
+        }
+        defer { c.library.onEnumeration(nil) }
+        await storageFailure(codes: [.sourceFileIdentityChanged]) { _ = try await service.restore(threshold: 0.80) }
+        XCTAssertEqual(mutations.count, 1)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(c.library.enumerations, 5)
+        XCTAssertEqual(try Data(contentsOf: c.cacheURL), cacheBytes)
+        XCTAssertEqual(try Data(contentsOf: source), indexBytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.alternateBase.path), [])
+        await assertNoInference(c)
+    }
+
+    func testDefaultAliasRetargetAtSaveIsFatalEvenWithOptionalIOErrorAndNeverInstallsResident() async throws {
+        for existingCache in [false, true] {
+            for optionalIOError in [false, true] {
+                let fixture = try aliasContext()
+                let c = fixture.context
+                if existingCache { _ = try await fresh(c) }
+                let previous: Data?
+                if existingCache { previous = try Data(contentsOf: c.cacheURL) }
+                else { previous = nil }
+                let source = c.directory.appendingPathComponent("index.sqlite3")
+                let indexBytes = try Data(contentsOf: source)
+                let calls = ReuseCounter()
+                let saves = ReuseCounter()
+                let base = fixture.aliasBase
+                let cache = SimilarGroupingCache(directory: c.directory, beforeCommit: {
+                    try saves.record {
+                        try fixture.retarget(toAlternate: true)
+                        if optionalIOError { throw ReuseFailure.test }
+                    }
+                })
+                let service = SimilarPhotoGroupingService(library: c.library, encoders: c.encoders, cache: cache, defaultLocation: {
+                    try calls.record { try SimilarGroupingLocation.applicationSupport(base) }
+                })
+                await storageFailure(codes: [.sourceFileIdentityChanged]) {
+                    _ = try await service.group(threshold: 0.90) { _ in }
+                }
+                XCTAssertEqual(calls.count, 1)
+                XCTAssertEqual(saves.count, 1)
+                if let previous { XCTAssertEqual(try Data(contentsOf: c.cacheURL), previous) }
+                else { XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path)) }
+                XCTAssertEqual(try Data(contentsOf: source), indexBytes)
+                XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: c.directory.path).filter { $0.hasSuffix(".tmp") }, [])
+                XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.alternateBase.path), [])
+
+                // Restore the link only, not the database. A fresh operation at
+                // 0.90 must not find a resident payload from the rejected save.
+                try fixture.retarget(toAlternate: false)
+                let outcome = try await service.restore(threshold: 0.90)
+                if existingCache { assertStale(outcome) } else { assertMissing(outcome) }
+                XCTAssertEqual(calls.count, 2)
+                XCTAssertEqual(saves.count, 1)
+                if let previous { XCTAssertEqual(try Data(contentsOf: c.cacheURL), previous) }
+                else { XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path)) }
+                XCTAssertEqual(try Data(contentsOf: source), indexBytes)
+                await assertNoInference(c)
+            }
+        }
+    }
+
+    @MainActor
+    func testDefaultAliasRetargetRejectsComputedAndRestoredPublicationWithoutResolverOrPhotosRereads() async throws {
+        for restore in [false, true] {
+            for prepareFirst in [false, true] {
+                let fixture = try aliasContext()
+                let c = fixture.context
+                let calls = ReuseCounter()
+                let base = fixture.aliasBase
+                let service = SimilarPhotoGroupingService(library: c.library, encoders: c.encoders, defaultLocation: {
+                    try calls.record { try SimilarGroupingLocation.applicationSupport(base) }
+                })
+                let computed = try await service.group(threshold: 0.80) { _ in }
+                let value: SimilarPhotoGroupingResult
+                if restore {
+                    let cold = SimilarPhotoGroupingService(library: c.library, encoders: c.encoders, defaultLocation: {
+                        try calls.record { try SimilarGroupingLocation.applicationSupport(base) }
+                    })
+                    value = try restored(await cold.restore(threshold: 0.80))
+                } else { value = computed }
+                XCTAssertEqual(calls.count, restore ? 2 : 1)
+                XCTAssertEqual(value.groups.map(\.id), ["a"])
+                XCTAssertNil(value.persistenceIssue)
+                if prepareFirst { try await value.prepareForPublication() }
+                try value.validatePublicationEpoch()
+                XCTAssertEqual(c.library.batchThreads, prepareFirst ? [false] : [])
+                let enumerations = c.library.enumerations
+                let batches = c.library.batchRequests
+                let source = c.directory.appendingPathComponent("index.sqlite3")
+                let indexBytes = try Data(contentsOf: source)
+                let cacheBytes = try Data(contentsOf: c.cacheURL)
+                try fixture.retarget(toAlternate: true)
+                XCTAssertTrue(Thread.isMainThread)
+                if prepareFirst {
+                    assertStorage(codes: [.sourceFileIdentityChanged]) { try value.validatePublicationEpoch() }
+                    await storageFailure(codes: [.sourceFileIdentityChanged]) { try await value.prepareForPublication() }
+                } else {
+                    // Exercise preparation as the FIRST observer too, rather
+                    // than relying on invalidation latched by the main fence.
+                    await storageFailure(codes: [.sourceFileIdentityChanged]) { try await value.prepareForPublication() }
+                    assertStorage(codes: [.sourceFileIdentityChanged]) { try value.validatePublicationEpoch() }
+                }
+                assertStorage(codes: [.sourceFileIdentityChanged]) { try value.validatePhotos(["a"]) }
+                assertStorage(codes: [.sourceFileIdentityChanged]) { try value.validatePhotos([]) }
+                XCTAssertEqual(calls.count, restore ? 2 : 1)
+                XCTAssertEqual(c.library.enumerations, enumerations)
+                XCTAssertEqual(c.library.batchRequests, batches)
+                XCTAssertEqual(try Data(contentsOf: source), indexBytes)
+                XCTAssertEqual(try Data(contentsOf: c.cacheURL), cacheBytes)
+                XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.alternateBase.path), [])
+                await assertNoInference(c)
+            }
+        }
     }
 
     func testApprovedPolicyDefaultAndProtocolDefaultKeepLegacyMocksCompatible() async throws {
@@ -1175,6 +1495,23 @@ private struct ReuseContext: Sendable {
     var cacheURL: URL { directory.appendingPathComponent(SimilarGroupingCache.fileName) }
     func service(cache: SimilarGroupingCache? = nil) -> SimilarPhotoGroupingService {
         SimilarPhotoGroupingService(library: library, directory: directory, encoders: encoders, cache: cache)
+    }
+}
+
+private struct ReuseAliasContext: Sendable {
+    let context: ReuseContext
+    let ancestorAlias: URL
+    let physicalAncestor: URL
+    let alternateAncestor: URL
+    var aliasBase: URL { ancestorAlias.appendingPathComponent("ApplicationSupport", isDirectory: true) }
+    var alternateBase: URL { alternateAncestor.appendingPathComponent("ApplicationSupport", isDirectory: true) }
+
+    func retarget(toAlternate: Bool) throws {
+        // Both destinations were created under this test's owned temp root.
+        // Only replace the ancestor link; never move/rewrite an indexed file.
+        try FileManager.default.removeItem(at: ancestorAlias)
+        try FileManager.default.createSymbolicLink(at: ancestorAlias,
+            withDestinationURL: toAlternate ? alternateAncestor : physicalAncestor)
     }
 }
 

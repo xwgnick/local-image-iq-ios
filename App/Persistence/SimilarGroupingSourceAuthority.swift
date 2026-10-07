@@ -24,23 +24,33 @@ enum SourceLockInspectionFault: Sendable {
 /// The lock protects synchronous result validators, including the MainActor fence.
 final class SimilarGroupingSourceAuthority: @unchecked Sendable {
     private let lock = NSLock()
-    private let directory: URL
+    private let location: SimilarGroupingLocation
     private let file: URL
+    private let originalFile: URL
     private let identity: FileIdentity?
     private var handle: OpaquePointer?
     private var version: Int64?
     private var invalidated: SimilarCleanupDiagnostic?
     private let lockProbe: @Sendable () -> SourceLockInspectionFault?
 
-    init(directory: URL, lockProbe: @escaping @Sendable () -> SourceLockInspectionFault? = { nil }) throws {
-        self.directory = directory
+    convenience init(directory: URL, lockProbe: @escaping @Sendable () -> SourceLockInspectionFault? = { nil }) throws {
+        try self.init(location: SimilarGroupingLocation(directory: directory), lockProbe: lockProbe)
+    }
+
+    init(location: SimilarGroupingLocation, lockProbe: @escaping @Sendable () -> SourceLockInspectionFault? = { nil }) throws {
+        try Task.checkCancellation()
+        self.location = location
         self.lockProbe = lockProbe
-        file = directory.appendingPathComponent("index.sqlite3")
-        identity = try Self.readIdentity(directory: directory, file: file)
+        file = location.directory.appendingPathComponent("index.sqlite3")
+        originalFile = location.originalDirectory.appendingPathComponent("index.sqlite3")
+        identity = try Self.readIdentity(location: location)
         // A missing index is a valid empty source, but its later appearance is
         // not. Do not create even the parent directory or an empty database.
         guard identity != nil else { return }
         try requireNoSidecars()
+        guard try Self.readIdentity(location: location) == identity else {
+            throw SimilarCleanupDiagnostic(phase: .sourceCheck, code: .sourceFileIdentityChanged)
+        }
         var pointer: OpaquePointer?
         let status = sqlite3_open_v2(file.path, &pointer,
             SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW, nil)
@@ -69,6 +79,11 @@ final class SimilarGroupingSourceAuthority: @unchecked Sendable {
             if let diagnostic = Self.unsupportedJournalMode(mode) { throw diagnostic }
             version = try dataVersion()
             try validate()
+            // Filesystem-only fence after the existing post-open validation;
+            // do not add a data_version read or a VFS/fault-probe invocation.
+            guard try Self.readIdentity(location: location) == identity else {
+                throw SimilarCleanupDiagnostic(phase: .sourceCheck, code: .sourceFileIdentityChanged)
+            }
         } catch {
             sqlite3_close(pointer)
             handle = nil
@@ -87,7 +102,7 @@ final class SimilarGroupingSourceAuthority: @unchecked Sendable {
         defer { lock.unlock() }
         if let invalidated { throw invalidated }
         do {
-            guard try Self.readIdentity(directory: directory, file: file) == identity else {
+            guard try Self.readIdentity(location: location) == identity else {
                 throw SimilarCleanupDiagnostic(phase: .sourceCheck, code: .sourceFileIdentityChanged)
             }
             if identity != nil {
@@ -96,7 +111,7 @@ final class SimilarGroupingSourceAuthority: @unchecked Sendable {
                     throw SimilarCleanupDiagnostic(phase: .sourceCheck, code: .sourceDataVersionChanged)
                 }
                 try requireNoSidecars()
-                guard try Self.readIdentity(directory: directory, file: file) == identity else {
+                guard try Self.readIdentity(location: location) == identity else {
                     throw SimilarCleanupDiagnostic(phase: .sourceCheck, code: .sourceFileIdentityChanged)
                 }
             }
@@ -188,8 +203,13 @@ final class SimilarGroupingSourceAuthority: @unchecked Sendable {
             ("-shm", .sourceSHMStat, .sourceSHMPresent)
         ]
         for (suffix, statCode, presentCode) in sidecars {
-            guard try Self.attributes(URL(fileURLWithPath: file.path + suffix), failureCode: statCode) == nil else {
-                throw SimilarCleanupDiagnostic(phase: .sourceCheck, code: presentCode)
+            // Preserve journal/WAL/SHM precedence and check the original path
+            // first. Equal paths retain the legacy single lstat per sidecar.
+            let paths = originalFile.path == file.path ? [file] : [originalFile, file]
+            for source in paths {
+                guard try Self.attributes(URL(fileURLWithPath: source.path + suffix), failureCode: statCode) == nil else {
+                    throw SimilarCleanupDiagnostic(phase: .sourceCheck, code: presentCode)
+                }
             }
         }
     }
@@ -224,15 +244,38 @@ final class SimilarGroupingSourceAuthority: @unchecked Sendable {
         return info
     }
 
-    private static func readIdentity(directory: URL, file: URL) throws -> FileIdentity? {
-        if let parent = try attributes(directory, failureCode: .sourceParentStat) {
+    private struct PathIdentity: Equatable {
+        let directoryDevice: dev_t?
+        let directoryInode: ino_t?
+        let file: FileIdentity?
+    }
+
+    private static func readIdentity(location: SimilarGroupingLocation) throws -> FileIdentity? {
+        try location.validate()
+        let original = try readPath(directory: location.originalDirectory,
+                                    file: location.originalDirectory.appendingPathComponent("index.sqlite3"))
+        if location.originalDirectory.path != location.directory.path {
+            let target = try readPath(directory: location.directory,
+                                      file: location.directory.appendingPathComponent("index.sqlite3"))
+            guard original == target else {
+                throw SimilarCleanupDiagnostic(phase: .sourceCheck, code: .sourceFileIdentityChanged)
+            }
+        }
+        return original.file
+    }
+
+    private static func readPath(directory: URL, file: URL) throws -> PathIdentity {
+        let parent = try attributes(directory, failureCode: .sourceParentStat)
+        if let parent {
             guard (parent.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR) else {
                 let code: SimilarCleanupDiagnostic.Code = (parent.st_mode & mode_t(S_IFMT)) == mode_t(S_IFLNK)
                     ? .sourceParentSymlink : .sourceParentKind
                 throw SimilarCleanupDiagnostic(phase: .sourceCheck, code: code)
             }
         }
-        guard let info = try attributes(file, failureCode: .sourceFileStat) else { return nil }
+        guard let info = try attributes(file, failureCode: .sourceFileStat) else {
+            return PathIdentity(directoryDevice: parent?.st_dev, directoryInode: parent?.st_ino, file: nil)
+        }
         // Same no-follow convention as the completed cache; never trust a
         // symlink, nonregular object or multiply-linked source as live authority.
         guard (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else {
@@ -243,6 +286,6 @@ final class SimilarGroupingSourceAuthority: @unchecked Sendable {
         guard info.st_nlink == 1 else {
             throw SimilarCleanupDiagnostic(phase: .sourceCheck, code: .sourceFileLinks)
         }
-        return FileIdentity(info)
+        return PathIdentity(directoryDevice: parent?.st_dev, directoryInode: parent?.st_ino, file: FileIdentity(info))
     }
 }

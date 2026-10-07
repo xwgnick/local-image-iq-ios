@@ -241,17 +241,20 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
     private let directory: URL?
     private let encoders: any PhotoEncoding
     private let suppliedCache: SimilarGroupingCache?
+    private let defaultLocation: @Sendable () throws -> SimilarGroupingLocation
     private var operationID = UUID()
     /// Completed data only: no old Photos scope, live monitor or validation
     /// closures. Pausing UI need not discard valid work after a disk-write error.
     private var resident: (payload: SimilarGroupingCachePayload, persistenceIssue: String?)?
 
     init(library: any PhotoLibraryIndexing, directory: URL? = nil,
-         encoders: any PhotoEncoding = CoreMLEncoders(), cache: SimilarGroupingCache? = nil) {
+         encoders: any PhotoEncoding = CoreMLEncoders(), cache: SimilarGroupingCache? = nil,
+         defaultLocation: @escaping @Sendable () throws -> SimilarGroupingLocation = { try SimilarGroupingLocation.system() }) {
         self.library = library
         self.directory = directory
         self.encoders = encoders
         self.suppliedCache = cache
+        self.defaultLocation = defaultLocation
     }
 
     /// Cold reuse reads metadata and opaque SQLite image BLOBs twice for durable
@@ -277,11 +280,11 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             try manifest.validate()
             let model = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
             phase = .indexLocation
-            let root = try directory ?? SQLitePhotoStore.defaultDirectory(create: false)
-            let cache = suppliedCache ?? SimilarGroupingCache(directory: root)
-            let reader = SQLitePhotoStore(directory: root, readOnly: true)
+            let location = try directory.map { SimilarGroupingLocation(directory: $0) } ?? defaultLocation()
             phase = .sourceOpen
-            let authority = try SimilarGroupingSourceAuthority(directory: root)
+            let authority = try SimilarGroupingSourceAuthority(location: location)
+            let cache = suppliedCache ?? SimilarGroupingCache(directory: location.directory)
+            let reader = SQLitePhotoStore(directory: location.directory, readOnly: true)
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
             phase = .indexRead
@@ -357,10 +360,10 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             try manifest.validate()
             let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
             phase = .indexLocation
-            let root = try directory ?? SQLitePhotoStore.defaultDirectory(create: false)
-            let reader = SQLitePhotoStore(directory: root, readOnly: true)
+            let location = try directory.map { SimilarGroupingLocation(directory: $0) } ?? defaultLocation()
             phase = .sourceOpen
-            let authority = try SimilarGroupingSourceAuthority(directory: root)
+            let authority = try SimilarGroupingSourceAuthority(location: location)
+            let reader = SQLitePhotoStore(directory: location.directory, readOnly: true)
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
             phase = .indexRead
@@ -426,7 +429,7 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             let payload = try SimilarGroupingCachePayload(groups: groups, candidateCount: eligible.count,
                 staleCount: indexed.count - eligible.count, unindexedCount: initial.count - indexed.count, key: key)
             _ = try payload.validated(authorized: initial, indexed: indexed)
-            let cache = suppliedCache ?? SimilarGroupingCache(directory: root)
+            let cache = suppliedCache ?? SimilarGroupingCache(directory: location.directory)
             var persistenceIssue: String?
             do {
                 try cache.save(groups: groups, candidateCount: eligible.count, staleCount: indexed.count - eligible.count,
