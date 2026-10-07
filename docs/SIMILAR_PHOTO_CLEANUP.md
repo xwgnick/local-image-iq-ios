@@ -1,5 +1,7 @@
 # 相似照片清理
 
+> **现行 build29 更新：**清理页改为紧凑组总览，点封面进入五列组内浏览，支持横向起拖多选及边缘滚动；删除前后有经过Apple文档核实的通常30天恢复说明。阈值仍0.50–0.99。当前功能和包见 [SIMILAR_GROUP_BROWSER.md](SIMILAR_GROUP_BROWSER.md)，下文旧版展开式两列布局仅为历史。
+
 > **现行 build28 更新：**阈值已扩展为 **0.50–0.99**，默认0.96；发布前元数据核验改为离开主线程的批量读取。最新交付及验证见 [SIMILAR_CLEANUP_THRESHOLD_UPDATE.md](SIMILAR_CLEANUP_THRESHOLD_UPDATE.md)。下文完整保留 build26 历史，旧范围及滑块2/3位置不适用于新版。
 
 **0.8.0 / build 26：DELIVERED；第三轮整体 SUCCESS，已完成设备构建、公开发布及本地 IPA 完整性校验；真机行为仍待验证。**
