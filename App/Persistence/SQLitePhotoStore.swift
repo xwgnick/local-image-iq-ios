@@ -342,23 +342,37 @@ actor SQLitePhotoStore {
 
     /// Missing databases are normal on first sync. This SELECT-only handle is
     /// closed before Photos/model preparation or a later writer lease.
-    func syncMetadata() throws -> [String: PhotoSyncMetadata] {
+    func syncMetadata(diagnostics: Bool = false) throws -> [String: PhotoSyncMetadata] {
         guard readOnly else { throw AppFailure.storage("Sync metadata requires a read-only connection.") }
         defer { connection = nil }
         try Task.checkCancellation()
         guard FileManager.default.fileExists(atPath: directory.appendingPathComponent("index.sqlite3").path) else { return [:] }
-        let db = try database()
+        let db = try database(cleanupDiagnostics: diagnostics)
         return try db.statement("SELECT id, revision, creation_time, model_version, typeof(image_embedding) = 'blob' AND length(image_embedding) > 0 FROM photos") { statement in
+            func string(at index: Int32, field: PhotoSyncDiagnostic.MetadataField) throws -> String {
+                do { return try db.groupingString(statement, at: index) }
+                catch {
+                    guard diagnostics, let source = error as? SimilarCleanupDiagnostic,
+                          source.code == .indexMetadataMissing || source.code == .indexMetadataInvalid else { throw error }
+                    throw PhotoSyncFailure(error: error, stage: .indexRead,
+                        code: .invalidIndexMetadata, metadataField: field)
+                }
+            }
             var rows: [String: PhotoSyncMetadata] = [:]
             while try db.next(statement) {
                 try Task.checkCancellation()
-                let id = try db.groupingString(statement, at: 0)
+                let id = try string(at: 0, field: .id)
                 let revision = PhotoRevision(id: id, modificationTime: sqlite3_column_double(statement, 1),
                     creationTime: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2))
-                let model = try db.groupingString(statement, at: 3)
-                guard !id.isEmpty, !id.utf8.contains(0), !model.isEmpty,
-                      revision.modificationTime.isFinite, revision.creationTime?.isFinite != false,
-                      rows[id] == nil else { throw AppFailure.storage("Invalid sync metadata.") }
+                let model = try string(at: 3, field: .modelVersion)
+                if let field = PhotoSyncDiagnostic.invalidField(revision, modelVersion: model, duplicate: rows[id] != nil) {
+                    let error = AppFailure.storage("Invalid sync metadata.")
+                    if diagnostics {
+                        throw PhotoSyncFailure(error: error, stage: .indexRead,
+                            code: .invalidIndexMetadata, metadataField: field)
+                    }
+                    throw error
+                }
                 rows[id] = PhotoSyncMetadata(revision: revision, modelVersion: model,
                                             hasImageEmbedding: sqlite3_column_int(statement, 4) != 0)
             }

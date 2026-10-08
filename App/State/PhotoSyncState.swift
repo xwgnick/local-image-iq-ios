@@ -13,6 +13,7 @@ final class PhotoSyncState: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var progress = PhotoSyncProgress()
     @Published private(set) var failureMessage: String?
+    @Published private(set) var failureDiagnostic: PhotoSyncDiagnostic?
 
     var visible: Bool { phase != .idle }
     var canCancel: Bool { task != nil && (phase == .checking || phase == .updating) }
@@ -149,6 +150,7 @@ final class PhotoSyncState: ObservableObject {
         pending = false
         stopping = false
         failureMessage = nil
+        failureDiagnostic = nil
         progress = PhotoSyncProgress()
         let token = UUID()
         generation = token
@@ -196,7 +198,9 @@ final class PhotoSyncState: ObservableObject {
             // lifecycle/library restart. Settlement itself queues nothing.
             if requestedStop { startIfNeeded() }
         }
-        if requestedStop || cancelled || error is CancellationError {
+        if requestedStop || cancelled || error.map({ PhotoSyncDiagnostic.isCancellation($0) }) == true {
+            failureDiagnostic = nil
+            failureMessage = nil
             if userSuppressed {
                 pending = false
                 phase = .cancelled
@@ -214,7 +218,13 @@ final class PhotoSyncState: ObservableObject {
         guard let result, error == nil else {
             pending = false
             failureRequiresRestart = true
-            failureMessage = "照片同步未完成，请手动重新同步。已完成的索引会保留。"
+            // Production supplies its precise invocation-local stage. Legacy
+            // injected services have only the setup boundary, not an inferred
+            // Photos/SQLite cause based on their last progress publication.
+            let diagnostic = error.map { PhotoSyncDiagnostic.classify($0, stage: .setup) }
+                ?? PhotoSyncDiagnostic(stage: .setup, code: .unknown)
+            failureDiagnostic = diagnostic
+            failureMessage = diagnostic.message
             phase = .failed
             return
         }

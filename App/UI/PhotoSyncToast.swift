@@ -34,7 +34,7 @@ struct PhotoSyncToast: View {
             if state.progress.needsNetwork > 0 { parts.append("\(state.progress.needsNetwork)张需联网") }
             if state.progress.failed > 0 { parts.append("\(state.progress.failed)张未完成") }
             return parts.joined(separator: " · ") + "，可手动重新同步"
-        case .failed: return state.failureMessage ?? "已完成的索引会保留，可手动重新同步"
+        case .failed: return state.failureMessage ?? "已完成的索引保留。"
         }
     }
 

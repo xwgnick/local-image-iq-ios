@@ -46,6 +46,30 @@ final class PhotoIncrementalSyncTests: XCTestCase {
         try await context.worker.synchronize(networkAllowed: network, progress: { _ in }, committed: {})
     }
 
+    private func assertPhotoSyncFailure(_ failure: PhotoSyncFailure,
+                                        stage: PhotoSyncDiagnostic.Stage, code: PhotoSyncDiagnostic.Code,
+                                        underlying expected: AppFailure,
+                                        metadataField: PhotoSyncDiagnostic.MetadataField? = nil,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(failure.diagnostic, PhotoSyncDiagnostic(stage: stage, code: code,
+            metadataField: metadataField), file: file, line: line)
+        guard let original = failure.underlyingError as? AppFailure else {
+            return XCTFail("Expected the original AppFailure, not another wrapper or error type.", file: file, line: line)
+        }
+        // Compare cases and their original payloads, never localized descriptions.
+        switch (original, expected) {
+        case (.permission, .permission), (.cloudOnly, .cloudOnly): break
+        case (.modelsMissing(let actual), .modelsMissing(let expected)),
+             (.modelContract(let actual), .modelContract(let expected)),
+             (.storage(let actual), .storage(let expected)),
+             (.photo(let actual), .photo(let expected)),
+             (.places(let actual), .places(let expected)):
+            XCTAssertEqual(actual, expected, file: file, line: line)
+        default:
+            XCTFail("The original AppFailure case changed.", file: file, line: line)
+        }
+    }
+
     private func start(_ context: SyncContext, holds: [SyncHold],
                        progress: @escaping @Sendable (PhotoSyncProgress) async -> Void = { _ in },
                        committed: @escaping @Sendable () async -> Void = {}) -> Task<PhotoSyncResult, Error> {
@@ -104,7 +128,10 @@ final class PhotoIncrementalSyncTests: XCTestCase {
         do {
             _ = try await worker.synchronize(networkAllowed: false, progress: { _ in }, committed: {})
             XCTFail("Missing shared coordinator must not silently create a private one")
-        } catch AppFailure.storage { }
+        } catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .setup, code: .storage,
+                underlying: .storage("Automatic sync requires shared index access."))
+        }
         XCTAssertFalse(FileManager.default.fileExists(atPath: context.directory.path))
     }
 
@@ -207,7 +234,9 @@ final class PhotoIncrementalSyncTests: XCTestCase {
         let before = try disk(context)
         context.library.change(.denied)
         do { _ = try await run(context); XCTFail("Denied") }
-        catch AppFailure.permission { }
+        catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .photos, code: .permission, underlying: .permission)
+        }
         XCTAssertEqual(try disk(context), before)
         XCTAssertEqual(context.library.enumerations, 0)
         XCTAssertEqual(context.access.revision, 0)
@@ -219,21 +248,29 @@ final class PhotoIncrementalSyncTests: XCTestCase {
         let before = try disk(context)
         context.library.onEnumeration = { context.library.change(.denied) }
         do { _ = try await run(context); XCTFail("Revoked") }
-        catch AppFailure.permission { }
+        catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .photos, code: .permission, underlying: .permission)
+        }
         context.library.onEnumeration = nil
         XCTAssertEqual(try disk(context), before)
         XCTAssertEqual(context.access.revision, 0)
     }
 
     func testMalformedOrDuplicateAuthorizedRevisionsFailBeforeAnyWrites() async throws {
-        let cases = [[SyncRow("")], [SyncRow("a"), SyncRow("a")],
-                     [SyncRow("a", revision: .infinity)], [SyncRow("a", creation: .nan)]]
-        for rows in cases {
+        let cases: [([SyncRow], PhotoSyncDiagnostic.MetadataField)] = [
+            ([SyncRow("")], .id), ([SyncRow("a"), SyncRow("a")], .duplicateID),
+            ([SyncRow("a", revision: .infinity)], .modificationTime),
+            ([SyncRow("a", creation: .nan)], .creationTime)
+        ]
+        for (rows, field) in cases {
             let context = try context(rows)
             try seed(context, [SyncRow("saved")])
             let before = try disk(context)
             do { _ = try await run(context); XCTFail("Invalid snapshot") }
-            catch AppFailure.photo { }
+            catch let failure as PhotoSyncFailure {
+                assertPhotoSyncFailure(failure, stage: .photos, code: .invalidPhotoMetadata,
+                    underlying: .photo("照片元数据无效，请重新检查图库。"), metadataField: field)
+            }
             XCTAssertEqual(try disk(context), before)
             XCTAssertEqual(context.access.revision, 0)
         }
@@ -247,32 +284,44 @@ final class PhotoIncrementalSyncTests: XCTestCase {
         context.library.change(.generation)
         hold.release.send()
         do { _ = try await task.value; XCTFail("Changed generation") }
-        catch AppFailure.photo { }
+        catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .encoding, code: .generationChanged,
+                underlying: .photo("照片访问已变化，请重新同步。"))
+        }
         XCTAssertFalse(FileManager.default.fileExists(atPath: context.directory.path))
         XCTAssertEqual(context.access.revision, 0)
     }
 
     func testGenerationRaceInsideSQLiteRollsBackPhotoAndPlace() async throws {
-        try await assertTransactionRace(.generation)
+        try await assertTransactionRace(.generation, code: .generationChanged,
+            underlying: .photo("照片访问已变化，请重新同步。"))
     }
 
     func testFullRevisionRaceInsideSQLiteRollsBackPhotoAndPlace() async throws {
-        for change in [SyncLibrary.Change.revision, .creation] { try await assertTransactionRace(change) }
+        for change in [SyncLibrary.Change.revision, .creation] {
+            try await assertTransactionRace(change, code: .photoChanged,
+                underlying: .photo("照片已变化，请重新同步。"))
+        }
     }
 
     func testAuthorizationRaceInsideSQLiteRollsBackPhotoAndPlace() async throws {
-        for change in [SyncLibrary.Change.denied, .limited] { try await assertTransactionRace(change) }
+        for change in [SyncLibrary.Change.denied, .limited] {
+            try await assertTransactionRace(change, code: change == .denied ? .permission : .accessChanged,
+                underlying: change == .denied ? .permission : .photo("照片访问已变化，请重新同步。"))
+        }
     }
 
-    private func assertTransactionRace(_ change: SyncLibrary.Change) async throws {
+    private func assertTransactionRace(_ change: SyncLibrary.Change, code: PhotoSyncDiagnostic.Code,
+                                       underlying: AppFailure) async throws {
         let context = try context([SyncRow("new", label: "New place"), SyncRow("saved")])
         try seed(context, [SyncRow("saved")])
         // Writer checks: worker entry, save entry, transaction entry, final
         // pre-COMMIT. The fourth changes Photos AFTER both SQL INSERTs.
         context.library.changeOnWriterCheck(access: context.access, check: 4, change: change)
         do { _ = try await run(context); XCTFail("Transaction race") }
-        catch AppFailure.photo { }
-        catch AppFailure.permission { }
+        catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .save, code: code, underlying: underlying)
+        }
         XCTAssertEqual(context.library.writerChecks, 4)
         let rows = try await context.reader.syncMetadata()
         let place = try await context.reader.storedPlace(text: "Photo taken in New place.", modelVersion: version)
@@ -291,7 +340,10 @@ final class PhotoIncrementalSyncTests: XCTestCase {
                 if state.phase == .updating { context.library.replace([SyncRow("saved")]) }
             }, committed: { XCTFail("Stale prune must not commit") })
             XCTFail("Changed scope")
-        } catch AppFailure.photo { }
+        } catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .difference, code: .libraryChanged,
+                underlying: .photo("图库范围已变化，请重新同步。"))
+        }
         XCTAssertEqual(try disk(context), before)
         XCTAssertEqual(context.access.revision, 0)
     }
@@ -312,7 +364,10 @@ final class PhotoIncrementalSyncTests: XCTestCase {
             _ = try await context.worker.synchronize(networkAllowed: false, progress: { _ in },
                                                      committed: { XCTFail("Prune rolled back") })
             XCTFail("Changed prune authority")
-        } catch AppFailure.photo { }
+        } catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .prune, code: .generationChanged,
+                underlying: .photo("照片访问已变化，请重新同步。"))
+        }
         XCTAssertEqual(writerEnumerations.value, 4)
         let rows = try await context.reader.syncMetadata()
         let place = try await context.reader.storedPlace(text: "Photo taken in Saved.", modelVersion: version)
@@ -348,7 +403,10 @@ final class PhotoIncrementalSyncTests: XCTestCase {
                 if state.completed == 1 { context.library.replace([SyncRow("new"), SyncRow("later")]) }
             }, committed: {})
             XCTFail("End snapshot must validate IDs outside the pending set")
-        } catch AppFailure.photo { }
+        } catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .encoding, code: .libraryChanged,
+                underlying: .photo("图库范围已变化，请重新同步。"))
+        }
         let rows = try await context.reader.syncMetadata()
         XCTAssertEqual(Set(rows.keys), ["new"])
     }
@@ -504,7 +562,10 @@ final class PhotoIncrementalSyncTests: XCTestCase {
         let first = start(context, holds: [hold])
         await hold.started.wait(1)
         do { _ = try await run(context); XCTFail("Do not reenter an async sync job") }
-        catch AppFailure.storage { }
+        catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .setup, code: .storage,
+                underlying: .storage("A sync operation is already running."))
+        }
         hold.release.send()
         let result = try await first.value
         XCTAssertEqual(result.progress.encoded, 1)
@@ -522,7 +583,10 @@ final class PhotoIncrementalSyncTests: XCTestCase {
                 states.modify { $0.append(state) }
             }, committed: { XCTFail("Failed SQL must not notify a commit") })
             XCTFail("Storage error")
-        } catch AppFailure.storage { }
+        } catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .save, code: .storage,
+                underlying: .storage("Synthetic storage failure"))
+        }
         XCTAssertEqual(states.value.last?.completed, 0)
         XCTAssertEqual(states.value.last?.encoded, 0)
         let rows = try await context.reader.syncMetadata()
@@ -564,7 +628,11 @@ final class PhotoIncrementalSyncTests: XCTestCase {
     }
 
     func testFatalModelPermissionAndStorageErrorsAreNotPerPhotoSuccessOrFailureCounts() async throws {
-        for failure in [AppFailure.modelContract("Synthetic"), .modelsMissing("Synthetic"), .permission, .storage("Synthetic")] {
+        let cases: [(AppFailure, PhotoSyncDiagnostic.Code)] = [
+            (.modelContract("Synthetic"), .model), (.modelsMissing("Synthetic"), .resources),
+            (.permission, .permission), (.storage("Synthetic"), .storage)
+        ]
+        for (failure, code) in cases {
             let context = try context([SyncRow("new")], imageFailure: failure)
             let states = SyncBox<[PhotoSyncProgress]>([])
             do {
@@ -572,7 +640,9 @@ final class PhotoIncrementalSyncTests: XCTestCase {
                     states.modify { $0.append(state) }
                 }, committed: { XCTFail("Fatal failure") })
                 XCTFail("Expected fatal error")
-            } catch { XCTAssertEqual(error.localizedDescription, failure.localizedDescription) }
+            } catch let wrapped as PhotoSyncFailure {
+                assertPhotoSyncFailure(wrapped, stage: .encoding, code: code, underlying: failure)
+            }
             XCTAssertEqual(states.value.last?.completed, 0)
             XCTAssertEqual(states.value.last?.failed, 0)
             XCTAssertEqual(context.access.revision, 0)

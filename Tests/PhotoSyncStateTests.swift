@@ -287,8 +287,9 @@ final class PhotoSyncStateTests: XCTestCase {
     }
 
     func testUnknownFailureIsSanitizedAndLatchedUntilManualRestart() async {
+        let privateDescriptionReads = SyncStateSignal()
         let first = SyncStateRun(initial: PhotoSyncProgress(phase: .updating, total: 3, completed: 1, encoded: 1),
-                                 failure: .sensitive)
+                                 failure: .observedSensitive(privateDescriptionReads))
         let second = SyncStateRun()
         let service = SyncStateService([first, second])
         let state = makeState(service)
@@ -300,7 +301,10 @@ final class PhotoSyncStateTests: XCTestCase {
         XCTAssertEqual(state.progress.encoded, 1)
         XCTAssertTrue(state.visible)
         XCTAssertTrue(state.canRestart)
-        XCTAssertEqual(state.failureMessage, "照片同步未完成，请手动重新同步。已完成的索引会保留。")
+        let diagnostic = PhotoSyncDiagnostic(stage: .setup, code: .unknown)
+        XCTAssertEqual(state.failureDiagnostic, diagnostic)
+        XCTAssertEqual(state.failureMessage, diagnostic.message)
+        XCTAssertEqual(privateDescriptionReads.count, 0, "Never inspect private error descriptions.")
         state.libraryChanged()
         state.updateAvailability(ready: false, networkAllowed: false)
         state.updateAvailability(ready: true, networkAllowed: true)
@@ -308,12 +312,17 @@ final class PhotoSyncStateTests: XCTestCase {
         let calls = await service.calls
         XCTAssertEqual(calls, 1)
         XCTAssertEqual(state.phase, .failed)
+        XCTAssertEqual(state.failureDiagnostic, diagnostic)
+        XCTAssertEqual(state.failureMessage, diagnostic.message)
         state.restart()
         await second.entered.wait()
         XCTAssertNil(state.failureMessage)
+        XCTAssertNil(state.failureDiagnostic)
         state.cancel()
         second.release.send()
         await state.waitUntilIdle()
+        XCTAssertNil(state.failureDiagnostic)
+        XCTAssertEqual(privateDescriptionReads.count, 0)
     }
 
     func testPartialResultNeedsAttentionDoesNotImmediatelyRetryOrHide() async {
@@ -710,9 +719,13 @@ final class PhotoSyncStateTests: XCTestCase {
             run.releaseWriter.send()
             await state.waitForSync()
             XCTAssertEqual(state.photoSync.phase, cancelWriter ? .cancelled : .failed)
-            if cancelWriter { XCTAssertNil(state.photoSync.failureMessage) }
-            else {
-                XCTAssertEqual(state.photoSync.failureMessage, "照片同步未完成，请手动重新同步。已完成的索引会保留。")
+            if cancelWriter {
+                XCTAssertNil(state.photoSync.failureMessage)
+                XCTAssertNil(state.photoSync.failureDiagnostic)
+            } else {
+                let diagnostic = PhotoSyncDiagnostic(stage: .setup, code: .unknown)
+                XCTAssertEqual(state.photoSync.failureDiagnostic, diagnostic)
+                XCTAssertEqual(state.photoSync.failureMessage, diagnostic.message)
             }
             XCTAssertEqual(privateDescriptionReads.count, 0, "Never inspect private error descriptions.")
             XCTAssertEqual(commits, 0, "Rollback must not manufacture a durable commit.")

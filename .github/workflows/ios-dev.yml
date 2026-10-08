@@ -1,0 +1,95 @@
+name: Native iOS — targeted development checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: "Exact XCTest classes or methods, one per line (target/class[/method]); not full-suite release validation"
+        type: string
+        default: |
+          LocalImageIQTests/PhotoIncrementalSyncTests
+          LocalImageIQTests/PhotoSyncStateTests
+          LocalImageIQTests/PhotoSyncDiagnosticTests
+          LocalImageIQTests/PhotoSyncFailureStageTests
+      build_only:
+        description: "Compile the native app and tests without executing them"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  targeted:
+    if: github.event.repository.private == false && github.repository == 'xwgnick/local-image-iq-ios'
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      IMAGEIQ_REQUIRE_MODELS: '0'
+      IMAGEIQ_TEST_ALL_COMPUTE_UNITS: '0'
+      IMAGEIQ_DEV_TESTS: ${{ inputs.tests }}
+      IMAGEIQ_DEV_BUILD_ONLY: ${{ inputs.build_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Select and verify preinstalled Xcode 16.4
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo '::error::Xcode 16.4 is not preinstalled on this runner; no installation or fallback will be attempted.'
+            exit 1
+          fi
+          xcode_version="$(xcodebuild -version)"
+          printf '%s\n' "$xcode_version"
+          printf '%s\n' "$xcode_version" | grep -Eq '^Xcode 16\.4$'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: arm64
+      - name: Validate selectors and inspect toolchain
+        run: |
+          node --test scripts/test_native_dev.mjs
+          node scripts/native_dev.mjs --validate
+          uname -m
+          swift --version
+      - name: Prepare required public Places resources
+        run: |
+          python -m pip install shapely==2.1.2
+          python scripts/build_places.py --download
+          node scripts/check_places.mjs --pack-dir Resources/Places
+          node scripts/check_project.mjs
+          plutil -lint App/Info.plist
+      - name: Generate native project and select simulator
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate --spec project.yml
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
+          node --input-type=module -e 'import fs from "node:fs"; const d=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/available-devices.json","utf8")); const all=Object.entries(d.devices).filter(([runtime])=>runtime.includes("iOS")).flatMap(([,v])=>v); const phone=all.find(x=>x.isAvailable&&x.name.startsWith("iPhone")); if(!phone)throw Error("No available iPhone simulator"); fs.appendFileSync(process.env.GITHUB_ENV,"SIMULATOR_ID="+phone.udid+"\n");'
+      - name: Compile and validate requested native tests (or compile only)
+        run: node scripts/native_dev.mjs
+      - name: Record development-only result
+        if: always()
+        run: |
+          echo '### Targeted development checks — NOT release validation' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No Core ML conversion, full UI run, IPA or Release publication. The app/test sources still compile natively. Model-free synthetic tests cannot establish the physical-phone failure cause.' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f build/dev-request.json ]; then cat build/dev-request.json >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ -f build/dev-validation.json ]; then
+            cat build/dev-validation.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No completed native validation report is available; do not infer a test pass.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dev-check-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/dev-request.json
+            build/dev-test-summary.json
+            build/dev-test-tree.json
+            build/dev-validation.json
+            build/DevTests.xcresult
+          if-no-files-found: warn
