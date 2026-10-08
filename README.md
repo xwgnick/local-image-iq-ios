@@ -1,3 +1,40 @@
+# Local Image IQ · Native iOS — 0.12.1 / build 34 当前交付
+
+**DELIVERED／DIAGNOSTIC-ONLY／USER-APPROVED EXCEPTION／PENDING-DEVICE。**build33 手机反馈：自动同步显示“正在检查照片”约 **1 秒**后失败，手动重新同步仍一样。build34 已交付普通同步卡诊断，**不是手机根因修复；实际失败阶段／返回码仍待新卡片截图**。最终发布源码 **`2e1a05bbe387b6c8b60853cbfb5cbc94b7bc1806`**；[最终 run 37782669079／job 113329435394](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37782669079/job/113329435394) SUCCESS。共 **2 次定点验证、2 次完整发布验证**，第一次完整验证 FAILED，第二次同源码 SUCCESS，不是一次完整验证通过。
+
+## 本版只补诊断，不改变同步处理
+
+- `PhotoSyncDiagnostic` 提供允许列表内的 **SS 短码、阶段、字段类别及可信 SQLite 数字返回码**；普通 UI 不显示照片 ID、路径、查询、OCR 或原始错误文本。**`PhotoSyncFailure.underlying` 内部仍保留原始错误，状态层只保存安全诊断**，不能写成“任何地方都不持有 raw Error”。
+- 原有 guards、SQL 查询、计算、事务与取消行为不变；没有新增自动重试、清库、重索引或绕过校验。自动同步用的是普通 SQL 路径，**没有使用清理源监视器的 NOFOLLOW 打开方式**；不能把这次故障直接归因于旧清理错误1550／某条已知路径，手机根因仍未知。
+- 普通同步卡读取 `detail.failureDiagnostic.message`。真实状态传播和 view 计算属性测试已通过；**本轮未下载 UI ZIP、未实际审阅新的 UI 截图**，不把代码接线／计算属性测试当作屏上短码可见性或手机同步 E2E 保证。
+- build33 的功能全部沿用：自动增量同步、有效旧向量复用、真实排空后取消、搜索与同步的既有并发边界、清理折叠滑杆／草稿更新及显示排序。**仅缺失／无效偏好默认0.90，有效旧0.80等较低选择继续保留**；“完成”收键盘、照片拖选、删除确认及全部安全检查不变。
+
+> **单项键盘例外经过再次明确批准。**用户在定点检查后选择「**生成诊断IPA，保留键盘例外**」，仅把 `testDraggingScrollViewDismissesKeyboard` 的 `XCTSkipIf` build 条件扩为 **33 或 34**，原测试正文保留、其他build仍执行。**UI14＝13通过／1批准跳过／0失败，不是14全通过**；拖动收键盘未验证修复，可点“完成”。不豁免其他测试或模型／数据安全／发布门槛。
+
+## 验证与开发入口
+
+- 首次定点：[run 37763800378／job 113266392603](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37763800378/job/113266392603)，源码 **`b7f198f65d22eaf2254d3666baa6b222ddbfdd9a`**；**104项全通过、0跳过＝迁入定点入口的90项既有测试＋14项新增（诊断5、阶段9）**。测试 **9.233秒／wall17.845秒**，原生阶段459秒、项目生成／模拟器选择120秒，首次整项约10分钟；没有全量UI、模型转换／真实模型验证或IPA，**不是9秒完整开发循环**。
+- 首次完整：[run 37777490964／job 113311912055](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37777490964/job/113311912055) FAILED，仅未改动的 `DebugToolsPresentationTests.testLibrarySameHostModeRoundTripChangesPixelsAndRestoresFormRowsWithoutWork` 5秒稳定等待超时；未出IPA。**没有为该失败改代码、延长超时或豁免测试**。
+- 随后同一最终源码定点：[run 37781125556／job 113324195270](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37781125556/job/113324195270)，DebugTools **7项全通过／27.932秒，wall27.942秒**；再进行第二次完整验证，旧失败未复现，**不声称其根因已修复**。
+- 最终完整：**Core79全通过；App1732＝1731通过／1项既有SQLite物理保护模拟器跳过／0失败，515.423秒，wall530.195秒**。新增14全通过：诊断 **5／0.018秒**、阶段 **9／0.136秒**；Generated真实模型 **8／150.633秒**，完整 **CPU／`.all`／20 actor** 保留；DebugTools **7／31.068秒**。独立UI **14＝13通过／1批准键盘跳过／0失败，1131.923秒**。
+- 已有独立手动开发入口 [.github/workflows/ios-dev.yml](.github/workflows/ios-dev.yml)：明确使用 **macos-15／Xcode16.4**，精确类／方法选择并核对实际执行树与计数，拒绝零执行、全跳过或拼错选择器冒充成功；本地 **32项Node测试通过**。**尚无SPM／DerivedData缓存**；开发通过不构成发布许可，不替代原完整发布流程。详见 [docs/NATIVE_DEVELOPMENT_CHECKS.md](docs/NATIVE_DEVELOPMENT_CHECKS.md)。
+
+## 已校验安装包与手机交接
+
+**[build/device-download/37782669079/LocalImageIQ-0.12.1-build34-iphoneos-unsigned.ipa](build/device-download/37782669079/LocalImageIQ-0.12.1-build34-iphoneos-unsigned.ipa)** · [公开 Release ci-37782669079-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37782669079-1)。Release **406888863**，**2026-10-08T13:58:00Z** 发布，**9资产、prerelease、非draft**；IPA asset **621985354**，**1,419,698,565 bytes**。实际全文件流式 SHA-256 **`29b5dafbbeb7f3f9b92cfe46760e66c5e3daec8543129496c92ad99dd6ef0277`**；**7-Zip26.04全量CRC PASS**（**11目录、30文件、解压后1,568,502,046 bytes**），不是仅核对远端声明。
+
+设备核验报告及IPA小型元数据确认 **0.12.1／34、arm64 Release、未签名、Xcode16.4／SDK18.5、最低iOS17**；沿用SigLIP768、Places、图像策略、schema及相关身份，**未做跨版本完整模型权重字节比较**。下载记录：[build/device-download/37782669079/release-fetch-74c96fad-93bb-4364-9c45-8c16211e9ffb.json](build/device-download/37782669079/release-fetch-74c96fad-93bb-4364-9c45-8c16211e9ffb.json)。包完整性不代表重签包或手机已验收。
+
+**只需用原 Sideloadly 账号／原有效 Bundle ID 覆盖安装一次，然后正常打开App。不要卸载、清库、为升级重索引或重新授权。若仍失败，只发一张新同步卡上带SS短码的截图；现在不要求再手动重新同步／反复重试。**无需调试工具、旧日志或真实删除照片。安装见 [docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)，完整验证账本见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+
+本次仅更新指定四份文档；以上测试、发布和包校验为已完成记录，未为文档运行终端、Git、CI、下载或重新审图。
+
+## 完整历史 README（截至 build33，旧全文原样保留）
+
+**以下从原页首至最后一段完整保留，不删改build33及更早正文／尾部。旧文中的“当前／本轮”、诊断持有方式、包名、待验事项和操作要求仅属于对应历史阶段；现行版本与手机交接以顶部build34为准。**
+
+---
+
 # Local Image IQ · Native iOS — 0.12.0 / build 33 当前交付
 
 **DELIVERED／USER-APPROVED EXCEPTION／PENDING-DEVICE。**本轮全部功能已获批准；解释搜索页“拖动收起键盘”后，用户明确回复「**可以了算通过吧**」，接受该项未解决的交互限制。最终源码 **`dfc65208fae0ecd0982aab5152b0b039ff8f30e9`**，[run 37752566636](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37752566636)／[job 113229119465](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37752566636/job/113229119465) **第六次整体验证 SUCCESS，前五次 FAILED**，不是首轮成功。

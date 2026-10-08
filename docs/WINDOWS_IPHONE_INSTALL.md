@@ -1,6 +1,41 @@
+# Windows → iPhone 安装 — build 34 当前交付
+
+## 当前：0.12.1（build 34）— 自动同步诊断IPA已交付，手机根因仍未知
+
+**DELIVERED／DIAGNOSTIC-ONLY／USER-APPROVED EXCEPTION／PENDING-DEVICE。**本机已完整下载核验：**[../build/device-download/37782669079/LocalImageIQ-0.12.1-build34-iphoneos-unsigned.ipa](../build/device-download/37782669079/LocalImageIQ-0.12.1-build34-iphoneos-unsigned.ipa)** · [公开 Release ci-37782669079-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37782669079-1)。本机无需重下；另一台电脑从此Release选择同一版本。仍需Sideloadly本机重签，不是免签安装或手机验收已通过。
+
+### 这次只覆盖安装一次，失败时截图新卡片
+
+1. 选择上述 **0.12.1／build34** 包，沿用**原Sideloadly Apple账号／原有效Bundle ID覆盖安装一次**。**不卸载、不清库、不为升级重索引、不重新授权**，不重置配对、已有偏好或照片网络许可。下方历史第1–4节仅供签名参考，不执行旧迁移／清库／网格诊断步骤。
+2. 正常打开App，让已有授权下的自动同步检查运行。build33已经报告“正在检查照片”约 **1秒**后失败，手动重新同步也一样；**本次不要求再点“重新同步”、反复重试或重启来取证**。
+3. 若仍失败，**只发一张新同步卡上带SS短码的截图**，保留卡片上的阶段／字段类别及数字码即可。不需要开启调试、寻找旧日志、发送数据库或实际删除照片。
+
+**这是诊断版，不是手机根因修复版。**`PhotoSyncDiagnostic` 只输出允许列表内的SS短码、阶段、字段类别与可信SQLite数字返回码，UI不显示照片ID、路径、查询、OCR或原始错误文本；**内部`PhotoSyncFailure.underlying`仍保留原错误，状态层只保存安全诊断**。原guards、查询、计算、事务和取消行为不改，不新增回退／清库／重建。自动同步使用普通SQL，不使用清理源监视器的NOFOLLOW打开方式；不能把本次故障直接认作旧清理1550／已知路径问题。**尚需手机新码才能定位。**
+
+普通卡片读取 `detail.failureDiagnostic.message`，状态传播及view计算属性测试已通过；**本轮没有下载UI ZIP或实际审阅新UI截图**，不据此保证真机屏上短码的布局／可见性，也不声称真实同步E2E通过。
+
+build33功能完整继承：有效旧向量复用、自动增量同步、取消先排空、已有可搜索记录可继续使用，以及清理折叠滑杆／草稿更新／显示排序。**无有效偏好才默认0.90，有效旧0.80等较低值保持，不必为诊断改阈值。**不自动OCR或删除系统照片，并发限制与删除确认保留。
+
+> 用户已明确选择「**生成诊断IPA，保留键盘例外**」：只把 `testDraggingScrollViewDismissesKeyboard` 的 `XCTSkipIf` 条件扩为build **33或34**，正文保留，其他build执行；其余门槛不豁免。**UI14＝13通过／1批准跳过／0失败，不是14全通过**。拖动收键盘未验证修复，仍可点“完成”；不影响照片拖选／同步取消的既有契约。
+
+### build34 包与验证摘要
+
+- 最终源码 **`2e1a05bbe387b6c8b60853cbfb5cbc94b7bc1806`**；[run 37782669079／job 113329435394](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37782669079/job/113329435394) **第二次完整发布验证SUCCESS**。此前先定点104项通过；首次完整验证因未改动的旧DebugTools测试5秒等待超时FAILED、无IPA，随后同源码定点7项通过，再同源码完整成功。**2次定点、2次完整分开计数；没有为旧失败改代码、改超时或新增豁免，未复现不等于根因已修复**。
+- 最终 **Core79全通过；App1732＝1731通过／1既有SQLite物理保护模拟器跳过／0失败，515.423秒，wall530.195秒**。新增14项全部通过（诊断5／0.018秒、阶段9／0.136秒），包含在App总数中；真实模型8／150.633秒、**CPU／`.all`／20 actor**保留。独立UI **14＝13通过／1批准键盘跳过／0失败，1131.923秒**。
+- Release **406888863**，**2026-10-08T13:58:00Z**发布，**9资产、prerelease、非draft**。IPA asset **621985354**，**1,419,698,565 bytes**；实际全文件流式SHA-256 **`29b5dafbbeb7f3f9b92cfe46760e66c5e3daec8543129496c92ad99dd6ef0277`**；**7-Zip26.04全量CRC PASS：11目录、30文件、解压后1,568,502,046 bytes**。
+- 下载记录：[../build/device-download/37782669079/release-fetch-74c96fad-93bb-4364-9c45-8c16211e9ffb.json](../build/device-download/37782669079/release-fetch-74c96fad-93bb-4364-9c45-8c16211e9ffb.json)。设备核验报告／IPA小型元数据确认 **0.12.1／34、arm64 Release、未签名、Xcode16.4／SDK18.5、最低iOS17**。SigLIP768、Places、图像策略、schema及相关身份沿用；**未比较跨版本完整模型权重字节**。原包完整性不验证重签包或手机安装。
+
+完整账本及开发检查边界见 [BUILD_STATUS.md](BUILD_STATUS.md) 和 [NATIVE_DEVELOPMENT_CHECKS.md](NATIVE_DEVELOPMENT_CHECKS.md)。当前下一步只有上述覆盖安装与失败卡片截图，不执行历史版本的额外诊断要求。
+
+## 完整安装历史（截至build33，含原第1–5节及全部尾部）
+
+**以下保留原build33页首和全部旧正文，仅将其“当前”交付小标题标为“历史”；更早版本、原第1–5节与尾部完整保留。旧“当前／本轮”、包名、操作、例外和审图结论只属于当时版本；本次安装与取证只以上方build34三步为准。**
+
+---
+
 # Windows → iPhone 安装 — build 33 当前交付
 
-## 当前：0.12.0（build 33）— 自动增量同步与简约清理页，含用户批准的单项 UI 例外
+## 历史：0.12.0（build 33）— 自动增量同步与简约清理页，含用户批准的单项 UI 例外
 
 **DELIVERED／USER-APPROVED EXCEPTION／PENDING-DEVICE。**本机已经完整下载核验：**[../build/device-download/37752566636/LocalImageIQ-0.12.0-build33-iphoneos-unsigned.ipa](../build/device-download/37752566636/LocalImageIQ-0.12.0-build33-iphoneos-unsigned.ipa)** · [公开 Release ci-37752566636-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37752566636-1)。本机无需重下；另一台电脑从这个 Release 下载同一版本。仍需 Sideloadly 本机重签，不是免签安装或手机已经通过。
 

@@ -1,6 +1,77 @@
-# Cloud build status — build 33
+# Cloud build status — build 34
 
-## Current: 0.12.0 (build 33) — 自动增量同步与简约清理页；第六次 SUCCESS，含用户批准的单项 UI 例外
+## Current: 0.12.1 (build 34) — 自动同步安全诊断；第二次完整验证 SUCCESS，手机根因仍未知
+
+**DELIVERED／PASS-PACKAGE／DIAGNOSTIC-ONLY／USER-APPROVED EXCEPTION／PENDING-DEVICE。**最终发布源码 **`2e1a05bbe387b6c8b60853cbfb5cbc94b7bc1806`**；[run 37782669079／job 113329435394](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37782669079/job/113329435394) SUCCESS。**本阶段2次定点验证与2次完整发布验证分开计数；首次完整验证FAILED，第二次同源码SUCCESS**，不能写成首次／唯一一次完整验证通过。
+
+### build34 问题、诊断与保留边界
+
+手机在build33自动同步“正在检查照片”约 **1秒**后失败，手动重新同步仍相同。此前状态层未保留可用于普通卡片的底层诊断；本版补齐诊断传播，**并未取得手机实际错误码，不宣称已定位或修复手机根因**。
+
+- `PhotoSyncDiagnostic` 只携带允许列表内的 **SS短码、阶段、元数据字段类别、可信SQLite数字返回码**。UI不显示照片ID、路径、查询、OCR、SQLite原始错误文本或未知错误内容；字段类别不是照片字段的原始值。
+- **`PhotoSyncFailure.underlying` 内部仍持有原始错误；状态层只保存安全诊断**。不能据UI脱敏宣称“raw Error在任何地方都没有保留”。
+- guards、查询、计算、事务及取消行为不变；不增加清库、重建、自动重试、放宽校验或回退。自动同步是**普通SQL路径，不使用清理源监视器的NOFOLLOW打开方式**；不能把这次同步失败等同于此前清理1550或已知路径故障。
+- 普通卡片只读取 `detail.failureDiagnostic.message`；真实状态传播和view计算属性测试通过。**本轮未下载UI ZIP，也没有新的UI截图实审**，不把属性／状态测试当成屏上短码可见性或真实Photos同步E2E保证。
+- 完整继承build33功能及并发／取消边界、有效旧向量复用、清理草稿／排序、照片拖选和删除安全。**无有效偏好才默认0.90，有效旧0.80等较低偏好保留**；“完成”收键盘及原模型／索引／OCR身份不变。
+
+### build34 明确批准的唯一UI例外
+
+首次定点通过后，用户明确选择「**生成诊断IPA，保留键盘例外**」。仅扩展既有 `testDraggingScrollViewDismissesKeyboard` 的 `XCTSkipIf` 条件为绑定bundle的 **`CFBundleVersion == "33" || CFBundleVersion == "34"`**；原测试正文保留，其他build仍执行。**拖动收键盘未验证修复，可用“完成”；UI14＝13通过／1批准跳过／0失败，不是14项全通过**。
+
+该批准不豁免任何其他键盘、照片拖选、同步取消、数据安全、模型或发布门槛。App中的既有SQLite物理文件保护模拟器跳过与这项独立UI例外分开计数。新开发工作流也不授权发布或新增其他skip。
+
+### build34 验证账本：两次定点、两次完整
+
+|顺序／范围|run／job／源码|实际结果与耗时|
+|---|---|---|
+|1／首次定点开发验证|[37763800378／113266392603](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37763800378/job/113266392603)；`b7f198f65d22eaf2254d3666baa6b222ddbfdd9a`|**SUCCESS：104项全通过、0失败、0跳过**。迁入定点入口的既有90项＝增量同步48＋状态42；新增14＝诊断5＋阶段9，不是104项新增。测试 **9.233秒，wall17.845秒**；原生阶段 **459秒**，项目生成／模拟器选择 **120秒**，首次整项约 **10分钟**。没有全量UI、模型转换／真实模型验证、IPA或Release。|
+|2／第一次完整发布验证|[37777490964／113311912055](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37777490964/job/113311912055)；`2e1a05bbe387b6c8b60853cbfb5cbc94b7bc1806`|**FAILED，仅1项未改动的旧DebugTools测试失败**。App **1732／1项既有SQLite跳过／1失败，391.305秒，wall401.198秒**；独立UI **14＝13通过／1批准键盘跳过／0失败，882.383秒**。失败draft **406832580**，**没有IPA**，不作为安装入口。|
+|3／对实际失败做定点复验|[37781125556／113324195270](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37781125556/job/113324195270)；同一`2e1a05bbe387b6c8b60853cbfb5cbc94b7bc1806`|**SUCCESS：DebugTools7项全通过／27.932秒，wall27.942秒**。没有为首次完整失败修改生产／测试代码、超时或增加豁免；这不是第三次完整验证。|
+|4／第二次完整发布验证，最终交付|[37782669079／113329435394](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37782669079/job/113329435394)；同一`2e1a05bbe387b6c8b60853cbfb5cbc94b7bc1806`|**SUCCESS：Core79；App1732＝1731通过／1既有SQLite跳过／0失败，515.423秒，wall530.195秒**。独立UI **14＝13通过／1批准键盘跳过／0失败，1131.923秒**。旧DebugTools失败未复现，不是已证明根因修复。|
+
+首次完整验证的唯一失败是 `DebugToolsPresentationTests.testLibrarySameHostModeRoundTripChangesPixelsAndRestoresFormRowsWithoutWork` 的 **5秒settle稳定等待超时**。该用例保持原样，随后先定点7项再完整复验；没有通过改断言、延长超时、修改代码或豁免该失败获得SUCCESS。**同源码不复现不等于已解释／修复原因**。
+
+### build34 最终测试明细
+
+|项目|最终完整验证结果／秒|
+|---|---|
+|Swift Core|**79全通过**。|
+|App XCTest|**1732＝1731通过／1项既有SQLite物理保护模拟器跳过／0失败**；**515.423，wall530.195**。|
+|本版新增|**14项全通过，已计入App1732**；此前迁入定点入口的90项为既有测试，不能算新增。|
+|`PhotoSyncDiagnosticTests`|**5／0.018，全通过**。|
+|`PhotoSyncFailureStageTests`|**9／0.136，全通过**。|
+|`GeneratedModelParityTests`|真实模型 **8／150.633，全通过**；完整 **CPU／`.all`／20 actor** 保留。|
+|`DebugToolsPresentationTests`|**7／31.068，全通过**；首次完整验证失败未复现。|
+|独立UI|**14＝13通过／1用户批准的键盘跳过／0失败，1131.923**；跳过不算通过。|
+
+独立手动开发工作流 [../.github/workflows/ios-dev.yml](../.github/workflows/ios-dev.yml) 已实际实现：明确选择 **macos-15／Xcode16.4**，支持精确类／方法，核对xcresult实际执行树、请求项和计数，**零执行、全跳过、拼错选择器不能冒充成功**；相关本地 **32项Node测试通过**。**尚未加入SPM／DerivedData缓存，不承诺9秒完整开发循环**。开发检查不替代原完整发布模型／App／UI／设备门槛，详见 [NATIVE_DEVELOPMENT_CHECKS.md](NATIVE_DEVELOPMENT_CHECKS.md)。上述测试耗时均非手机性能，也不能相加冒充两次完整CI总墙钟。
+
+### build34 最终发布与本地完整核验
+
+|资产／核验|实际结果|
+|---|---|
+|公开Release|[ci-37782669079-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37782669079-1)，ID **406888863**；**2026-10-08T13:58:00Z** 发布，**9资产、prerelease、非draft**。|
+|最终IPA|asset **621985354**；[../build/device-download/37782669079/LocalImageIQ-0.12.1-build34-iphoneos-unsigned.ipa](../build/device-download/37782669079/LocalImageIQ-0.12.1-build34-iphoneos-unsigned.ipa)，**1,419,698,565 bytes**。|
+|实际全文件流式SHA-256|**`29b5dafbbeb7f3f9b92cfe46760e66c5e3daec8543129496c92ad99dd6ef0277`**；已完整下载并核验，不只是远端manifest声明。|
+|完整归档校验|**7-Zip26.04全量CRC PASS**：**11目录、30文件，解压后1,568,502,046 bytes**。|
+|下载记录|[../build/device-download/37782669079/release-fetch-74c96fad-93bb-4364-9c45-8c16211e9ffb.json](../build/device-download/37782669079/release-fetch-74c96fad-93bb-4364-9c45-8c16211e9ffb.json)。|
+|设备核验报告／IPA小型元数据|**0.12.1／34、arm64 Release、未签名、Xcode16.4／SDK18.5、最低iOS17**。SigLIP768、Places、图像策略、schema及相关身份沿用；**未做跨版本完整模型权重字节比较**。|
+
+原IPA完整性不证明Sideloadly重签包或物理手机已通过。**本轮没有本地UI ZIP下载／哈希核验或新的截图实审**，不沿用build33审图冒充build34诊断卡视觉验收。
+
+### build34 手机交接
+
+用**原Sideloadly账号／原有效Bundle ID覆盖安装一次**，不卸载、不清库、不为升级重索引、不重置授权。正常打开App；若仍失败，**只发一张新同步卡带SS短码的截图，现在不要求再手动重新同步或反复重试**。无需调试工具、旧日志或实际删除照片。手机根因仍未知，下一步依据新码定位；安装见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
+
+以上是既有执行与交付记录；本次只编辑指定四份文档，没有运行终端、Git、CI、测试、下载、解包或重新审图。
+
+## 完整历史正文（截至build33）
+
+**本页原总标题更新为build34，原Current33仅改为Historical；其余build33及所有更早正文、历史说明和尾部原样保留。旧“当前／本轮”、诊断边界、发布例外与安装要求仅对应历史，现行状态以顶部build34为准。**
+
+---
+
+## Historical: 0.12.0 (build 33) — 自动增量同步与简约清理页；第六次 SUCCESS，含用户批准的单项 UI 例外
 
 **DELIVERED／PASS-PACKAGE／USER-APPROVED EXCEPTION／PENDING-DEVICE。**用户已批准全部本轮功能；解释搜索页拖动收起键盘后，最新明确回复「**可以了算通过吧**」。最终源码 **`dfc65208fae0ecd0982aab5152b0b039ff8f30e9`**，[run 37752566636](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37752566636)／[job 113229119465](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37752566636/job/113229119465) **第六次整体验证 SUCCESS；前五次 FAILED**。
 
