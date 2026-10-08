@@ -19,6 +19,9 @@ struct SimilarPhotoDeletionIntent: Identifiable, Sendable {
 final class SimilarPhotoCleanupState: ObservableObject {
     @Published var threshold: Float = SimilarPhotoGroupingPolicy.defaultThreshold {
         didSet {
+            // Programmatic/legacy callers still commit immediately. The slider
+            // uses setDraftThreshold instead, including while a read is active.
+            draftThreshold = threshold
             guard threshold != oldValue else { return }
             SimilarCleanupPreferences.save(threshold: threshold, in: preferences)
             let seen = hasEnteredPage || autoAttemptConsumed || hasCompletedResult
@@ -30,7 +33,10 @@ final class SimilarPhotoCleanupState: ObservableObject {
             }
         }
     }
+    @Published private(set) var draftThreshold: Float = SimilarPhotoGroupingPolicy.defaultThreshold
+    @Published private(set) var resultThreshold: Float?
     @Published private(set) var groups: [SimilarPhotoGroup] = []
+    @Published private(set) var displayGroups: [SimilarPhotoGroup] = []
     @Published private(set) var progress = SimilarPhotoGroupingProgress()
     @Published private(set) var isGrouping = false
     @Published private(set) var isRestoring = false
@@ -53,6 +59,12 @@ final class SimilarPhotoCleanupState: ObservableObject {
 
     var selectedCount: Int { selectedIDs.count }
     var canChangeThreshold: Bool { !isDeleting }
+    var hasPendingThresholdChange: Bool { draftThreshold != threshold }
+    var canUpdateResults: Bool {
+        isForeground && (!hasEnteredPage || (isPageVisible && pageReady))
+            && !isGrouping && !isRestoring && !isDeleting && !isValidatingSelection
+            && (!hasScanned || needsRegroup || hasPendingThresholdChange || hasStaleIndexRevision)
+    }
     var selectionSessionID: UUID? { sessionID }
     var orderedSelectedPhotos: [IndexedPhoto] {
         groups.flatMap(\.photos).filter { selectedIDs.contains($0.id) }
@@ -61,8 +73,11 @@ final class SimilarPhotoCleanupState: ObservableObject {
     private let grouping: any SimilarPhotoGrouping
     private let deletion: any PhotoDeleting
     private let preferences: UserDefaults?
+    private let indexAccess: IndexAccessCoordinator?
     // Validators belong to this exact published result, never a later query.
     private var result: SimilarPhotoGroupingResult?
+    private var resultIndexRevision: UInt64?
+    private var displayNumbers: [String: Int] = [:]
     private var sessionID: UUID?
     private var generation = UUID()
     private var groupingTaskID: UUID?
@@ -92,11 +107,15 @@ final class SimilarPhotoCleanupState: ObservableObject {
         let result: SimilarPhotoGroupingResult
     }
 
-    init(grouping: any SimilarPhotoGrouping, deletion: any PhotoDeleting, preferences: UserDefaults? = nil) {
+    init(grouping: any SimilarPhotoGrouping, deletion: any PhotoDeleting, preferences: UserDefaults? = nil,
+         indexAccess: IndexAccessCoordinator? = nil) {
         self.grouping = grouping
         self.deletion = deletion
         self.preferences = preferences
-        self.threshold = SimilarCleanupPreferences.threshold(in: preferences)
+        self.indexAccess = indexAccess
+        let saved = SimilarCleanupPreferences.threshold(in: preferences)
+        self.threshold = saved
+        self.draftThreshold = saved
     }
 
     deinit {
@@ -104,6 +123,48 @@ final class SimilarPhotoCleanupState: ObservableObject {
         selectionTask?.cancel()
         // Never cancel mutationTask: it retains its service independently and
         // awaits the real outcome, including after this controller is released.
+    }
+
+    func displayNumber(for groupID: String) -> Int? { displayNumbers[groupID] }
+
+    /// Editing is not a commit, persistence write or request to recompute. An
+    /// existing result (even one finishing now) keeps its requested threshold.
+    func setDraftThreshold(_ value: Float) {
+        guard canChangeThreshold, draftThreshold != value else { return }
+        cancelRangeSelection()
+        pendingDeletion = nil
+        draftThreshold = value
+    }
+
+    /// UI-only explicit commit. Unlike legacy scan(), repeated taps cannot
+    /// replace/cancel the currently running read or queue another computation.
+    func updateResults() {
+        guard canUpdateResults else { return }
+        // A failed/rolled-back writer advances revision without a commit event.
+        // Clear old selection and choose cache restore before starting this read.
+        if hasStaleIndexRevision { indexSourceChanged() }
+        do {
+            try SimilarPhotoGroupingPolicy.validate(threshold: draftThreshold)
+        } catch {
+            recordFailure(SimilarCleanupDiagnostic(phase: .compute, code: .invalidIndex), operation: .group)
+            return
+        }
+        cancelRangeSelection()
+        let restoreUnchangedThreshold = needsRegroup && !hasPendingThresholdChange && resultThreshold == threshold
+        threshold = draftThreshold
+        if restoreUnchangedThreshold {
+            // An index revision can change for irrelevant metadata. On this
+            // explicit request only, let the backend compare its full cache key
+            // before paying for pairwise grouping again. No commit-triggered work.
+            autoAttemptConsumed = true
+            restoreNeeded = false
+            invalidateRead()
+            message = nil
+            deletionNotice = nil
+            startRead(restoring: true, mayCompute: true, recomputeStale: true)
+        } else {
+            scan()
+        }
     }
 
     func scan() {
@@ -177,7 +238,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
 
     /// Both restore and grouping share a retained drain chain. The missing-cache
     /// branch groups inline, never calls scan() from a task that scan must join.
-    private func startRead(restoring: Bool, mayCompute: Bool) {
+    private func startRead(restoring: Bool, mayCompute: Bool, recomputeStale: Bool = false) {
         failureDiagnostic = nil
         failureOperation = nil
         let predecessor = groupingTask
@@ -185,10 +246,10 @@ final class SimilarPhotoCleanupState: ObservableObject {
         let requestedThreshold = threshold
         generation = token
         groupingTaskID = token
-        requiresVisiblePage = restoring
+        requiresVisiblePage = restoring && hasEnteredPage
         isRestoring = restoring
         isGrouping = !restoring
-        groupingTask = Task { @MainActor [weak self, grouping = self.grouping] in
+        groupingTask = Task { @MainActor [weak self, grouping = self.grouping, indexAccess = self.indexAccess] in
             defer { self?.finishGrouping(token) }
             // Keep the entire cancelled tail, including queued replacements.
             // An uncooperative read must finish before another one can begin.
@@ -198,6 +259,13 @@ final class SimilarPhotoCleanupState: ObservableObject {
             // computation and publication must not be mislabeled as restore.
             var operation: SimilarCleanupOperation = restoring ? .restore : .group
             do {
+                // Hold one front-read lease across restore, an optional missing
+                // cache computation, off-main validation and MainActor publish.
+                let lease = try await indexAccess?.acquireRead()
+                defer { lease?.release() }
+                try Task.checkCancellation()
+                guard self?.isCurrent(token) == true else { return }
+                let revision = indexAccess?.revision
                 if restoring {
                     let restored = try await grouping.restore(threshold: requestedThreshold)
                     try Task.checkCancellation()
@@ -205,11 +273,15 @@ final class SimilarPhotoCleanupState: ObservableObject {
                     switch restored {
                     case .restored(let snapshot):
                         operation = .publication
-                        try await self?.publish(snapshot, threshold: requestedThreshold, token: token)
+                        try await self?.publish(snapshot, threshold: requestedThreshold, token: token, indexRevision: revision)
                         return
                     case .stale:
-                        self?.needsRegroup = true
-                        return
+                        guard recomputeStale else {
+                            self?.needsRegroup = true
+                            return
+                        }
+                        self?.isRestoring = false
+                        self?.isGrouping = true
                     case .missing:
                         guard mayCompute else {
                             self?.needsRegroup = true
@@ -225,7 +297,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
                 }
                 try Task.checkCancellation()
                 operation = .publication
-                try await self?.publish(snapshot, threshold: requestedThreshold, token: token)
+                try await self?.publish(snapshot, threshold: requestedThreshold, token: token, indexRevision: revision)
             } catch {
                 guard let self, self.isCurrent(token), !Task.isCancelled else { return }
                 self.progress = SimilarPhotoGroupingProgress()
@@ -240,7 +312,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     private func publish(_ snapshot: SimilarPhotoGroupingResult, threshold requestedThreshold: Float,
-                         token: UUID) async throws {
+                         token: UUID, indexRevision: UInt64?) async throws {
         do {
             guard isCurrent(token) else { return }
             guard snapshot.threshold == requestedThreshold else {
@@ -253,9 +325,14 @@ final class SimilarPhotoCleanupState: ObservableObject {
             guard isCurrent(token), threshold == requestedThreshold else { return }
             // No suspension between the cheap authority fence and publication.
             try snapshot.validatePublicationEpoch()
+            guard indexRevisionIsCurrent(indexRevision) else { return }
             result = snapshot
+            resultIndexRevision = indexRevision
+            resultThreshold = requestedThreshold
             sessionID = token
             groups = snapshot.groups
+            displayGroups = SimilarGroupPresentation.sortedGroups(snapshot.groups)
+            displayNumbers = Dictionary(uniqueKeysWithValues: displayGroups.enumerated().map { ($0.element.id, $0.offset + 1) })
             candidateCount = snapshot.candidateCount
             staleCount = snapshot.staleCount
             unindexedCount = snapshot.unindexedCount
@@ -270,6 +347,9 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     func toggleSelection(_ id: String) {
+        let lease = indexAccess?.tryRead()
+        guard indexAccess == nil || lease != nil else { return }
+        defer { lease?.release() }
         guard canSelect, let result,
               groups.contains(where: { $0.photos.contains(where: { $0.id == id }) }) else { return }
         do {
@@ -283,6 +363,9 @@ final class SimilarPhotoCleanupState: ObservableObject {
     /// Adds ALL members, including the last remaining photo. The confirmation
     /// carries a warning count rather than silently enforcing a keep-one rule.
     func selectGroup(_ groupID: String) {
+        let lease = indexAccess?.tryRead()
+        guard indexAccess == nil || lease != nil else { return }
+        defer { lease?.release() }
         guard canSelect, let result, let group = groups.first(where: { $0.id == groupID }) else { return }
         let ids = group.photos.map(\.id)
         do {
@@ -298,6 +381,9 @@ final class SimilarPhotoCleanupState: ObservableObject {
     /// Captures committed state only. Hover/drag updates stay in the pure UI
     /// model; this entry performs only an epoch check, never a PhotoKit batch.
     func beginRangeSelection(groupID: String) -> UUID? {
+        let lease = indexAccess?.tryRead()
+        guard indexAccess == nil || lease != nil else { return nil }
+        defer { lease?.release() }
         guard canSelect, let result, let sessionID,
               let group = groups.first(where: { $0.id == groupID }) else { return nil }
         do {
@@ -333,17 +419,27 @@ final class SimilarPhotoCleanupState: ObservableObject {
         let predecessor = selectionTask
         isValidatingSelection = true
         selectionTaskID = token
-        selectionTask = Task { @MainActor [weak self] in
+        selectionTask = Task { @MainActor [weak self, indexAccess = self.indexAccess] in
             defer { self?.finishSelectionTask(token) }
             // Retain cancelled predecessors, even queued ones. New actions may
             // invalidate them immediately, but cannot lose their drain handles.
             await predecessor?.value
             guard !Task.isCancelled, self?.isCurrentSelection(capture) == true else { return }
+            var lease: IndexAccessCoordinator.Lease?
+            // Keep the lease through error handling too: releasing to a queued
+            // writer first would change revision and mask a genuine failure.
+            defer { lease?.release() }
             do {
+                lease = try await indexAccess?.acquireRead()
+                try Task.checkCancellation()
+                // Same canSelect authority gate, excluding only this capture's
+                // own isSelecting flag; queued writes may have changed revision.
+                guard self?.isCurrentSelection(capture) == true else { return }
                 try await Self.validateSelectionPhotos(changedIDs, result: capture.result)
                 try Task.checkCancellation()
                 guard let self, self.isCurrentSelection(capture) else { return }
                 try capture.result.validatePublicationEpoch()
+                guard self.indexRevisionIsCurrent(self.resultIndexRevision) else { return }
                 // No suspension between the last fence and the single publish.
                 self.selectedIDs = desired
                 self.pendingDeletion = nil
@@ -371,6 +467,9 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     func prepareDeletion() {
+        let lease = indexAccess?.tryRead()
+        guard indexAccess == nil || lease != nil else { return }
+        defer { lease?.release() }
         guard canSelect, let result, let sessionID else { return }
         guard !selectedIDs.isEmpty else {
             pendingDeletion = nil
@@ -394,6 +493,11 @@ final class SimilarPhotoCleanupState: ObservableObject {
     func cancelDeletionConfirmation() { pendingDeletion = nil }
 
     func confirmDeletion(_ intent: SimilarPhotoDeletionIntent) {
+        // Only synchronous preflight is a source-index read. Do not retain the
+        // lease in the Photos task; its existing service owns all Photos checks.
+        let lease = indexAccess?.tryRead()
+        guard indexAccess == nil || lease != nil else { return }
+        defer { lease?.release() }
         guard canSelect, let result, let pending = pendingDeletion,
               pending.id == intent.id else { return }
         // Reject stale/altered confirmation values, even if their UUID was copied.
@@ -433,6 +537,30 @@ final class SimilarPhotoCleanupState: ObservableObject {
                 self?.finishDeletion(message: text)
             }
         }
+    }
+
+    /// Index commits are not Photos permission events. Keep the completed view
+    /// and its navigation identity, but never keep its selection authority.
+    /// The parent calls this separately from the Photos/library epoch callback.
+    func indexSourceChanged() {
+        // A running front read owns its lease through publication. If it is
+        // still queued, it will capture the new revision after obtaining access.
+        guard !isGrouping, !isRestoring else { return }
+        // A delayed parent callback may follow a fresh cache publication. A
+        // queued (not granted) writer does not make that result revision stale.
+        if indexAccess != nil, result != nil, indexRevisionIsCurrent(resultIndexRevision) { return }
+        // Index sync before the first cleanup entry must not consume first-use
+        // restore/missing-cache computation. No result exists to invalidate yet.
+        guard hasCompletedResult || hasScanned else { return }
+        cancelRangeSelection()
+        generation = UUID()
+        result = nil
+        resultIndexRevision = nil
+        selectedIDs = []
+        pendingDeletion = nil
+        needsRegroup = true
+        autoAttemptConsumed = true
+        restoreNeeded = false
     }
 
     /// Photos observations invalidate only READ state, including during deletion.
@@ -475,13 +603,27 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     var canSelect: Bool {
+        canSelectResult && !isSelecting && (indexAccess?.canReadImmediately ?? true)
+    }
+
+    private var canSelectResult: Bool {
         isForeground && (!hasEnteredPage || (isPageVisible && pageReady))
-            && !isGrouping && !isRestoring && !needsRegroup && !isDeleting && !isSelecting && result != nil
+            && !isGrouping && !isRestoring && !needsRegroup && !isDeleting && result != nil
+            && !hasPendingThresholdChange && indexRevisionIsCurrent(resultIndexRevision)
+    }
+
+    private var hasStaleIndexRevision: Bool {
+        guard let indexAccess, let resultIndexRevision else { return false }
+        return resultIndexRevision != indexAccess.revision
+    }
+
+    private func indexRevisionIsCurrent(_ revision: UInt64?) -> Bool {
+        guard let indexAccess else { return true }
+        return revision == indexAccess.revision && !indexAccess.isWriting
     }
 
     private func isCurrentSelection(_ capture: RangeSelectionCapture) -> Bool {
-        isForeground && (!hasEnteredPage || (isPageVisible && pageReady))
-            && !isGrouping && !isRestoring && !needsRegroup && !isDeleting && isSelecting
+        canSelectResult && isSelecting
             && rangeSelection?.token == capture.token
             && sessionID == capture.sessionID && generation == capture.generation
             && selectedIDs == capture.baseSelectedIDs
@@ -524,8 +666,12 @@ final class SimilarPhotoCleanupState: ObservableObject {
         groupingTask?.cancel()
         // Retain the tail until finishGrouping; later explicit scans must drain it.
         result = nil
+        resultIndexRevision = nil
+        resultThreshold = nil
         sessionID = nil
         groups = []
+        displayGroups = []
+        displayNumbers = [:]
         selectedIDs = []
         pendingDeletion = nil
         progress = SimilarPhotoGroupingProgress()

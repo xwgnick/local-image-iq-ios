@@ -631,16 +631,18 @@ final class PhotoIndexWorkerTests: XCTestCase {
         XCTAssertFalse(revoked.authorizedCountKnown)
         XCTAssertEqual(revoked.indexedCount, 1)
         XCTAssertEqual(try diskSnapshot(context.directory), beforeRevocationRefresh)
-        // The manual path retains its existing reconcile-before-permission rule.
+        // Revocation must not turn an unreadable enumeration into an empty
+        // authorized library and erase already committed image/place records.
         do {
             _ = try await context.worker.index(networkAllowed: false) { _ in }
-            XCTFail("Manual indexing with revoked permission must fail after reconciliation.")
+            XCTFail("Manual indexing with revoked permission must fail before reconciliation.")
         } catch AppFailure.permission { }
         catch { XCTFail("Unexpected failure: \(error)") }
         let remaining = try await context.store.records(modelVersion: cacheVersion)
         let place = try await context.store.place(text: "Photo taken in Kept Place.", modelVersion: cacheVersion)
-        XCTAssertTrue(remaining.isEmpty)
-        XCTAssertNil(place)
+        XCTAssertEqual(remaining.map(\.photo.id), ["kept"])
+        XCTAssertNotNil(place)
+        XCTAssertEqual(try diskSnapshot(context.directory), beforeRevocationRefresh)
     }
 
     func testDeletedAndLimitedAccessRowsNeverBecomeHitsOrPolluteLocationMeanAndRemainStored() async throws {

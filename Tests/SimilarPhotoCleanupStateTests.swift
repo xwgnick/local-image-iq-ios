@@ -204,7 +204,7 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
             let service = CleanupGrouping { _, threshold in
                 if mode == 1 { throw cleanupPrivateError() }
                 if mode == 2 { throw CancellationError() }
-                return cleanupResult(threshold: mode == 3 ? 0.90 : threshold, validation: validation)
+                return cleanupResult(threshold: mode == 3 ? 0.91 : threshold, validation: validation)
             }
             let state = SimilarPhotoCleanupState(grouping: service, deletion: CleanupDeletion())
             await scan(state)

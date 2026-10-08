@@ -3,6 +3,8 @@ import Foundation
 
 /// Store integer slider ticks only. Do not let UserDefaults' convenience getters
 /// coerce strings, booleans, fractional numbers or non-finite values into settings.
+/// A new policy default applies only when no valid saved tick exists. Keep v1
+/// (including 80) unchanged; initialization and draft edits never rewrite it.
 enum SimilarCleanupPreferences {
     static let thresholdKey = "similarCleanupThreshold.v1"
 

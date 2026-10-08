@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import ImageIQCore
 
 @MainActor
@@ -14,6 +15,8 @@ struct ContentView: View {
     @State private var albumActionIDs: [String] = []
     @State private var showLibrary = false
     @State private var showSettings = false
+    @State private var cleanupSurfacePresented = false
+    @State private var keyboardVisible = false
     @State private var photoWriteInFlight = false
     @State private var compactGrid = false
     @State private var visiblePageBoundary: ResultPageBoundaryValue?
@@ -26,6 +29,7 @@ struct ContentView: View {
         showLibrary || showSettings || showFilters || showAlbumAction
             || photoActions.share != nil || photoActions.sharingPresented
             || state.selection != nil || photoActions.message != nil
+            || cleanupSurfacePresented
     }
     private var isSearchPageAccessible: Bool { isSearchPageActive && !hasPresentedSurface }
 
@@ -38,8 +42,9 @@ struct ContentView: View {
         _photoActions = StateObject(wrappedValue: ResultPhotoActionsState(
             service: photoActionService ?? SystemPhotoLibraryActions(library: state.library)))
         _similarCleanup = StateObject(wrappedValue: similarCleanupState ?? SimilarPhotoCleanupState(
-            grouping: SimilarPhotoGroupingService(library: state.library),
-            deletion: SystemPhotoDeletionService(library: state.library), preferences: cleanupPreferences))
+            grouping: SimilarPhotoGroupingService(library: state.library, encoders: state.groupingEncoders),
+            deletion: SystemPhotoDeletionService(library: state.library), preferences: cleanupPreferences,
+            indexAccess: state.indexAccess))
     }
 
     var body: some View {
@@ -48,17 +53,36 @@ struct ContentView: View {
             SimilarPhotoCleanupSheet(state: similarCleanup, appState: state,
                                     embedded: true, isPageActive: navigation.page == .cleanup,
                                     accessibilityActive: !hasPresentedSurface,
-                                    openLibrary: openLibrary, openSettings: openSettings)
+                                    openLibrary: openLibrary, openSettings: openSettings,
+                                    onPresentedSurfaceChanged: { cleanupSurfacePresented = $0 })
                 .modifier(RetainedPrimaryPage(active: navigation.page == .cleanup))
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            PrimaryNavigationBar(page: navigation.page, switchingDisabled: switchingDisabled) { page in
-                guard !switchingDisabled else { return }
-                isSearchFocused = false
-                navigation.select(page)
+            VStack(spacing: 0) {
+                // Always mount the observing child. AppState does not forward
+                // photoSync publications, including completion auto-hide.
+                PhotoSyncToast(state: state.photoSync,
+                               isPresented: !hasPresentedSurface && !keyboardVisible)
+                PrimaryNavigationBar(page: navigation.page, switchingDisabled: switchingDisabled) { page in
+                    guard !switchingDisabled else { return }
+                    isSearchFocused = false
+                    navigation.select(page)
+                }
             }
-            // These SwiftUI controls live outside either page's native scope.
+            // Outside both native page scopes. Inner selection insets remain
+            // above this entire stack, never underneath the sync card.
             .accessibilityHidden(hasPresentedSurface)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            keyboardVisible = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardVisible = false
+        }
+        .onChange(of: state.indexSourceEpoch) { _, _ in
+            // An index commit is not a Photos permission/revision notification.
+            // Keep current search results and cleanup navigation intact.
+            similarCleanup.indexSourceChanged()
         }
         .onChange(of: navigation.page) { _, _ in isSearchFocused = false }
         .sheet(isPresented: $showLibrary) { LibrarySheet(state: state) }
@@ -275,6 +299,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 20).padding(.vertical, 8)
         .foregroundStyle(IQStyle.text).tint(IQStyle.accent).background(IQStyle.background)
+        .syncFrame(.selectionToolbar)
     }
 
     private var selectionActionLayout: AnyLayout {

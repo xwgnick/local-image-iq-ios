@@ -8,6 +8,13 @@ struct CachedPhoto: Sendable {
     let geographyVersion: String
 }
 
+/// Incremental diff metadata for ALL models/IDs; never decodes an embedding.
+struct PhotoSyncMetadata: Sendable {
+    let revision: PhotoRevision
+    let modelVersion: String
+    let hasImageEmbedding: Bool
+}
+
 /// Cleanup identity deliberately excludes places, geography, OCR and SQLite file
 /// layout. Revisions include stale active-model rows for accurate coverage counts.
 struct SimilarGroupingInputSnapshot: Sendable, Equatable {
@@ -333,9 +340,46 @@ actor SQLitePhotoStore {
         }
     }
 
-    func save(_ cached: CachedPhoto) throws {
+    /// Missing databases are normal on first sync. This SELECT-only handle is
+    /// closed before Photos/model preparation or a later writer lease.
+    func syncMetadata() throws -> [String: PhotoSyncMetadata] {
+        guard readOnly else { throw AppFailure.storage("Sync metadata requires a read-only connection.") }
+        defer { connection = nil }
+        try Task.checkCancellation()
+        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent("index.sqlite3").path) else { return [:] }
+        let db = try database()
+        return try db.statement("SELECT id, revision, creation_time, model_version, typeof(image_embedding) = 'blob' AND length(image_embedding) > 0 FROM photos") { statement in
+            var rows: [String: PhotoSyncMetadata] = [:]
+            while try db.next(statement) {
+                try Task.checkCancellation()
+                let id = try db.groupingString(statement, at: 0)
+                let revision = PhotoRevision(id: id, modificationTime: sqlite3_column_double(statement, 1),
+                    creationTime: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2))
+                let model = try db.groupingString(statement, at: 3)
+                guard !id.isEmpty, !id.utf8.contains(0), !model.isEmpty,
+                      revision.modificationTime.isFinite, revision.creationTime?.isFinite != false,
+                      rows[id] == nil else { throw AppFailure.storage("Invalid sync metadata.") }
+                rows[id] = PhotoSyncMetadata(revision: revision, modelVersion: model,
+                                            hasImageEmbedding: sqlite3_column_int(statement, 4) != 0)
+            }
+            try Task.checkCancellation()
+            return rows
+        }
+    }
+
+    func storedPlace(text: String, modelVersion: String) throws -> [Float]? {
+        guard readOnly else { throw AppFailure.storage("Stored place requires a read-only connection.") }
+        defer { connection = nil }
+        try Task.checkCancellation()
+        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent("index.sqlite3").path) else { return nil }
+        do { return try place(text: text, modelVersion: modelVersion) }
+        catch is DecodingError { throw AppFailure.storage("Invalid cached place embedding.") }
+    }
+
+    func save(_ cached: CachedPhoto, validate: @escaping @Sendable () throws -> Void = {}) throws {
         try Task.checkCancellation()
         try requireWritable()
+        try validate()
         let photo = cached.photo
         guard photo.modificationTime.isFinite, photo.creationTime?.isFinite != false,
               !photo.id.isEmpty, !photo.modelVersion.isEmpty else { throw AppFailure.storage("Invalid photo metadata.") }
@@ -343,6 +387,7 @@ actor SQLitePhotoStore {
         if let place = photo.location { try EmbeddingValidation.validateUnit(place.vector) }
         let db = try database()
         try db.transaction {
+            try validate()
             if let place = photo.location {
                 try db.statement("INSERT OR REPLACE INTO places (text, model_version, embedding) VALUES (?, ?, ?)") { statement in
                     try db.bind(place.text, at: 1, to: statement)
@@ -365,18 +410,62 @@ actor SQLitePhotoStore {
                 try db.bind(cached.geographyVersion, at: 7, to: statement)
                 try db.execute(statement)
             }
+            try validate()
             try Task.checkCancellation()
         }
     }
 
-    /// Call ONLY after enumerateAuthorizedImages returns successfully. Cancellation
-    /// rolls the whole reconciliation back; completed indexing writes remain reusable.
-    func reconcile(completeEnumeration: [PhotoRevision]) throws {
+    /// Exact index-row removal only. Caller has validated a complete readable
+    /// Photos scope; a throw at either transaction boundary rolls back places too.
+    @discardableResult
+    func remove(recordIDs: [String], validate: @escaping @Sendable () throws -> Void = {}) throws -> Int {
+        try requireWritable()
+        try Task.checkCancellation()
+        try validate()
+        guard !recordIDs.isEmpty else { return 0 }
+        guard recordIDs.allSatisfy({ !$0.isEmpty && !$0.utf8.contains(0) }) else {
+            throw AppFailure.storage("Invalid record identity.")
+        }
+        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent("index.sqlite3").path) else { return 0 }
+        let db = try database()
+        var removed = 0
+        try db.transaction {
+            try validate()
+            for id in recordIDs {
+                try Task.checkCancellation()
+                try db.statement("DELETE FROM photos WHERE id = ?") { statement in
+                    try db.bind(id, at: 1, to: statement)
+                    try db.execute(statement)
+                }
+                removed += try db.statement("SELECT changes()") { statement in
+                    guard try db.next(statement) else { throw AppFailure.storage("Missing removal count.") }
+                    return Int(sqlite3_column_int64(statement, 0))
+                }
+            }
+            if removed > 0 {
+                try db.exec("""
+                    DELETE FROM places WHERE (text, model_version) IN
+                    (SELECT text, model_version FROM places
+                     EXCEPT SELECT place_text, model_version FROM photos WHERE place_text IS NOT NULL)
+                    """)
+            }
+            try validate()
+            try Task.checkCancellation()
+        }
+        return removed
+    }
+
+    /// Call ONLY after a readable complete enumeration. The caller's captured
+    /// access scope is checked before opening and at both transaction boundaries;
+    /// a failed check rolls back photo AND orphan-place removals.
+    func reconcile(completeEnumeration: [PhotoRevision], validate: @escaping @Sendable () throws -> Void = {}) throws {
         try Task.checkCancellation()
         try requireWritable()
+        try validate()
         let revisions = Dictionary(completeEnumeration.map { ($0.id, $0.modificationTime) }, uniquingKeysWith: { _, last in last })
         let db = try database()
         try db.transaction {
+            try validate()
             let obsolete: [String] = try db.statement("SELECT id, revision FROM photos") { statement in
                 var ids: [String] = []
                 while try db.next(statement) {
@@ -401,6 +490,7 @@ actor SQLitePhotoStore {
                 (SELECT text, model_version FROM places
                  EXCEPT SELECT place_text, model_version FROM photos WHERE place_text IS NOT NULL)
                 """)
+            try validate()
             try Task.checkCancellation()
         }
     }

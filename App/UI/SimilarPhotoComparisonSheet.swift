@@ -76,7 +76,7 @@ struct SimilarPhotoComparisonSheet: View {
             && !cleanup.isGrouping && !cleanup.isDeleting
     }
     private var groupNumber: Int {
-        cleanup.groups.firstIndex(where: { $0.id == group.id }).map { $0 + 1 } ?? 0
+        cleanup.displayNumber(for: group.id) ?? 0
     }
 
     var body: some View {
@@ -92,10 +92,6 @@ struct SimilarPhotoComparisonSheet: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("第\(groupNumber)组 · \(group.photos.count)张")
                                 .font(.headline)
-                            Text("最低相似度 \(String(format: "%.3f", Double(group.minimumSimilarity)))")
-                                .font(.subheadline)
-                                .monospacedDigit()
-                                .foregroundStyle(IQStyle.secondary)
                         }
                         .fixedSize(horizontal: false, vertical: true)
                         HStack(alignment: .top, spacing: 12) {
@@ -104,7 +100,8 @@ struct SimilarPhotoComparisonSheet: View {
                             pane(title: "右侧", photoID: rightID, selection: rightSelection,
                                  width: width, height: height, requested: requested, isLeft: false)
                         }
-                        Text("仅勾选待删除，返回后统一确认")
+                            Text(cleanup.hasPendingThresholdChange || cleanup.needsRegroup
+                                ? "当前结果仅供浏览，更新分组后再选片清理。" : "仅勾选待删除，返回后统一确认")
                             .font(.footnote)
                             .foregroundStyle(IQStyle.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -213,7 +210,7 @@ struct SimilarPhotoComparisonSheet: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(IQStyle.accent)
-            .disabled(!isCurrentGroup || scenePhase == .background)
+            .disabled(!isCurrentGroup || !cleanup.canSelect || scenePhase == .background)
             .accessibilityLabel("\(title)照片，勾选删除")
             .accessibilityValue(cleanup.selectedIDs.contains(photoID) ? "已勾选" : "未勾选")
             .accessibilityHint("仅更改待删除选择，返回后统一确认")

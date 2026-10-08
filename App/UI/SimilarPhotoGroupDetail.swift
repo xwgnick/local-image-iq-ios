@@ -109,6 +109,12 @@ struct SimilarPhotoGroupDetail: View {
             && browser.comparisonGroup == nil && browser.viewer == nil && browser.zoomFlight == nil
     }
     private var selected: Int { group.photos.filter { state.selectedIDs.contains($0.id) }.count }
+    // canSelect is false during an accepted gesture's own validation. Preserve
+    // that gesture, but immediately switch pending/stale results to browsing.
+    private var selectionAvailable: Bool {
+        state.canSelect || (state.isSelecting && !state.hasPendingThresholdChange && !state.needsRegroup)
+    }
+    private var effectiveSelectionMode: Bool { selectionMode && selectionAvailable }
 
     var body: some View {
         GeometryReader { geometry in
@@ -138,16 +144,16 @@ struct SimilarPhotoGroupDetail: View {
                     SimilarPhotoGroupGrid(
                         photos: group.photos, groupNumber: number, sessionID: route.sessionID,
                         initialPhotoID: route.photoID, selectedIDs: state.selectedIDs,
-                        selectionMode: selectionMode, isSelecting: state.isSelecting, enabled: enabled,
+                        selectionMode: effectiveSelectionMode, isSelecting: state.isSelecting, enabled: enabled,
                         hiddenPhotoID: browser.zoomFlight?.photoID,
                         thumbnail: thumbnail,
-                        begin: { guard enabled else { return nil }; return state.beginRangeSelection(groupID: group.id) },
+                        begin: { guard enabled && state.canSelect else { return nil }; return state.beginRangeSelection(groupID: group.id) },
                         finish: { token, ids in
                             guard current else { return }
                             state.finishRangeSelection(token: token, selectedInGroup: ids)
                         },
                         cancel: { if current { state.cancelRangeSelection() } },
-                        toggle: { id in if enabled && !state.isSelecting { state.toggleSelection(id) } },
+                        toggle: { id in if enabled && state.canSelect { state.toggleSelection(id) } },
                         browse: { id in if enabled && !state.isSelecting { browser.viewPhoto(id, in: group) } },
                         initialTarget: { id, frame in browser.didLayoutTarget(routeID: route.id, photoID: id, frame: frame) }
                     )
@@ -156,6 +162,9 @@ struct SimilarPhotoGroupDetail: View {
             }
         }
         .background(IQStyle.background)
+        .onChange(of: selectionAvailable) { _, available in
+            if !available { selectionMode = false }
+        }
     }
 
     private var header: some View {
@@ -163,18 +172,17 @@ struct SimilarPhotoGroupDetail: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("第\(number)组 · \(group.photos.count)张").font(.headline)
-                    Text("最低相似度 \(String(format: "%.3f", Double(group.minimumSimilarity)))")
-                        .font(.caption).foregroundStyle(IQStyle.secondary).monospacedDigit()
-                    Text("已选\(selected)张 · 未选\(group.photos.count - selected)张")
-                        .font(.caption).foregroundStyle(IQStyle.secondary)
+                    if selected > 0 {
+                        Text("已选\(selected)张").font(.caption).foregroundStyle(IQStyle.secondary)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Button(selectionMode ? "完成选择" : "选择") {
+                Button(effectiveSelectionMode ? "完成选择" : "选择") {
                     state.cancelRangeSelection()
                     selectionMode.toggle()
                 }
                 .frame(minHeight: 44)
-                .disabled(!enabled || state.isSelecting)
+                .disabled(!enabled || !state.canSelect)
                 .accessibilityIdentifier("similar-cleanup-selection-mode")
             }
             let layout = dynamicTypeSize.isAccessibilitySize
@@ -183,16 +191,22 @@ struct SimilarPhotoGroupDetail: View {
             layout {
                 Button("全选本组") { selectWholeGroup(Set(group.photos.map(\.id))) }
                     .frame(minHeight: 44)
+                    .disabled(!state.canSelect)
                     .accessibilityIdentifier("similar-cleanup-group-\(number)-select-group")
                 Button("清空本组") { selectWholeGroup([]) }
                     .frame(minHeight: 44)
+                    .disabled(!state.canSelect)
                     .accessibilityIdentifier("similar-cleanup-clear-group")
                 Button("对比", systemImage: "rectangle.split.2x1") { browser.comparisonGroup = group }
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("similar-cleanup-group-\(number)-compare")
             }
             .disabled(!enabled || state.isSelecting)
-            if selectionMode {
+            if state.hasPendingThresholdChange || state.needsRegroup {
+                Text("当前结果仅供浏览，更新分组后再选片清理。")
+                    .font(.caption).foregroundStyle(IQStyle.secondary)
+            }
+            if effectiveSelectionMode {
                 Text("横向起拖可连续勾选或取消；纵向起拖仍可滚动。仅在下方确认后删除。")
                     .font(.caption).foregroundStyle(IQStyle.secondary)
             }
@@ -204,7 +218,7 @@ struct SimilarPhotoGroupDetail: View {
     }
 
     private func selectWholeGroup(_ ids: Set<String>) {
-        guard enabled, !state.isSelecting, let token = state.beginRangeSelection(groupID: group.id) else { return }
+        guard enabled, state.canSelect, let token = state.beginRangeSelection(groupID: group.id) else { return }
         // Whole-group operations use the same off-main batch validation as a
         // drag. Never run hundreds of synchronous toggle/selectGroup checks.
         state.finishRangeSelection(token: token, selectedInGroup: ids)

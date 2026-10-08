@@ -674,7 +674,9 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
         cell.accessibilityLabel = "第\(configuration.groupNumber)组，照片\(index.item + 1)"
         cell.accessibilityValue = selected ? "已勾选待删除" : "未勾选"
         cell.accessibilityHint = configuration.selectionMode ? "轻点切换待删除选择" : "查看完整照片"
-        cell.accessibilityTraits = selected ? [.button, .selected] : [.button]
+        var traits: UIAccessibilityTraits = selected ? [.button, .selected] : [.button]
+        if !configuration.enabled || configuration.isSelecting { traits.insert(.notEnabled) }
+        cell.accessibilityTraits = traits
         cell.accessibilityIdentifier = "similar-cleanup-detail-photo-\(index.item + 1)"
     }
     private func refreshVisibleCells() {

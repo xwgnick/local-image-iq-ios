@@ -154,7 +154,7 @@ extension PhotoWorkServicing {
 /// Called by AppState's serialized task chain. Actor isolation alone does NOT
 /// serialize whole async jobs: the caller waits for a cancelled predecessor before
 /// starting the next job, including time spent awaiting Photos/encoders/storage.
-actor PhotoIndexWorker: PhotoWorkServicing {
+actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
     static let indexingWorkerCount = 20
 
     /// AppState calls only after its cancelled predecessor has drained. The
@@ -166,6 +166,8 @@ actor PhotoIndexWorker: PhotoWorkServicing {
 
     private let library: any PhotoLibraryIndexing
     private let encoders: any PhotoEncoding
+    private let indexAccess: IndexAccessCoordinator?
+    private var synchronizing = false
     private let textRecognizer: (any PhotoTextRecognizing)?
     private let filtering: (any PhotoSearchFiltering)?
     private let suppliedDirectory: URL?
@@ -184,9 +186,11 @@ actor PhotoIndexWorker: PhotoWorkServicing {
          metadataLoader: @escaping @Sendable () -> PlacePackMetadata = { PlacePackMetadata.bundled() },
          boundaryLoader: @escaping @Sendable () -> OfflinePlaceResolver = { OfflinePlaceResolver.bundled() },
          filtering: (any PhotoSearchFiltering)? = nil,
-         textRecognizer: (any PhotoTextRecognizing)? = nil) {
+         textRecognizer: (any PhotoTextRecognizing)? = nil,
+         indexAccess: IndexAccessCoordinator? = nil) {
         self.library = library
         self.encoders = encoders
+        self.indexAccess = indexAccess
         if let textRecognizer { self.textRecognizer = textRecognizer }
         else if let realLibrary = library as? PhotoLibraryClient {
             self.textRecognizer = VisionPhotoTextRecognizer(library: realLibrary)
@@ -297,16 +301,94 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         }
     }
 
-    private func reconcile() async throws -> [PhotoRevision] {
+    /// One access epoch for the entire manual task, captured BEFORE any await or
+    /// enumeration. Unlike automatic sync, manual indexing keeps its historical
+    /// snapshot order and final fresh reconciliation (ordinary per-photo changes
+    /// are failures, not a new whole-scan fatal policy).
+    private struct ManualIndexAccess: Sendable {
+        let library: any PhotoLibraryIndexing
+        let authorization: Int?
+        let generation: UInt64?
+
+        init(library: any PhotoLibraryIndexing) throws {
+            try Task.checkCancellation()
+            guard library.canReadImages else { throw AppFailure.permission }
+            self.library = library
+            authorization = library.authorizationStatusRawValue
+            generation = library.changeGeneration
+            try validate()
+        }
+
+        func validate(_ selected: PhotoRevision? = nil) throws {
+            try Task.checkCancellation()
+            guard library.canReadImages else { throw AppFailure.permission }
+            guard library.authorizationStatusRawValue == authorization,
+                  library.changeGeneration == generation else {
+                throw AppFailure.photo("Photo access changed during indexing; refresh and retry.")
+            }
+            if let selected {
+                let current = library.currentRevision(id: selected.id)
+                guard library.canReadImages else { throw AppFailure.permission }
+                guard let current, current == selected,
+                      Data(current.id.utf8) == Data(selected.id.utf8) else {
+                    throw AppFailure.photo("A photo changed or became inaccessible during indexing; refresh and retry.")
+                }
+            }
+            guard library.canReadImages else { throw AppFailure.permission }
+            guard library.authorizationStatusRawValue == authorization,
+                  library.changeGeneration == generation else {
+                throw AppFailure.photo("Photo access changed during indexing; refresh and retry.")
+            }
+            try Task.checkCancellation()
+        }
+    }
+
+    private func reconcile(access: ManualIndexAccess) async throws -> [PhotoRevision] {
+        try access.validate()
         let snapshot = try library.enumerateAuthorizedImages()
-        try Task.checkCancellation()
-        try await storage().reconcile(completeEnumeration: snapshot)
+        // Production's generation covers the full enumeration. Legacy libraries
+        // without one can recheck its captured members without inserting another
+        // enumeration into the established manual prepare/drain lifecycle.
+        let validate: @Sendable () throws -> Void = {
+            try access.validate()
+            if access.generation == nil {
+                for revision in snapshot { try access.validate(revision) }
+            }
+            try access.validate()
+        }
+        try validate()
+        try await storage().reconcile(completeEnumeration: snapshot, validate: validate)
+        try validate()
         placeVectors.removeAll() // Discard memory-only labels from an older authorization snapshot.
         return snapshot
     }
 
     func refresh() async throws -> LibrarySummary {
         try await readiness(prepareModels: false)
+    }
+
+    /// Reentrant while synchronize awaits a callback/prediction. Everything is
+    /// operation-local except cached geography metadata; never use the writer,
+    /// reconcile Photos, load models, inspect vectors, or open the OCR database.
+    func currentSummary() async throws -> LibrarySummary? {
+        try Task.checkCancellation()
+        guard let indexAccess else { throw AppFailure.storage("Automatic sync requires shared index access.") }
+        // This epoch guard does not enumerate, even for an empty stored index.
+        // No authorization must fail, not masquerade as a known count of zero.
+        let access = try ManualIndexAccess(library: library)
+        let manifest = try await encoders.inspectResources()
+        try access.validate()
+        try manifest.validate()
+        let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
+        let metadata = geography()
+        let lease = try await indexAccess.acquireRead()
+        defer { lease.release() }
+        try access.validate()
+        let readonly = try reader()
+        let counts = try await readonly.storedCounts(modelVersion: cacheVersion, geographyVersion: metadata.version)
+        try access.validate()
+        return LibrarySummary(indexedCount: counts.indexed, locatedCount: counts.located,
+                              modelVersion: cacheVersion, placesDescription: metadata.coverageDescription)
     }
 
     func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary {
@@ -374,18 +456,19 @@ actor PhotoIndexWorker: PhotoWorkServicing {
 
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary {
         try Task.checkCancellation()
+        let access = try ManualIndexAccess(library: library)
+        let validate: @Sendable (PhotoRevision?) throws -> Void = { try access.validate($0) }
         residentSearchIndex = nil
         if let searchIndexCache { await searchIndexCache.invalidate() }
-        try Task.checkCancellation()
-        let snapshot = try await reconcile()
-        guard library.canReadImages else { throw AppFailure.permission }
+        try access.validate()
+        let snapshot = try await reconcile(access: access)
         let manifest = try await encoders.prepare()
-        try Task.checkCancellation()
+        try access.validate()
         // The factory supplies exactly indexingWorkerCount image slots, scoped to this index
         // call, with extra image models loaded lazily only on cache misses.
         // Location encoding still uses the single parent-owned text encoder.
         let imageEncoders = try await encoders.makeIndexingImageEncoders()
-        try Task.checkCancellation()
+        try access.validate()
         guard imageEncoders.count == Self.indexingWorkerCount else {
             throw AppFailure.modelContract("Indexing requires exactly \(Self.indexingWorkerCount) image encoder slots.")
         }
@@ -420,7 +503,8 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                 guard group.addTaskUnlessCancelled(operation: {
                     try await Self.prepare(revision, snapshotIndex: snapshotIndex,
                                            imageEncoder: imageEncoder, library: library, store: store,
-                                           cacheVersion: cacheVersion, networkAllowed: networkAllowed)
+                                           cacheVersion: cacheVersion, networkAllowed: networkAllowed,
+                                           validate: validate)
                 }) else { throw CancellationError() }
                 nextSubmit += 1
             }
@@ -432,7 +516,8 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                 pending[item.snapshotIndex] = item
                 while let item = pending.removeValue(forKey: nextCommit) {
                     let outcome = try await indexPrepared(item, resolver: resolver, cacheVersion: cacheVersion,
-                                                          store: store, networkAllowed: networkAllowed)
+                                                          store: store, networkAllowed: networkAllowed,
+                                                          validate: validate)
                     // No counters for speculative work or an uncommitted save.
                     state.record(outcome.place)
                     if outcome.reused { state.reused += 1 }
@@ -463,7 +548,8 @@ actor PhotoIndexWorker: PhotoWorkServicing {
                         guard group.addTaskUnlessCancelled(operation: {
                             try await Self.prepare(revision, snapshotIndex: snapshotIndex,
                                                    imageEncoder: imageEncoder, library: library, store: store,
-                                                   cacheVersion: cacheVersion, networkAllowed: networkAllowed)
+                                                   cacheVersion: cacheVersion, networkAllowed: networkAllowed,
+                                                   validate: validate)
                         }) else { throw CancellationError() }
                         nextSubmit += 1
                     }
@@ -471,8 +557,302 @@ actor PhotoIndexWorker: PhotoWorkServicing {
             }
             try Task.checkCancellation()
         }
-        let current = try await reconcile()
-        return try await summary(snapshot: current, manifest: manifest, resolver: resolver)
+        let current = try await reconcile(access: access)
+        let result = try await summary(snapshot: current, manifest: manifest, resolver: resolver)
+        try access.validate()
+        return result
+    }
+
+    /// Separate worker instance from the foreground queue, sharing its encoders
+    /// and coordinator. The owner cancels/drains this job before manual indexing;
+    /// actor reentrancy alone is NOT an async-job serialization mechanism.
+    func synchronize(networkAllowed: Bool,
+                     progress: @escaping @Sendable (PhotoSyncProgress) async -> Void,
+                     committed: @escaping @Sendable () async -> Void) async throws -> PhotoSyncResult {
+        try Task.checkCancellation()
+        guard let indexAccess else { throw AppFailure.storage("Automatic sync requires shared index access.") }
+        guard !synchronizing else { throw AppFailure.storage("A sync operation is already running.") }
+        synchronizing = true
+        defer { synchronizing = false }
+        var state = PhotoSyncProgress()
+        await progress(state)
+        let scope = try SyncScope(library: library)
+        let manifest = try await encoders.inspectResources()
+        try scope.validate()
+        try manifest.validate()
+        let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: manifest.modelVersion)
+        let metadata = geography()
+        let readonly = try reader()
+        let rows: [String: PhotoSyncMetadata]
+        let readLease = try await indexAccess.acquireRead()
+        do {
+            defer { readLease.release() }
+            try scope.validate()
+            rows = try await readonly.syncMetadata()
+            try scope.validate()
+        }
+        let pending = scope.snapshot.filter { revision in
+            guard let row = rows[revision.id] else { return true }
+            return row.revision != revision || Data(row.revision.id.utf8) != Data(revision.id.utf8)
+                || row.modelVersion != cacheVersion || !row.hasImageEmbedding
+        }
+        // Retire edited vectors even if their replacement later needs iCloud.
+        // Limited access is an index-scope change, not proof of photo deletion.
+        let obsolete = rows.keys.filter { id in
+            guard let current = scope.revisions[id], let row = rows[id] else { return true }
+            return row.revision != current || Data(row.revision.id.utf8) != Data(current.id.utf8)
+                || row.modelVersion != cacheVersion || !row.hasImageEmbedding
+        }.sorted()
+        state.phase = .updating
+        state.total = pending.count
+        await progress(state)
+        try scope.validate(full: true)
+        if !obsolete.isEmpty {
+            let lease = try await indexAccess.acquireWrite()
+            let removed: Int
+            do {
+                defer { lease.release() }
+                try scope.validate(full: true)
+                removed = try await storage().remove(recordIDs: obsolete) { try scope.validate(full: true) }
+            }
+            if removed > 0 {
+                state.removed += removed
+                // Never call a callback which can acquire a read lease while we
+                // still own the writer. Committed changes survive cancellation.
+                await committed()
+                await progress(state)
+            }
+            try scope.validate(full: true)
+        }
+        placeVectors.removeAll()
+        if !pending.isEmpty {
+            let preparedManifest = try await encoders.prepare()
+            try scope.validate()
+            try preparedManifest.validate()
+            guard preparedManifest.modelVersion == manifest.modelVersion else {
+                throw AppFailure.modelContract("Model identity changed during sync.")
+            }
+            let imageEncoders = try await encoders.makeIndexingImageEncoders()
+            try scope.validate()
+            guard imageEncoders.count == Self.indexingWorkerCount else {
+                throw AppFailure.modelContract("Indexing requires exactly \(Self.indexingWorkerCount) image encoder slots.")
+            }
+            let resolver = boundaries()
+            // Same twenty-slot ordered rolling window as manual indexing. No
+            // read/write lease covers pixel acquisition or model computation.
+            try await withThrowingTaskGroup(of: PreparedIndexItem.self) { group in
+                defer { group.cancelAll() } // Structured exit drains late predictions.
+                var submitted = 0
+                var next = 0
+                var ready: [Int: PreparedIndexItem] = [:]
+                func submit(_ index: Int) throws {
+                    try scope.validate(pending[index])
+                    let encoder = imageEncoders[index % Self.indexingWorkerCount]
+                    guard group.addTaskUnlessCancelled(operation: {
+                        try await Self.prepareSync(pending[index], snapshotIndex: index,
+                                                   imageEncoder: encoder, scope: scope,
+                                                   networkAllowed: networkAllowed)
+                    }) else { throw CancellationError() }
+                }
+                while submitted < min(pending.count, Self.indexingWorkerCount) {
+                    try submit(submitted)
+                    submitted += 1
+                }
+                while next < pending.count {
+                    try scope.validate()
+                    guard let item = try await group.next() else { throw CancellationError() }
+                    try scope.validate(item.revision)
+                    ready[item.snapshotIndex] = item
+                    while let item = ready.removeValue(forKey: next) {
+                        let outcome = try await syncOutcome(item, scope: scope, resolver: resolver,
+                                                           cacheVersion: cacheVersion, readonly: readonly,
+                                                           indexAccess: indexAccess, networkAllowed: networkAllowed)
+                        try scope.validate(item.revision)
+                        switch outcome {
+                        case .record(let record):
+                            let lease = try await indexAccess.acquireWrite()
+                            do {
+                                defer { lease.release() }
+                                try scope.validate(item.revision)
+                                try await storage().save(record) { try scope.validate(item.revision) }
+                            }
+                            state.encoded += 1
+                            state.completed += 1
+                            await committed()
+                        case .needsNetwork:
+                            state.needsNetwork += 1
+                            state.completed += 1
+                        case .failed:
+                            state.failed += 1
+                            state.completed += 1
+                        }
+                        await progress(state)
+                        try scope.validate(item.revision)
+                        next += 1
+                        if submitted < pending.count, submitted < next + Self.indexingWorkerCount {
+                            try submit(submitted)
+                            submitted += 1
+                        }
+                    }
+                }
+                try scope.validate()
+            }
+        }
+        // Especially important for injected libraries without a notification
+        // generation, including an empty snapshot: re-enumerate the FULL scope.
+        try scope.validate(full: true)
+        let lease = try await indexAccess.acquireRead()
+        defer { lease.release() }
+        try scope.validate(full: true)
+        let counts = try await readonly.storedCounts(modelVersion: cacheVersion, geographyVersion: metadata.version)
+        try scope.validate(full: true)
+        return PhotoSyncResult(summary: LibrarySummary(
+            authorizedCount: scope.snapshot.count, authorizedCountKnown: true,
+            indexedCount: counts.indexed, locatedCount: counts.located,
+            modelVersion: cacheVersion, placesDescription: metadata.coverageDescription), progress: state)
+    }
+
+    private struct SyncScope: Sendable {
+        let library: any PhotoLibraryIndexing
+        let authorization: Int?
+        let generation: UInt64?
+        let snapshot: [PhotoRevision]
+        let revisions: [String: PhotoRevision]
+
+        init(library: any PhotoLibraryIndexing) throws {
+            try Task.checkCancellation()
+            guard library.canReadImages else { throw AppFailure.permission }
+            self.library = library
+            authorization = library.authorizationStatusRawValue
+            generation = library.changeGeneration
+            snapshot = try library.enumerateAuthorizedImages()
+            revisions = try Self.validated(snapshot)
+            try validate()
+        }
+
+        private static func validated(_ snapshot: [PhotoRevision]) throws -> [String: PhotoRevision] {
+            var values: [String: PhotoRevision] = [:]
+            for revision in snapshot {
+                try Task.checkCancellation()
+                guard !revision.id.isEmpty, !revision.id.utf8.contains(0),
+                      revision.modificationTime.isFinite, revision.creationTime?.isFinite != false,
+                      values[revision.id] == nil else { throw AppFailure.photo("照片元数据无效，请重新检查图库。") }
+                values[revision.id] = revision
+            }
+            return values
+        }
+
+        func validate(_ selected: PhotoRevision? = nil, full: Bool = false) throws {
+            try Task.checkCancellation()
+            guard library.canReadImages else { throw AppFailure.permission }
+            guard library.authorizationStatusRawValue == authorization, library.changeGeneration == generation else {
+                throw AppFailure.photo("照片访问已变化，请重新同步。")
+            }
+            if let selected {
+                let current = library.currentRevision(id: selected.id)
+                guard library.canReadImages else { throw AppFailure.permission }
+                guard let current, current == selected,
+                      Data(current.id.utf8) == Data(selected.id.utf8) else {
+                    throw AppFailure.photo("照片已变化，请重新同步。")
+                }
+            }
+            if full || (generation == nil && selected == nil) {
+                let current = try Self.validated(library.enumerateAuthorizedImages())
+                guard library.canReadImages else { throw AppFailure.permission }
+                guard current == revisions,
+                      Set(current.keys.map { Data($0.utf8) }) == Set(revisions.keys.map { Data($0.utf8) }) else {
+                    throw AppFailure.photo("图库范围已变化，请重新同步。")
+                }
+            }
+            guard library.canReadImages else { throw AppFailure.permission }
+            guard library.authorizationStatusRawValue == authorization, library.changeGeneration == generation else {
+                throw AppFailure.photo("照片访问已变化，请重新同步。")
+            }
+            try Task.checkCancellation()
+        }
+    }
+
+    /// Unlike manual prepare, this never calls the read/write store.record API.
+    /// The metadata diff already established that every admitted image is pending.
+    private nonisolated static func prepareSync(_ revision: PhotoRevision, snapshotIndex: Int,
+                                                imageEncoder: any PhotoImageEncoding, scope: SyncScope,
+                                                networkAllowed: Bool) async throws -> PreparedIndexItem {
+        try scope.validate(revision)
+        let image: PreparedImage
+        do {
+            let preview = try await scope.library.indexImage(id: revision.id, networkAllowed: networkAllowed)
+            try scope.validate(revision)
+            let embedding = try await imageEncoder.image(preview: preview)
+            try scope.validate(revision)
+            image = .encoded(embedding: embedding, source: preview.source)
+        } catch {
+            try scope.validate(revision)
+            if PhotoImageRequestInfo.isCancellation(error) { throw CancellationError() }
+            image = .failed(error)
+        }
+        return PreparedIndexItem(snapshotIndex: snapshotIndex, revision: revision, old: nil, image: image)
+    }
+
+    private enum SyncOutcome {
+        case record(CachedPhoto), needsNetwork, failed
+    }
+
+    private func syncOutcome(_ item: PreparedIndexItem, scope: SyncScope, resolver: OfflinePlaceResolver,
+                             cacheVersion: String, readonly: SQLitePhotoStore,
+                             indexAccess: IndexAccessCoordinator, networkAllowed: Bool) async throws -> SyncOutcome {
+        try scope.validate(item.revision)
+        do {
+            let image: [Float]
+            switch item.image {
+            case .encoded(let embedding, _): image = embedding
+            case .failed(let error): throw error
+            case .reused: throw AppFailure.modelContract("Unexpected sync cache candidate.")
+            }
+            try EmbeddingValidation.validateUnit(image)
+            let place = library.placeResult(id: item.revision.id, resolver: resolver)
+            try scope.validate(item.revision)
+            var location: PlaceEmbedding?
+            if case .resolved(let label) = place {
+                let text = "Photo taken in \(label)."
+                let key = Data((cacheVersion + "\n" + text).utf8)
+                var vector = placeVectors[key]
+                if vector == nil {
+                    let lease = try await indexAccess.acquireRead()
+                    do {
+                        defer { lease.release() }
+                        try scope.validate(item.revision)
+                        vector = try await readonly.storedPlace(text: text, modelVersion: cacheVersion)
+                        try scope.validate(item.revision)
+                    }
+                }
+                if vector == nil {
+                    vector = try await encoders.text(text)
+                    try scope.validate(item.revision)
+                }
+                if let vector {
+                    try EmbeddingValidation.validateUnit(vector)
+                    placeVectors[key] = vector
+                    location = PlaceEmbedding(text: text, vector: vector)
+                }
+            }
+            try scope.validate(item.revision)
+            return .record(CachedPhoto(photo: IndexedPhoto(
+                id: item.revision.id, modificationTime: item.revision.modificationTime,
+                modelVersion: cacheVersion, imageEmbedding: image, location: location,
+                creationTime: item.revision.creationTime), geographyVersion: resolver.version))
+        } catch {
+            try scope.validate(item.revision)
+            if PhotoImageRequestInfo.isCancellation(error) { throw CancellationError() }
+            if let failure = error as? AppFailure {
+                switch failure {
+                case .modelContract, .modelsMissing, .storage, .permission: throw failure
+                case .cloudOnly where !networkAllowed: return .needsNetwork
+                default: break
+                }
+            }
+            if !networkAllowed, PhotoImageRequestInfo.requiresNetwork(error) { return .needsNetwork }
+            return .failed
+        }
     }
 
     /// Explicit, independently resumable OCR. AppState drains its serialized
@@ -653,23 +1033,28 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     private nonisolated static func prepare(_ revision: PhotoRevision, snapshotIndex: Int,
                                              imageEncoder: any PhotoImageEncoding, library: any PhotoLibraryIndexing,
                                              store: SQLitePhotoStore, cacheVersion: String,
-                                             networkAllowed: Bool) async throws -> PreparedIndexItem {
+                                             networkAllowed: Bool,
+                                             validate: (@Sendable (PhotoRevision?) throws -> Void)? = nil) async throws -> PreparedIndexItem {
         try Task.checkCancellation()
         guard library.canReadImages else { throw AppFailure.permission }
         let old = try await store.record(id: revision.id)
         try Task.checkCancellation()
-        if let old, old.photo.modificationTime == revision.modificationTime, old.photo.modelVersion == cacheVersion {
-            return PreparedIndexItem(snapshotIndex: snapshotIndex, revision: revision, old: old,
-                                     image: .reused(old.photo.imageEmbedding))
-        }
         guard library.canReadImages else { throw AppFailure.permission }
         let image: PreparedImage
         do {
+            try validate?(revision)
+            if let old, old.photo.modificationTime == revision.modificationTime,
+               old.photo.creationTime == revision.creationTime, old.photo.modelVersion == cacheVersion {
+                return PreparedIndexItem(snapshotIndex: snapshotIndex, revision: revision, old: old,
+                                         image: .reused(old.photo.imageEmbedding))
+            }
             try Task.checkCancellation()
             let preview = try await library.indexImage(id: revision.id, networkAllowed: networkAllowed)
             try Task.checkCancellation()
+            try validate?(revision)
             let embedding = try await imageEncoder.image(preview: preview)
             try Task.checkCancellation()
+            try validate?(revision)
             image = .encoded(embedding: embedding, source: preview.source)
         } catch {
             try Task.checkCancellation()
@@ -683,8 +1068,10 @@ actor PhotoIndexWorker: PhotoWorkServicing {
     }
 
     private func indexPrepared(_ item: PreparedIndexItem, resolver: OfflinePlaceResolver, cacheVersion: String,
-                               store: SQLitePhotoStore, networkAllowed: Bool) async throws -> IndexOutcome {
+                               store: SQLitePhotoStore, networkAllowed: Bool,
+                               validate: (@Sendable (PhotoRevision?) throws -> Void)? = nil) async throws -> IndexOutcome {
         try Task.checkCancellation()
+        let library = self.library
         guard library.canReadImages else { throw AppFailure.permission }
         let revision = item.revision
         // Every checked asset, including image-cache hits and failed previews.
@@ -737,16 +1124,35 @@ actor PhotoIndexWorker: PhotoWorkServicing {
         } else { location = item.old?.photo.location }
         try Task.checkCancellation()
         guard library.canReadImages else { throw AppFailure.permission }
-        guard library.currentRevision(id: revision.id) == revision else {
-            outcome.failure = "A photo changed or became inaccessible during indexing; refresh and retry."
-            return outcome
+        let validateSave: @Sendable () throws -> Void = {
+            try Task.checkCancellation()
+            guard library.canReadImages else { throw AppFailure.permission }
+            try validate?(revision)
+            if validate == nil {
+                guard library.currentRevision(id: revision.id) == revision else {
+                    throw AppFailure.photo("A photo changed or became inaccessible during indexing; refresh and retry.")
+                }
+                guard library.canReadImages else { throw AppFailure.permission }
+            }
         }
-        if needsSave {
-            let photo = IndexedPhoto(id: revision.id, modificationTime: revision.modificationTime,
-                                     modelVersion: cacheVersion, imageEmbedding: image, location: location,
-                                     creationTime: revision.creationTime)
-            try await store.save(CachedPhoto(photo: photo, geographyVersion: resolver.version))
-            outcome.placeUpdated = placeChanged
+        do {
+            try validateSave()
+            if needsSave {
+                let photo = IndexedPhoto(id: revision.id, modificationTime: revision.modificationTime,
+                                         modelVersion: cacheVersion, imageEmbedding: image, location: location,
+                                         creationTime: revision.creationTime)
+                // The same task-wide access epoch and prepared revision are
+                // checked after the actor hop AND immediately before COMMIT.
+                try await store.save(CachedPhoto(photo: photo, geographyVersion: resolver.version), validate: validateSave)
+                try validateSave()
+                outcome.placeUpdated = placeChanged
+            }
+        } catch AppFailure.photo(let message) {
+            // Keep the manual per-record failure contract even when the race
+            // is detected inside SQLite. Permission/storage/cancellation remain
+            // fatal, and no source/reuse/place-update count precedes this fence.
+            outcome.failure = message
+            return outcome
         }
         outcome.reused = reusable
         outcome.source = source

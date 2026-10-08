@@ -158,7 +158,12 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         let anchor = try XCTUnwrap(descendants(host.controller.view, PrimaryPageAccessibilityAnchorView.self).first)
         let nav = try navigation(containing: anchor, in: host)
         XCTAssertFalse(nav.view.accessibilityElementsHidden)
-        XCTAssertEqual(descendants(nav.view, UISlider.self).count, 1)
+        XCTAssertTrue(descendants(nav.view, UISlider.self).isEmpty, "V3 starts collapsed in standalone hosts too")
+        let disclosure = try XCTUnwrap(descendants(nav.view, UIButton.self).first {
+            $0.accessibilityIdentifier == "similar-cleanup-threshold-disclosure"
+        })
+        XCTAssertEqual(disclosure.accessibilityValue, "已收起")
+        XCTAssertTrue(disclosure.isEnabled && disclosure.window === host.window)
         assertHeader(nav, active: true)
         XCTAssertEqual(c.grouping.scans, 0)
     }

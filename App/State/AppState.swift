@@ -53,6 +53,10 @@ final class AppState: ObservableObject {
     /// Sheet-local read sessions observe Photos changes even if a search result
     /// session was already nil. This is not a request to rescan or index.
     @Published private(set) var photoLibraryEpoch = UUID()
+    /// Automatic index revision changes invalidate cleanup authority, including
+    /// rolled-back writes, not Photos access or the current search session.
+    @Published private(set) var indexSourceEpoch = UUID()
+    private var lastNotifiedIndexRevision: UInt64?
     @Published private(set) var summary = LibrarySummary()
     @Published private(set) var results: [SearchHit] = []
     private struct ResultPages {
@@ -114,11 +118,24 @@ final class AppState: ObservableObject {
     @Published var locationWeight: Double = 0.6 { didSet { if oldValue != locationWeight { searchSettingsChanged() } } }
     /// Page size, not a global Top-K cutoff. Existing preference changes still invalidate a search.
     @Published var resultLimit = 12 { didSet { if oldValue != resultLimit { searchSettingsChanged() } } }
-    @Published var allowICloudDownload = false
+    @Published var allowICloudDownload = false {
+        didSet { if oldValue != allowICloudDownload { refreshSyncAvailability() } }
+    }
     @Published var selection: Selection?
 
     let library: PhotoLibraryClient
     let thumbnails: PhotoThumbnailCache
+    let indexAccess: IndexAccessCoordinator?
+    let groupingEncoders: any PhotoEncoding
+    let photoSync: PhotoSyncState
+    private var syncLaunchSucceeded = false
+    private var syncReadinessConfirmed = false
+    private let syncService: (any PhotoSyncServicing)?
+    // Separate from both foreground work and the cancellable whole-sync task.
+    // Keep a cancelled read as the drain tail; never overlap metadata requests.
+    private var syncSummaryTask: Task<Void, Never>?
+    private var syncSummaryGeneration = UUID()
+    private var syncSummaryPending = false
     let appleTranslationService: AppleQueryTranslationService?
     private let queryTranslator: any QueryTranslating
     private let translationPreferences: UserDefaults?
@@ -140,9 +157,30 @@ final class AppState: ObservableObject {
          startupContext: @escaping () -> StartupContext? = { nil },
          startupVisibilityDelay: @escaping @Sendable (Double) async throws -> Void = { seconds in
              try await Task.sleep(for: .seconds(seconds))
-         }, textSearchPreferences: UserDefaults? = nil) {
+         }, textSearchPreferences: UserDefaults? = nil,
+         syncService: (any PhotoSyncServicing)? = nil,
+         indexAccess: IndexAccessCoordinator? = nil) {
         self.library = library
-        self.worker = worker ?? PhotoIndexWorker(library: library)
+        // One paired encoder owns the primary image model, text model and
+        // tokenizer. The two independent workers never own simultaneous index
+        // pools: manual jobs first suspend and drain the automatic worker.
+        let encoders = CoreMLEncoders()
+        groupingEncoders = encoders
+        let access = indexAccess ?? (worker == nil || syncService != nil ? IndexAccessCoordinator() : nil)
+        self.indexAccess = access
+        lastNotifiedIndexRevision = access?.revision
+        self.worker = worker ?? PhotoIndexWorker(library: library, encoders: encoders, indexAccess: access)
+        let automatic: (any PhotoSyncServicing)?
+        if let syncService { automatic = syncService }
+        else if worker == nil {
+            automatic = PhotoIndexWorker(library: library, encoders: encoders, indexAccess: access)
+        } else {
+            // A fake foreground worker/authorization provider is NOT permission
+            // to touch real PhotoKit. Tests must explicitly opt into fake sync.
+            automatic = nil
+        }
+        self.syncService = automatic
+        photoSync = PhotoSyncState(service: automatic)
         self.startupHistory = startupHistory
         self.startupContext = startupContext
         self.startupVisibilityDelay = startupVisibilityDelay
@@ -165,6 +203,19 @@ final class AppState: ObservableObject {
         self.authorizationStatus = authorizationStatus
         authorization = authorizationStatus()
         thumbnails = PhotoThumbnailCache(library: library)
+        photoSync.onCommitted = { [weak self] in
+            self?.indexAccessChangedIfNeeded()
+            self?.requestSyncSummaryRefresh()
+        }
+        photoSync.onSettled = { [weak self] in
+            // A final rolled-back writer also changes source authority. Refresh
+            // only that previously unreported revision, not every successful end.
+            if self?.indexAccessChangedIfNeeded() == true { self?.requestSyncSummaryRefresh() }
+        }
+        photoSync.onCompleted = { [weak self] summary in
+            self?.invalidateSyncSummaryRefresh()
+            self?.acceptSyncSummary(summary)
+        }
         library.observe { [weak self] in
             Task { @MainActor [weak self] in self?.libraryChanged() }
         }
@@ -173,6 +224,7 @@ final class AppState: ObservableObject {
     deinit {
         operationTask?.cancel()
         startupVisibilityTask?.cancel()
+        syncSummaryTask?.cancel()
     }
 
     var isBusy: Bool { activity != nil }
@@ -305,7 +357,7 @@ final class AppState: ObservableObject {
             // Pending foreground recovery is handled by enterForeground().
             return
         }
-        schedule(.refreshing) { [worker] _ in .summary(try await worker.refresh(), "Saved index statistics refreshed. Update the index manually to include photo changes.") }
+        schedule(.refreshing) { [worker] _ in .summary(try await worker.refresh(), "Saved index statistics refreshed.") }
     }
 
     func libraryChanged() {
@@ -316,10 +368,15 @@ final class AppState: ObservableObject {
         // because authorization changes during model preparation.
         if activity != .starting { drainAndReleaseSearchMemory() }
         refresh()
+        // Refresh first withdraws readiness; no fresh sync may slip in before
+        // that foreground metadata operation has been scheduled.
+        photoSync.libraryChanged()
     }
 
     func enterBackground() {
         isForeground = false
+        syncReadinessConfirmed = false
+        refreshSyncAvailability()
         library.invalidateSearchSnapshot()
         translationAvailabilityID = UUID()
         if launchWasRequested, activity == .starting {
@@ -348,6 +405,7 @@ final class AppState: ObservableObject {
         // without backgrounding. Do not cancel preparation on that transition.
         guard !isForeground else { return }
         isForeground = true
+        photoSync.pause()
         library.invalidateSearchSnapshot()
         if launchWasRequested, launchPhase != .ready {
             if launchPhase == .pending { beginLaunch(kind: .foreground) }
@@ -677,6 +735,106 @@ final class AppState: ObservableObject {
         self.textIndexProgress = textProgress
     }
 
+    private var syncSummaryReady: Bool {
+        let blocksSync = activity == .starting || activity == .refreshing
+            || activity == .indexing || activity == .clearing
+        return syncLaunchSucceeded && syncReadinessConfirmed && launchPhase == .ready
+            && isForeground && canRead && modelsReady && !blocksSync
+    }
+
+    private func refreshSyncAvailability() {
+        let ready = syncSummaryReady
+        if !ready { invalidateSyncSummaryRefresh() }
+        photoSync.updateAvailability(
+            ready: ready,
+            networkAllowed: allowICloudDownload)
+    }
+
+    @discardableResult
+    private func indexAccessChangedIfNeeded() -> Bool {
+        guard let revision = indexAccess?.revision, revision != lastNotifiedIndexRevision else { return false }
+        lastNotifiedIndexRevision = revision
+        indexSourceEpoch = UUID()
+        // No count inference, search invalidation or readiness update here.
+        // Settlement is not permission to retry a cancelled/failed sync.
+        return true
+    }
+
+    private func invalidateSyncSummaryRefresh() {
+        syncSummaryGeneration = UUID()
+        syncSummaryPending = false
+        syncSummaryTask?.cancel()
+    }
+
+    private func requestSyncSummaryRefresh() {
+        guard syncService != nil, syncSummaryReady else { return }
+        syncSummaryGeneration = UUID()
+        syncSummaryPending = true
+        startSyncSummaryRefreshIfNeeded()
+    }
+
+    private func startSyncSummaryRefreshIfNeeded() {
+        guard let syncService, syncSummaryReady, syncSummaryPending, syncSummaryTask == nil else { return }
+        syncSummaryPending = false
+        let token = syncSummaryGeneration
+        syncSummaryTask = Task { @MainActor [weak self, indexAccess, library, authorizationStatus] in
+            // Conservatively reject if any writer was granted between request
+            // and publication, even if it rolled back or its callback is pending.
+            let revision = indexAccess?.revision
+            let authorization = authorizationStatus()
+            let libraryGeneration = library.changeGeneration
+            do {
+                try Task.checkCancellation()
+                let value = try await syncService.currentSummary()
+                try Task.checkCancellation()
+                if let value {
+                    self?.publishSyncSummary(value, token: token, revision: revision,
+                                             authorization: authorization, libraryGeneration: libraryGeneration)
+                }
+            } catch {
+                // No fallback zero, private error rendering, or full refresh.
+                // Only another queued commit/source event may request work.
+            }
+            self?.syncSummaryTask = nil
+            self?.startSyncSummaryRefreshIfNeeded()
+        }
+    }
+
+    private func publishSyncSummary(_ value: LibrarySummary, token: UUID, revision: UInt64?,
+                                    authorization expectedAuthorization: PHAuthorizationStatus,
+                                    libraryGeneration: UInt64?) {
+        guard token == syncSummaryGeneration, syncSummaryReady else { return }
+        authorization = authorizationStatus()
+        guard canRead, authorization == expectedAuthorization,
+              library.changeGeneration == libraryGeneration else { return }
+        // The service releases its short read lease on return. Close that actor
+        // hop with a nonblocking lease through MainActor publication. Never
+        // acquire nested async leases around currentSummary (queued-writer deadlock).
+        let lease = indexAccess?.tryRead()
+        defer { lease?.release() }
+        if let indexAccess, lease == nil || indexAccess.revision != revision {
+            requestSyncSummaryRefresh()
+            return
+        }
+        acceptSyncSummary(value)
+    }
+
+    private func acceptSyncSummary(_ value: LibrarySummary) {
+        authorization = authorizationStatus()
+        guard syncSummaryReady, value.indexStatisticsKnown, value.modelIssue == nil,
+              value.modelVersion == summary.modelVersion else { return }
+        // Merge image statistics only; both partial metadata and final sync
+        // summaries preserve foreground OCR state, search results and selection.
+        var merged = summary
+        merged.authorizedCount = value.authorizedCount
+        merged.authorizedCountKnown = value.authorizedCountKnown
+        merged.indexStatisticsKnown = value.indexStatisticsKnown
+        merged.indexedCount = value.indexedCount
+        merged.locatedCount = value.locatedCount
+        merged.placesDescription = value.placesDescription
+        summary = merged
+    }
+
     private enum Outcome {
         case launched(LibrarySummary)
         case summary(LibrarySummary, String)
@@ -709,14 +867,33 @@ final class AppState: ObservableObject {
         let token = UUID()
         operationID = token
         self.activity = activity
+        if activity == .starting || activity == .refreshing { syncReadinessConfirmed = false }
+        refreshSyncAvailability()
         errorMessage = nil
         actionHint = nil
         status = activity == .indexing ? "Indexing on this device…" : "Working locally…"
         timing?.mark(.queue)
-        operationTask = Task { @MainActor [weak self] in
+        operationTask = Task { @MainActor [weak self, weak photoSync = photoSync, indexAccess] in
             // Critical: await completion, not merely cancellation, before a new job.
             await predecessor?.value
+            var lease: IndexAccessCoordinator.Lease?
+            // Includes final MainActor validation, summary/results publication
+            // and failure handling. Releasing before the switch exposes a race.
+            defer { lease?.release() }
             do {
+                try Task.checkCancellation()
+                switch activity {
+                case .indexing, .clearing:
+                    // Drain BEFORE queuing the writer: sync might itself be
+                    // waiting for a commit lease, so reversing this deadlocks.
+                    await photoSync?.suspendAndWait()
+                    try Task.checkCancellation()
+                    lease = try await indexAccess?.acquireWrite()
+                case .starting, .refreshing, .searching, .indexingText, .checkingPhoto:
+                    lease = try await indexAccess?.acquireRead()
+                case .preparingTranslation:
+                    break
+                }
                 try Task.checkCancellation()
                 let outcome = try await operation(token)
                 try Task.checkCancellation()
@@ -726,16 +903,22 @@ final class AppState: ObservableObject {
                     self.authorization = self.authorizationStatus()
                     self.summary = summary
                     if let issue = summary.modelIssue {
+                        self.syncLaunchSucceeded = false
                         self.errorMessage = issue
                         self.launchIssue = "本机搜索暂未准备好。可以重试，或先进入应用检查设置。"
                         self.launchPhase = .failed
                     } else {
+                        self.syncLaunchSucceeded = true
+                        self.syncReadinessConfirmed = true
                         self.launchIssue = nil
                         self.launchPhase = .ready
                     }
                     self.status = summary.modelIssue == nil ? "Launch preparation complete." : "Launch preparation needs attention."
                     self.finishLaunchTiming(timing, outcome: summary.modelIssue == nil ? .ready : .failed)
-                case .summary(let summary, let message): self.summary = summary; self.status = message
+                case .summary(let summary, let message):
+                    self.summary = summary
+                    self.status = message
+                    if activity == .refreshing { self.syncReadinessConfirmed = true }
                 case .search(let response, let query, let seed):
                     searchMeasurement?.mark(.publication)
                     self.authorization = self.authorizationStatus()
@@ -781,6 +964,7 @@ final class AppState: ObservableObject {
                     }
                 }
                 self.activity = nil
+                self.refreshSyncAvailability()
             } catch {
                 let searchReport = searchMeasurement?.finish(
                     error is CancellationError || Task.isCancelled ? .cancelled : .failed)
@@ -789,7 +973,17 @@ final class AppState: ObservableObject {
                     self.searchTimingReport = searchReport
                 }
                 self.activity = nil
+                if activity == .starting || activity == .refreshing {
+                    self.syncReadinessConfirmed = false
+                }
+                if activity == .indexing || activity == .clearing {
+                    // No implicit retry after failed manual work, but the user
+                    // can explicitly request a fresh sync without another refresh.
+                    self.photoSync.requireExplicitRestart()
+                }
+                defer { self.refreshSyncAvailability() }
                 if activity == .starting {
+                    self.syncLaunchSucceeded = false
                     self.finishLaunchTiming(timing, outcome: !self.isForeground || error is CancellationError || Task.isCancelled ? .interrupted : .failed)
                     if !self.isForeground {
                         self.launchPhase = .pending
@@ -834,4 +1028,13 @@ final class AppState: ObservableObject {
 
     /// Awaitable completion boundary also used by model-free state tests.
     func waitUntilIdle() async { await operationTask?.value }
+
+    /// Separate from foreground completion; never make existing callers await
+    /// the entire automatic library scan (or the completion-card display time).
+    func waitForSync() async { await photoSync.waitUntilIdle() }
+
+    /// Independent drain boundary; callers need not wait for the whole sync.
+    func waitForSyncSummary() async {
+        while let current = syncSummaryTask { await current.value }
+    }
 }

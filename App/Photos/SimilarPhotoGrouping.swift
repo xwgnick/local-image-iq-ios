@@ -78,7 +78,7 @@ extension SimilarPhotoGrouping {
 }
 
 enum SimilarPhotoGroupingPolicy {
-    static let defaultThreshold: Float = 0.80
+    static let defaultThreshold: Float = 0.90
     static let algorithmVersion = "greedy-disjoint-pairwise-cosine-v1"
     static let thresholdRange: ClosedRange<Float> = 0.50...0.99
     /// Exact integer ticks; shared by the slider and its boundary tests.

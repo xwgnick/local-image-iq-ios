@@ -20,7 +20,7 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         defer { host.close() }
         XCTAssertEqual(c.navigation.page, .search)
         XCTAssertFalse(c.state.textSearchEnabled)
-        XCTAssertEqual(c.cleanup.threshold, 0.80)
+        XCTAssertEqual(c.cleanup.threshold, 0.90)
         XCTAssertFalse(c.cleanup.hasScanned)
         XCTAssertTrue(c.grouping.thresholds.isEmpty)
         XCTAssertTrue(c.grouping.restores.isEmpty, "A retained hidden page must not restore on search startup")
@@ -49,13 +49,13 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         try await settle(host)
         await c.cleanup.waitUntilIdle()
         try await settle(host)
-        XCTAssertEqual(c.grouping.restores, [Float(0.80)])
-        XCTAssertEqual(c.grouping.thresholds, [Float(0.80)])
+        XCTAssertEqual(c.grouping.restores, [Float(0.90)])
+        XCTAssertEqual(c.grouping.thresholds, [Float(0.90)])
         XCTAssertTrue(c.cleanup.hasScanned)
         XCTAssertEqual(c.cleanup.groups.map { $0.photos.count }, [4, 3])
         XCTAssertFalse(c.cleanup.needsRegroup)
         XCTAssertTrue(descendants(host.controller.view, of: UISlider.self).isEmpty,
-                      "Embedded production cleanup has no slider; legacy standalone hosts are separate")
+                  "Production cleanup starts with its threshold disclosure collapsed")
         try capture(host, name: "main-navigation-cleanup-dark")
         let session = try XCTUnwrap(c.cleanup.selectionSessionID)
         let group = try XCTUnwrap(c.cleanup.groups.first)
@@ -141,7 +141,7 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         await c.cleanup.waitUntilIdle()
         try await settle(host)
         XCTAssertTrue(c.cleanup.hasScanned)
-        XCTAssertEqual(c.grouping.thresholds, [Float(0.80)])
+        XCTAssertEqual(c.grouping.thresholds, [Float(0.90)])
         XCTAssertEqual(c.state.results.count, 12)
         let hiddenScroll = try searchScroll(host)
         let previousBoundary = host.measurements.boundary
@@ -219,33 +219,35 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         assertNoSideEffects(c)
     }
 
-    func testSettingsUsesSameCleanupAndIntegerThresholdGuardWithoutRegrouping() async throws {
+    func testSettingsHasNoThresholdControlAndPreservesCleanupSession() async throws {
         let c = try await context()
-        let section = SimilarCleanupSettingsSection(state: c.cleanup)
-        XCTAssertEqual(section.thresholdBinding.wrappedValue, 80)
-        XCTAssertEqual(SimilarPhotoGroupingPolicy.sliderTicks, 50...99)
-        let host = try await mount(AnyView(SettingsSheet(state: c.state, cleanup: c.cleanup)))
-        defer { host.close() }
-        XCTAssertEqual(descendants(host.controller.view, of: UISlider.self).count, 1)
-        try capture(host, name: "main-navigation-settings-dark")
         c.cleanup.enterPage(ready: true)
         await c.cleanup.waitUntilIdle()
+        let session = try XCTUnwrap(c.cleanup.selectionSessionID)
+        let groupIDs = c.cleanup.groups.map(\.id)
         let group = try XCTUnwrap(c.cleanup.groups.first)
+        let selectedID = try XCTUnwrap(group.photos.first?.id)
+        c.cleanup.toggleSelection(selectedID)
         _ = try XCTUnwrap(c.cleanup.beginRangeSelection(groupID: group.id))
-        section.thresholdBinding.wrappedValue = 50
-        XCTAssertEqual(c.cleanup.threshold, 0.80, "Do not edit the threshold during range selection")
+
+        // Settings no longer owns a threshold binding. Its real presentation
+        // must neither expose a slider nor disturb the retained cleanup state.
+        // Integer/draft control interactions belong to the cleanup control tests.
+        let host = try await mount(AnyView(SettingsSheet(state: c.state, cleanup: c.cleanup)))
+        defer { host.close() }
+        XCTAssertTrue(descendants(host.controller.view, of: UISlider.self).isEmpty)
+        try capture(host, name: "main-navigation-settings-dark")
+        XCTAssertEqual(c.cleanup.threshold, 0.90)
+        XCTAssertEqual(c.cleanup.selectionSessionID, session)
+        XCTAssertEqual(c.cleanup.groups.map(\.id), groupIDs)
+        XCTAssertEqual(c.cleanup.selectedIDs, Set([selectedID]))
+        XCTAssertTrue(c.cleanup.isSelecting)
         c.cleanup.cancelRangeSelection()
-        section.thresholdBinding.wrappedValue = 75.2
-        XCTAssertEqual(c.cleanup.threshold, 0.75)
-        XCTAssertTrue(c.cleanup.needsRegroup)
-        XCTAssertTrue(c.cleanup.groups.isEmpty)
-        XCTAssertEqual(c.grouping.thresholds.count, 1, "Settings changes never compute groups")
-        let reopened = SimilarCleanupSettingsSection(state: c.cleanup)
-        XCTAssertEqual(reopened.thresholdBinding.wrappedValue, 75)
-        reopened.thresholdBinding.wrappedValue = 80
-        XCTAssertEqual(c.cleanup.threshold, 0.80)
         try await settle(host)
-        XCTAssertEqual(c.grouping.thresholds.count, 1)
+        XCTAssertFalse(c.cleanup.needsRegroup)
+        XCTAssertTrue(c.cleanup.canSelect)
+        XCTAssertEqual(c.grouping.restores, [Float(0.90)])
+        XCTAssertEqual(c.grouping.thresholds, [Float(0.90)], "Settings never computes or restores another grouping")
         assertNoSideEffects(c)
     }
 

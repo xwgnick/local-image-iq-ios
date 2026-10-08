@@ -542,7 +542,7 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertEqual(app.buttons["open-library"].value as? String, "authorization-required")
     }
 
-    func testPrimaryCleanupAndSharedThresholdSettingsWithoutPermission() throws {
+    func testPrimaryCleanupDraftDisclosureAndSettingsIsolationWithoutPermission() throws {
         // The existing helper's model-free recovery route is not model readiness.
         if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
             throw XCTSkip("Live similar cleanup navigation requires the real bundled models")
@@ -575,18 +575,33 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertTrue(entry.isSelected)
         XCTAssertFalse(app.buttons["close-similar-cleanup"].exists)
         let threshold = app.sliders["similar-cleanup-threshold"]
-        XCTAssertFalse(threshold.exists, "The production embedded page has no threshold slider")
+        let disclosure = app.buttons["similar-cleanup-threshold-disclosure"]
+        let thresholdTitle = app.staticTexts["组内照片相似度"]
+        XCTAssertFalse(threshold.exists, "The production cleanup threshold starts collapsed")
+        XCTAssertFalse(thresholdTitle.exists)
+        expectHittable(disclosure)
+        XCTAssertEqual(disclosure.label, "展开相似度调节")
+        XCTAssertEqual(disclosure.value as? String, "已收起")
         let start = app.buttons["start-similar-grouping"]
 
         func assertNoWorkOrPrompt() {
-            XCTAssertTrue(start.waitForExistence(timeout: 5))
-            XCTAssertEqual(start.label, "开始分组")
-            XCTAssertFalse(start.isEnabled)
             XCTAssertFalse(app.buttons["cancel-similar-grouping"].exists)
             XCTAssertFalse(app.buttons["prepare-similar-deletion"].exists)
             XCTAssertFalse(app.progressIndicators["分组进度"].exists)
+            XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "similar-cleanup-restoring").firstMatch.exists)
+            XCTAssertFalse(app.buttons["stop-indexing"].exists)
+            XCTAssertFalse(app.buttons["pause-text-index"].exists)
+            XCTAssertFalse(app.progressIndicators["文字索引进度"].exists)
             XCTAssertFalse(app.alerts.firstMatch.exists)
             XCTAssertFalse(springboard.alerts.firstMatch.exists)
+        }
+
+        func assertUnreadyCleanup(pendingDraft: Bool = false) {
+            XCTAssertTrue(start.waitForExistence(timeout: 5))
+            XCTAssertEqual(start.label, pendingDraft ? "更新结果" : "开始分组")
+            XCTAssertFalse(start.isEnabled, "Draft editing cannot bypass Photos/index readiness")
+            XCTAssertFalse(field.exists, "The retained search query must stay outside cleanup's AX scope")
+            assertNoWorkOrPrompt()
         }
 
         func expectThreshold(_ expected: Double) {
@@ -626,63 +641,104 @@ final class PresentationNavigationTests: XCTestCase {
         }
 
         XCTAssertTrue(app.staticTexts["请先在“我的图库”中允许照片访问。"].waitForExistence(timeout: 5))
-        assertNoWorkOrPrompt()
-        // The cleanup header opens the same full Settings as the search header.
-        app.buttons["open-settings"].tap()
-        let done = app.buttons["close-settings"]
-        expectHittable(done)
-        let form = try sheetForm()
-        scrollTo(threshold, in: form)
-        XCTAssertTrue(threshold.isEnabled)
-        let initialText = try XCTUnwrap(threshold.value as? String)
-        let initial = try XCTUnwrap(Double(initialText.replacingOccurrences(of: ",", with: ".")))
-        XCTAssertTrue((0.50...0.99).contains(initial))
-        // Production persists this preference. Recover a prior interrupted test
-        // through the actual slider, rather than pretending each launch is fresh.
-        if abs(initial - 0.80) > 0.0001 { dragThreshold(from: initial, to: 0.80) }
-        expectThreshold(0.80)
-        defer {
-            if done.exists && done.isHittable && threshold.exists && threshold.isHittable,
-               let text = threshold.value as? String,
-               let current = Double(text.replacingOccurrences(of: ",", with: ".")),
-               abs(current - 0.80) > 0.0001 {
-                dragThreshold(from: current, to: 0.80)
-                expectThreshold(0.80)
-            }
-        }
+        assertUnreadyCleanup()
+        disclosure.tap()
         expectHittable(threshold)
-        // This slider's accessibilityValue is COSINE (0.80), not a normalized
-        // thumb position (30/49). Capture inside the thumb; only the gesture's
-        // destination uses the outer endpoint to fully saturate native travel.
-        dragThreshold(from: 0.80, to: 0.99)
+        expectHittable(thresholdTitle)
+        XCTAssertEqual(disclosure.label, "收起相似度调节")
+        XCTAssertEqual(disclosure.value as? String, "已展开")
+        XCTAssertTrue(threshold.isEnabled)
+        expectThreshold(0.90)
+        // COSINE .90 is integer tick 90, not the normalized thumb position
+        // 40/49. Keep the native thumb/outer-endpoint gestures above unchanged.
+        dragThreshold(from: 0.90, to: 0.99)
         expectThreshold(0.99)
+        assertUnreadyCleanup(pendingDraft: true)
         dragThreshold(from: 0.99, to: 0.50)
         expectThreshold(0.50)
         expectHittable(app.staticTexts["similar-cleanup-broad-threshold-note"])
-        dragThreshold(from: 0.50, to: 0.80)
-        expectThreshold(0.80)
+        assertUnreadyCleanup(pendingDraft: true)
+        dragThreshold(from: 0.50, to: 0.90)
+        expectThreshold(0.90)
+        expectAbsent(app.staticTexts["similar-cleanup-broad-threshold-note"])
+        assertUnreadyCleanup()
+
+        // Leave a NON-default draft to distinguish root retention from a
+        // persistence write. This unauthorized/no-index flow must never apply it.
+        dragThreshold(from: 0.90, to: 0.99)
+        expectThreshold(0.99)
+        disclosure.tap()
+        expectAbsent(threshold)
+        expectAbsent(thresholdTitle)
+        assertUnreadyCleanup(pendingDraft: true)
+        disclosure.tap()
+        expectHittable(threshold)
+        expectThreshold(0.99)
+
+        let done = app.buttons["close-settings"]
+        let hiddenInSettings = [field, threshold, thresholdTitle, disclosure, start,
+            app.buttons["primary-search-tab"], entry,
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "相似度阈值")).firstMatch]
+        func assertSettingsExcludesBothPageScopes() throws {
+            expectHittable(done)
+            for element in hiddenInSettings { expectAbsent(element) }
+            // Check every traversed Form viewport, not just the first screen of
+            // lazy rows. Settings may not reintroduce a threshold slider/label.
+            let form = try sheetForm()
+            scrollTo(debugToggle, in: form, expectingAbsent: hiddenInSettings)
+            assertNoWorkOrPrompt()
+        }
+
+        // Cleanup's header presents Settings, but Settings owns no threshold.
+        app.buttons["open-settings"].tap()
+        try assertSettingsExcludesBothPageScopes()
         done.tap()
         expectAbsent(done)
-        XCTAssertFalse(threshold.exists)
-        // A threshold edit can require regrouping, but must not run anything
-        // while permission is absent. No deletion or authorization is exercised.
-        XCTAssertFalse(start.isEnabled)
-        XCTAssertFalse(app.buttons["cancel-similar-grouping"].exists)
-        XCTAssertFalse(app.buttons["prepare-similar-deletion"].exists)
-        XCTAssertFalse(app.alerts.firstMatch.exists)
+        expectHittable(threshold)
+        expectThreshold(0.99)
+        assertUnreadyCleanup(pendingDraft: true)
+
         app.buttons["primary-search-tab"].tap()
         expectHittable(field)
         XCTAssertEqual(field.value as? String, query)
         assertHomeControls()
+        expectAbsent(disclosure)
+        expectAbsent(thresholdTitle)
+        expectAbsent(start)
         app.buttons["open-settings"].tap()
-        expectHittable(done)
-        scrollTo(threshold, in: try sheetForm())
-        expectThreshold(0.80)
+        try assertSettingsExcludesBothPageScopes()
         done.tap()
         expectAbsent(done)
+        expectHittable(field)
         XCTAssertEqual(field.value as? String, query)
+        entry.tap()
+        expectHittable(threshold)
+        expectThreshold(0.99)
+        assertUnreadyCleanup(pendingDraft: true)
+
+        // A retained tab/sheet preserves the draft, but a new process restores
+        // only the applied preference (.90). Never expect unsubmitted .99 to
+        // survive relaunch, and never click the disabled Update Results action.
+        app.terminate()
+        launch()
+        assertHomeControls()
+        let relaunchedReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "authorization-required"), object: library)
+        XCTAssertEqual(XCTWaiter.wait(for: [relaunchedReady], timeout: 15), .completed)
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["相似清理"].waitForExistence(timeout: 5))
+        expectAbsent(threshold)
+        expectAbsent(thresholdTitle)
+        expectHittable(disclosure)
+        assertUnreadyCleanup()
+        disclosure.tap()
+        expectHittable(threshold)
+        expectThreshold(0.90)
+        assertUnreadyCleanup()
+        app.buttons["primary-search-tab"].tap()
+        assertHomeControls()
         XCTAssertEqual(library.value as? String, "authorization-required")
-        XCTAssertFalse(springboard.alerts.firstMatch.exists)
+        assertNoWorkOrPrompt()
     }
 
     private func launch(largeText: Bool = false) {

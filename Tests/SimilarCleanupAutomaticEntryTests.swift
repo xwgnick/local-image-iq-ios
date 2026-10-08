@@ -10,7 +10,7 @@ import XCTest
 final class SimilarCleanupAutomaticEntryTests: XCTestCase {
     func testInitializationDoesNoWorkAndUsesApprovedDefault() async {
         let f = fixture()
-        XCTAssertEqual(f.state.threshold, 0.80)
+        XCTAssertEqual(f.state.threshold, 0.90)
         XCTAssertFalse(f.state.isPageVisible)
         XCTAssertFalse(f.state.isRestoring)
         XCTAssertFalse(f.state.needsRegroup)
@@ -42,7 +42,7 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         XCTAssertFalse(f.state.isGrouping)
         await f.state.waitUntilIdle()
         XCTAssertEqual(f.service.trace.events, ["restore", "group"])
-        XCTAssertEqual(f.service.trace.thresholds, [0.80, 0.80])
+        XCTAssertEqual(f.service.trace.thresholds, [0.90, 0.90])
         XCTAssertEqual(f.service.trace.entryThreads, [false, false])
         XCTAssertTrue(f.state.hasScanned)
         XCTAssertFalse(f.state.needsRegroup)
@@ -446,7 +446,7 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
             XCTAssertTrue(next.service.trace.events.isEmpty)
         }
         let isolated = fixture()
-        XCTAssertEqual(isolated.state.threshold, 0.80, "Default nil does not consult any persistent defaults")
+        XCTAssertEqual(isolated.state.threshold, 0.90, "Default nil does not consult any persistent defaults")
     }
 
     func testInvalidStoredThresholdTypesFallBackWithoutCoercionOrRepairWrites() throws {
@@ -456,12 +456,12 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         for value in invalid {
             defaults.set(value, forKey: "similarCleanupThreshold.v1")
             let f = fixture(preferences: defaults)
-            XCTAssertEqual(f.state.threshold, 0.80)
+            XCTAssertEqual(f.state.threshold, 0.90)
             XCTAssertTrue(f.service.trace.events.isEmpty)
             XCTAssertNotNil(defaults.object(forKey: "similarCleanupThreshold.v1"), "Invalid settings are not silently rewritten")
         }
         defaults.removeObject(forKey: "similarCleanupThreshold.v1")
-        XCTAssertEqual(fixture(preferences: defaults).state.threshold, 0.80)
+        XCTAssertEqual(fixture(preferences: defaults).state.threshold, 0.90)
     }
 
     func testInvalidRuntimeThresholdsRemainVisibleButNeverPersistOrReachService() async throws {
@@ -508,7 +508,7 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         f.state.toggleSelection("a")
         f.state.prepareDeletion()
         let intentID = f.state.pendingDeletion?.id
-        f.state.threshold = 0.80
+        f.state.threshold = 0.90
         XCTAssertEqual(f.state.pendingDeletion?.id, intentID)
         XCTAssertEqual(f.state.selectedIDs, ["a"])
         f.state.threshold = 0.75
@@ -520,7 +520,7 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         await f.state.waitUntilIdle()
         XCTAssertFalse(f.state.needsRegroup)
         XCTAssertTrue(f.state.hasScanned)
-        XCTAssertEqual(f.service.trace.thresholds, [0.80, 0.80, 0.75])
+        XCTAssertEqual(f.service.trace.thresholds, [0.90, 0.90, 0.75])
 
         let seenButNotReady = fixture()
         seenButNotReady.state.enterPage(ready: false)

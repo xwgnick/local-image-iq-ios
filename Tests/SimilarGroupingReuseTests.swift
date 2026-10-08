@@ -431,7 +431,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
     }
 
     func testApprovedPolicyDefaultAndProtocolDefaultKeepLegacyMocksCompatible() async throws {
-        XCTAssertEqual(SimilarPhotoGroupingPolicy.defaultThreshold, 0.80)
+        XCTAssertEqual(SimilarPhotoGroupingPolicy.defaultThreshold, 0.90)
         XCTAssertEqual(SimilarPhotoGroupingPolicy.thresholdRange, Float(0.50)...Float(0.99))
         let legacy: any SimilarPhotoGrouping = ReuseLegacyGrouping()
         assertMissing(try await legacy.restore(threshold: 0.80))

@@ -90,8 +90,10 @@ final class PrimaryModalAccessibilityTests: XCTestCase {
             f.settingsPresented = true
             let presented = try await waitForPresentation(host)
             let modal = try assertIndependentModal(presented, base: base, host: host)
-            XCTAssertFalse(descendants(modal.view, UISlider.self).isEmpty,
-                           "Settings retains its real cleanup-threshold control")
+            XCTAssertTrue(descendants(modal.view, UISlider.self).isEmpty,
+                          "Threshold controls belong only to cleanup, not Settings")
+            let settingsToggle = try XCTUnwrap(descendants(modal.view, UISwitch.self).first)
+            XCTAssertFalse(excluded(settingsToggle), "The real Settings controls stay accessible")
             XCTAssertTrue(base.view.accessibilityElementsHidden)
             XCTAssertTrue(excluded(grid.collectionView))
             XCTAssertTrue(grid.collectionView.window === host.window)

@@ -17,11 +17,11 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
         try await checkLayout(width: 320, dynamicType: .large, targetIndex: 175, capped: false)
     }
 
-    func testMaximum393By852ScrollsHeaderWithin45PercentAndKeepsLastOf300VisibleInBothThemes() async throws {
+    func testMaximum393By852PendingHeaderStaysWithin45PercentAndKeepsLastOf300VisibleInBothThemes() async throws {
         try await checkLayout(width: 393, dynamicType: .accessibility5, targetIndex: 299, capped: true)
     }
 
-    func testMaximum320By852ScrollsHeaderWithin45PercentAndKeepsLastOf300VisibleInBothThemes() async throws {
+    func testMaximum320By852PendingHeaderStaysWithin45PercentAndKeepsLastOf300VisibleInBothThemes() async throws {
         try await checkLayout(width: 320, dynamicType: .accessibility5, targetIndex: 299, capped: true)
     }
 
@@ -32,6 +32,10 @@ final class SimilarPhotoGroupHeaderLayoutTests: XCTestCase {
             fixture.state.scan()
             await fixture.state.waitUntilIdle()
             XCTAssertTrue(fixture.state.hasScanned)
+            // Removed zero-selection/score labels no longer force overflow.
+            // Exercise a real expanded-content state: pending-threshold notice
+            // at maximum Dynamic Type, while retaining the full browse grid.
+            if capped { fixture.state.setDraftThreshold(0.85) }
             let group = try XCTUnwrap(fixture.state.groups.first)
             XCTAssertEqual(group.photos.count, 300)
             let wanted = group.photos[targetIndex].id
