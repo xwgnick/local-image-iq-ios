@@ -162,9 +162,7 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
         try Task.checkCancellation()
         let initialAuthorization = Self.authorization
         guard initialAuthorization == .authorized || initialAuthorization == .limited else { return [] }
-        let options = PHFetchOptions()
-        options.includeHiddenAssets = true
-        options.includeAllBurstAssets = true
+        let options = Self.searchFetchOptions()
         let fetched = PHAsset.fetchAssets(with: .image, options: options)
         var result: [PhotoRevision] = []
         var interrupted = false
@@ -213,7 +211,9 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
 
     private func asset(id: String) -> PHAsset? {
         guard Self.canRead else { return nil }
-        let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject
+        // A photo admitted by the complete snapshot must use the same fetch
+        // scope when checked or loaded by ID. Authorization still gates access.
+        let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: Self.searchFetchOptions()).firstObject
         return asset?.mediaType == .image ? asset : nil
     }
 
@@ -537,7 +537,9 @@ extension PhotoLibraryClient: PhotoSearchSnapshotting {
         return .init(authorization: status.rawValue, canRead: status == .authorized || status == .limited)
     }
 
-    private static func searchFetchOptions() -> PHFetchOptions {
+    /// Shared by full enumeration, single-ID reads and batch/search reads.
+    /// Return a fresh instance so one caller cannot mutate another's scope.
+    static func searchFetchOptions() -> PHFetchOptions {
         let options = PHFetchOptions()
         options.includeHiddenAssets = true
         options.includeAllBurstAssets = true

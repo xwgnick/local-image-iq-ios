@@ -156,6 +156,142 @@ final class PhotoIncrementalSyncTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.photo.id == "kept" }?.photo.imageEmbedding, TestFixtures.vector(axis: 1))
     }
 
+    func testLegacyNilLookupRejectsHiddenPhotoThenSharedScopeRecovers() async throws {
+        try await assertFetchScopeRecovery(hiddenIDs: ["TEST-private-hidden"], burstIDs: [])
+    }
+
+    func testLegacyNilLookupRejectsBurstAndMixedPhotosThenSharedScopeRecovers() async throws {
+        try await assertFetchScopeRecovery(hiddenIDs: ["TEST-private-hidden", "TEST-private-both"],
+                                           burstIDs: ["TEST-private-burst", "TEST-private-both"])
+    }
+
+    private func assertFetchScopeRecovery(hiddenIDs: Set<String>, burstIDs: Set<String>) async throws {
+        let saved = [SyncRow("TEST-saved"), SyncRow("TEST-saved-hidden"), SyncRow("TEST-saved-burst")]
+        let pendingIDs = hiddenIDs.union(burstIDs)
+        let pending = pendingIDs.sorted().map { SyncRow($0) }
+        let all = saved + pending
+        let hidden = hiddenIDs.union(["TEST-saved-hidden"])
+        let burst = burstIDs.union(["TEST-saved-burst"])
+        let context = try context(all)
+        context.library.configure(hiddenIDs: hidden, burstIDs: burst, byIDOptions: { nil })
+        try seed(context, saved)
+        let before = try disk(context)
+        XCTAssertEqual(try context.library.enumerateAuthorizedImages(), all.map(\.revision))
+        for id in pendingIDs { XCTAssertNil(context.library.currentRevision(id: id)) }
+        do {
+            _ = try await context.worker.synchronize(networkAllowed: false, progress: { _ in },
+                                                     committed: { XCTFail("Scope mismatch must not write") })
+            XCTFail("Legacy lookup must reject an enumerated photo")
+        } catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .encoding, code: .photoChanged,
+                underlying: .photo("照片已变化，请重新同步。"))
+            XCTAssertEqual(failure.diagnostic.identifier, "SS-ENCODING-PHOTO-CHANGED")
+            for row in all {
+                for text in [failure.diagnostic.message, failure.localizedDescription,
+                             failure.description, failure.debugDescription] {
+                    XCTAssertFalse(text.contains(row.revision.id), "No synthetic private ID in public errors")
+                }
+            }
+        }
+        XCTAssertEqual(try disk(context), before)
+        XCTAssertEqual(context.access.revision, 0)
+        XCTAssertTrue(context.library.requests.isEmpty)
+        let unchanged = try await context.reader.syncMetadata()
+        XCTAssertEqual(Set(unchanged.keys), Set(saved.map { $0.revision.id }))
+
+        // Restore only lookup options on the SAME worker/library/index, with no
+        // reauthorization, clearing, re-seeding or revision/generation change.
+        context.library.configure(hiddenIDs: hidden, burstIDs: burst)
+        XCTAssertEqual(context.library.changeGeneration, 0)
+        XCTAssertEqual(try context.library.enumerateAuthorizedImages(), all.map(\.revision))
+        for row in pending { XCTAssertEqual(context.library.currentRevision(id: row.revision.id), row.revision) }
+        let result = try await run(context)
+        XCTAssertEqual(result.progress, PhotoSyncProgress(phase: .updating, total: pending.count,
+            completed: pending.count, encoded: pending.count))
+        XCTAssertEqual(context.library.requests.map(\.0).sorted(), pendingIDs.sorted())
+        XCTAssertTrue(context.library.requests.allSatisfy { !$0.1 })
+        XCTAssertEqual(result.summary.indexedCount, all.count)
+        XCTAssertEqual(result.summary.authorizedCount, all.count)
+        let records = try await context.reader.searchRecords(modelVersion: version,
+                                                             accessibleIDs: Set(all.map { $0.revision.id }))
+        XCTAssertEqual(Set(records.map { $0.photo.id }), Set(all.map { $0.revision.id }))
+        for record in records {
+            XCTAssertEqual(record.photo.imageEmbedding,
+                TestFixtures.vector(axis: pendingIDs.contains(record.photo.id) ? 0 : 1))
+        }
+    }
+
+    func testSharedFetchScopeStillRejectsMissingSelectedPhoto() async throws {
+        try await assertSelectedFetchScopeChangeRejected(nil)
+    }
+
+    func testSharedFetchScopeStillRejectsModificationAndCreationChanges() async throws {
+        for change in [SyncLibrary.Change.revision, .creation] {
+            try await assertSelectedFetchScopeChangeRejected(change)
+        }
+    }
+
+    private func assertSelectedFetchScopeChangeRejected(_ change: SyncLibrary.Change?) async throws {
+        let selected = SyncRow("TEST-private-hidden-burst")
+        let saved = SyncRow("TEST-saved")
+        let hold = SyncHold()
+        let context = try context([selected, saved], holds: [0: hold])
+        context.library.configure(hiddenIDs: [selected.revision.id], burstIDs: [selected.revision.id])
+        // Fail before installing a gate if the factory no longer admits this row.
+        XCTAssertEqual(try XCTUnwrap(context.library.currentRevision(id: selected.revision.id)), selected.revision)
+        try seed(context, [saved])
+        let before = try disk(context)
+        let task = start(context, holds: [hold], committed: { XCTFail("Changed photo must not commit") })
+        await hold.started.wait(1)
+        if let change {
+            context.library.change(change)
+            let current = try XCTUnwrap(context.library.currentRevision(id: selected.revision.id))
+            XCTAssertNotEqual(current, selected.revision)
+        } else {
+            context.library.replace([saved])
+            XCTAssertNil(context.library.currentRevision(id: selected.revision.id))
+        }
+        XCTAssertEqual(context.library.changeGeneration, 0, "Selected-photo guard, not generation failure")
+        hold.release.send()
+        do { _ = try await task.value; XCTFail("Real photo changes must still fail") }
+        catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .encoding, code: .photoChanged,
+                underlying: .photo("照片已变化，请重新同步。"))
+        }
+        XCTAssertEqual(context.library.requests.map(\.0), [selected.revision.id])
+        XCTAssertEqual(try disk(context), before)
+        XCTAssertEqual(context.access.revision, 0)
+    }
+
+    func testSharedFetchScopeStillRejectsChangeOutsidePendingSetWithoutGeneration() async throws {
+        let saved = SyncRow("TEST-saved-hidden")
+        let pending = SyncRow("TEST-private-burst")
+        let outside = SyncRow("TEST-private-outside")
+        let context = try context([saved, pending], generation: nil)
+        context.library.configure(hiddenIDs: [saved.revision.id, outside.revision.id],
+                                  burstIDs: [pending.revision.id, outside.revision.id])
+        try seed(context, [saved])
+        let before = try disk(context)
+        do {
+            _ = try await context.worker.synchronize(networkAllowed: false, progress: { state in
+                if state.phase == .updating {
+                    XCTAssertEqual(state.total, 1)
+                    context.library.replace([saved, pending, outside])
+                }
+            }, committed: { XCTFail("Changed full scope must not commit") })
+            XCTFail("Checking only the pending photo would miss the new outside ID")
+        } catch let failure as PhotoSyncFailure {
+            assertPhotoSyncFailure(failure, stage: .difference, code: .libraryChanged,
+                underlying: .photo("图库范围已变化，请重新同步。"))
+        }
+        XCTAssertNil(context.library.changeGeneration)
+        XCTAssertEqual(context.library.currentRevision(id: pending.revision.id), pending.revision)
+        XCTAssertEqual(context.library.currentRevision(id: outside.revision.id), outside.revision)
+        XCTAssertEqual(try disk(context), before)
+        XCTAssertEqual(context.access.revision, 0)
+        XCTAssertTrue(context.library.requests.isEmpty)
+    }
+
     func testUnchangedMetadataNeverDecodesBlobsOrWritesOrChangesDerivedCaches() async throws {
         let context = try context([SyncRow("kept", label: "Place")])
         try seed(context, [SyncRow("kept", label: "Place")])
@@ -995,6 +1131,9 @@ private final class SyncLibrary: PhotoLibraryIndexing, @unchecked Sendable {
         var writerTarget = 0
         var writerChecks = 0
         var writerChange: Change?
+        var hiddenIDs: Set<String> = []
+        var burstIDs: Set<String> = []
+        var byIDOptions: @Sendable () -> PHFetchOptions? = { PhotoLibraryClient.searchFetchOptions() }
     }
     private let state: SyncBox<State>
     private let preview: IndexingImage
@@ -1015,6 +1154,18 @@ private final class SyncLibrary: PhotoLibraryIndexing, @unchecked Sendable {
         set { state.modify { $0.enumerationHook = newValue } }
     }
     func replace(_ rows: [SyncRow]) { state.modify { $0.rows = rows } }
+    func configure(hiddenIDs: Set<String> = [], burstIDs: Set<String> = [],
+                   byIDOptions: @escaping @Sendable () -> PHFetchOptions? = { PhotoLibraryClient.searchFetchOptions() }) {
+        state.modify {
+            $0.hiddenIDs = hiddenIDs
+            $0.burstIDs = burstIDs
+            $0.byIDOptions = byIDOptions
+        }
+    }
+    private static func includes(_ id: String, in state: State, options: PHFetchOptions) -> Bool {
+        (!state.hiddenIDs.contains(id) || options.includeHiddenAssets)
+            && (!state.burstIDs.contains(id) || options.includeAllBurstAssets)
+    }
     func change(_ change: Change) { state.modify { Self.change(change, state: &$0) } }
     private static func change(_ change: Change, state: inout State) {
         switch change {
@@ -1036,7 +1187,10 @@ private final class SyncLibrary: PhotoLibraryIndexing, @unchecked Sendable {
         state.modify { $0.enumerations += 1 }
         state.value.enumerationHook?()
         let value = state.value
-        return value.readable ? value.rows.map(\.revision) : []
+        let options = PhotoLibraryClient.searchFetchOptions()
+        return value.readable ? value.rows.filter {
+            Self.includes($0.revision.id, in: value, options: options)
+        }.map(\.revision) : []
     }
     func currentRevision(id: String) -> PhotoRevision? {
         state.modify { state in
@@ -1048,7 +1202,12 @@ private final class SyncLibrary: PhotoLibraryIndexing, @unchecked Sendable {
             }
         }
         let value = state.value
-        return value.readable ? value.rows.first { $0.revision.id == id }?.revision : nil
+        // TEST ONLY: simulate nil lookup options with PHFetchOptions defaults
+        // for tagged synthetic rows, not real withLocalIdentifiers OS behavior.
+        // Options stay call-local; only a Sendable factory crosses actors.
+        let options = value.byIDOptions() ?? PHFetchOptions()
+        guard value.readable, Self.includes(id, in: value, options: options) else { return nil }
+        return value.rows.first { $0.revision.id == id }?.revision
     }
     func placeLabel(id: String, resolver: OfflinePlaceResolver) -> String? {
         state.modify { $0.places += 1 }
