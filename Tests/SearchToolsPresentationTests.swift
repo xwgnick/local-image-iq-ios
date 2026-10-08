@@ -173,8 +173,16 @@ final class SearchToolsPresentationTests: XCTestCase {
         XCTAssertEqual(scroll.contentOffset.y, target.y, accuracy: 1 / hosted.window.screen.scale)
         XCTAssertEqual(scroll.contentOffset.x, initialOffset.x)
         XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width)
-        XCTAssertEqual(scroll.convert(scroll.bounds, to: hosted.controller.view), viewport,
-                   "Scrolling must not move or resize the actual viewport")
+        let afterViewport = scroll.convert(scroll.bounds, to: hosted.controller.view)
+        // Coordinate conversion subtracts the scroll offset; IEEE roundoff
+        // produced -3.55e-15 versus zero at the same native pixel boundary.
+        // Compare integer backing-pixel edges, not an arbitrary point tolerance.
+        let scale = hosted.window.screen.scale
+        let edges: (CGRect) -> [Int] = { rect in
+            [rect.minX, rect.minY, rect.maxX, rect.maxY].map { Int(($0 * scale).rounded()) }
+        }
+        XCTAssertEqual(edges(afterViewport), edges(viewport),
+                       "Scrolling must not move or resize the actual pixel viewport")
         let after = try capture(hosted, scale: hosted.window.screen.scale)
         XCTAssertNotEqual(try pixels(before, in: visibleViewport), try pixels(after, in: visibleViewport),
                           "The real scroll viewport must render different content after scrolling")

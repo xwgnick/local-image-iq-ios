@@ -106,11 +106,27 @@ final class SearchKeyboardTests: XCTestCase {
     }
 
     func testDraggingScrollViewDismissesKeyboard() {
-        _ = focusQuery()
+        let field = focusQuery()
         let scroll = app.scrollViews["library-scroll"]
+        let keyboard = app.keyboards.firstMatch
+        let keyboardFrame = keyboard.frame
+        XCTAssertFalse(keyboardFrame.isEmpty)
+        XCTAssertTrue(app.frame.contains(keyboardFrame))
         let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.2))
-        let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.95))
+        let startPoint = CGPoint(x: scroll.frame.minX + scroll.frame.width * 0.85,
+                                 y: scroll.frame.minY + scroll.frame.height * 0.2)
+        XCTAssertTrue(scroll.frame.contains(startPoint))
+        XCTAssertFalse(field.frame.contains(startPoint))
+        XCTAssertLessThan(startPoint.y, keyboardFrame.minY)
+        // Footer now has its own layout space. The scroll view's 95% point
+        // stays ABOVE the keyboard, so it no longer completes an interactive
+        // dismissal. Continue the same drag through the actual keyboard.
+        let endPoint = CGPoint(x: startPoint.x, y: keyboardFrame.maxY - 1)
+        XCTAssertTrue(keyboardFrame.contains(endPoint))
+        let end = app.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: endPoint.x - app.frame.minX, dy: endPoint.y - app.frame.minY))
         start.press(forDuration: 0.1, thenDragTo: end)
         expectKeyboardHidden()
+        XCTAssertEqual(field.value as? String, "dog eat my apple pen")
     }
 }
