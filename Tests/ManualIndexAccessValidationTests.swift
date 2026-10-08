@@ -138,9 +138,34 @@ final class ManualIndexAccessValidationTests: XCTestCase {
     }
 
     func testWorkerReconcileRechecksAccessInsideTransactionAndRollsBackOrphans() async throws {
-        let c = try context([], generation: 0)
-        let old = cached(revision(), label: "Orphan after delete")
+        let selected = revision()
+        let c = try context([selected], generation: 0)
+        // The writer and worker lazily open separate writable connections. Warm
+        // the worker before measuring rollback: its schema-init transaction can
+        // change database bytes independently of the later reconcile transaction.
+        // Match the fake's no-GPS result so this cache-hit pass prunes no rows or
+        // places and requests no pixels. Constructors/read-only refresh won't do.
+        let warmRecord = cached(selected)
+        try await c.writer.save(warmRecord)
+        let warm = try await run(c)
+        XCTAssertEqual(warm.indexedCount, 1)
+        XCTAssertEqual(c.library.value.enumerations, 2)
+        XCTAssertTrue(c.library.value.requests.isEmpty)
+        let imageCalls = await c.encoders.imageCalls
+        XCTAssertEqual(imageCalls, 0)
+        let warmed = try await c.writer.record(id: selected.id)
+        assertSame(warmed, warmRecord)
+
+        // Seed the exact photo/place pair AFTER warm-up, then measure only the
+        // faulted empty-snapshot reconcile on the already-open worker connection.
+        let old = cached(selected, label: "Orphan after delete")
         try await c.writer.save(old)
+        c.library.mutate {
+            $0.revisions = []
+            $0.enumerations = 0
+            $0.requests = []
+            $0.places = []
+        }
         let before = try disk(c)
         // The first destructive reconcile creates a rollback journal. Its next
         // Photos guard is pre-COMMIT, not the pre-enumeration or BEGIN guard.
@@ -149,6 +174,8 @@ final class ManualIndexAccessValidationTests: XCTestCase {
         catch AppFailure.permission { }
         XCTAssertEqual(c.library.value.journalFaults, 1)
         XCTAssertEqual(c.library.value.enumerations, 1)
+        XCTAssertTrue(c.library.value.requests.isEmpty)
+        XCTAssertTrue(c.library.value.places.isEmpty)
         XCTAssertEqual(try disk(c), before)
         let retained = try await c.writer.record(id: "asset")
         assertSame(retained, old)

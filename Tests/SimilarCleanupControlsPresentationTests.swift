@@ -38,15 +38,17 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         try await host.wait { host.controls[.value] != nil }
         XCTAssertEqual(arrow.accessibilityValue, "已展开")
         let slider = try XCTUnwrap(controlsDescendants(host.controller.view, UISlider.self).first)
-        XCTAssertEqual(slider.minimumValue, 50)
-        XCTAssertEqual(slider.maximumValue, 99)
-        XCTAssertEqual(slider.value, 90)
+        // SwiftUI normalizes the native UISlider; displayed ticks remain 50...99.
+        let initialNativeValue = Float(40) / 49 // (90 - 50) / (99 - 50)
+        XCTAssertEqual(slider.minimumValue, 0)
+        XCTAssertEqual(slider.maximumValue, 1)
+        XCTAssertEqual(slider.value, initialNativeValue, accuracy: 4 * initialNativeValue.ulp)
         try assertCenteredValue(host)
         try host.attach(to: self, name: "UIReview-cleanup-v3-expanded-090")
 
         let session = f.cleanup.selectionSessionID
         let groups = f.cleanup.displayGroups.map(\.id)
-        slider.setValue(85, animated: false)
+        slider.setValue(Float(35) / 49, animated: false) // (85 - 50) / (99 - 50)
         slider.sendActions(for: .valueChanged)
         try await host.wait { f.cleanup.draftThreshold == 0.85 && host.controls[.pending] != nil }
         XCTAssertEqual(f.cleanup.threshold, 0.90)

@@ -163,36 +163,78 @@ final class PhotoSyncPresentationTests: XCTestCase {
         let host = try ControlsNativeHost(content: AnyView(ContentView(state: f.app,
             similarCleanupState: f.cleanup, navigation: f.navigation, cleanupPreferences: nil)))
         defer { host.close() }
-        try await host.wait { host.sync[.selectionToolbar] != nil }
+        try await host.wait { host.hasRootBottomFrame(.selectionToolbar) }
+        let beforeToast = try host.rootSelectionToolbarFrame()
+        let beforePreference = host.sync[.selectionToolbar]
         // Explicit fake-sync opt-in; refresh alone does not simulate a successful
         // real cold launch or grant the actual Photos client access.
         f.app.photoSync.updateAvailability(ready: true, networkAllowed: false)
         try await reached(run.entered)
-        try await host.wait { host.sync[.card] != nil }
+        // Wait only for the held backend's public state and mounted native
+        // views, NEVER for non-overlap/the asserted coordinates. wait already
+        // settles two main-queue layout passes; adding assertion polling would
+        // hide a real nested-inset regression rather than diagnose it.
+        try await host.wait {
+            f.app.photoSync.phase == .updating
+                && host.hasRootBottomFrame(.syncToast)
+                && host.hasRootBottomFrame(.navigation)
+                && host.hasRootBottomFrame(.selectionToolbar)
+        }
+        // Capture the actual bounded UIWindow BEFORE any geometry assertion,
+        // so another failure still exports the selection + toast evidence.
+        try host.attachRootSyncWindow(to: self)
         let searchScroll = try primarySearchScrollView(in: host.controller.view)
-        let toolbar = try XCTUnwrap(host.sync[.selectionToolbar])
-        let card = try XCTUnwrap(host.sync[.card])
-        XCTAssertLessThanOrEqual(toolbar.maxY, card.minY + host.pixel,
-                                 "The selection buttons reserve their own inset above the sync card")
+        let toolbar = try host.rootSelectionToolbarFrame()
+        let card = try host.rootBottomFrame(.syncToast)
+        let navigation = try host.rootBottomFrame(.navigation)
         let usable = searchScroll.convert(searchScroll.bounds.inset(by: searchScroll.adjustedContentInset), to: host.window)
+        let measurements = XCTAttachment(string: """
+        Before toast: native toolbar=\(beforeToast); preference=\(String(describing: beforePreference))
+        Settled window=\(host.window.bounds); native toolbar=\(toolbar)
+        Native toast envelope=\(card); native navigation=\(navigation); native search usable=\(usable)
+        SwiftUI preferences (not used for root non-overlap): \(host.sync)
+        Toast envelope includes side/bottom padding, but its minY is the actual card minY.
+        """)
+        measurements.name = "Geometry-photo-sync-v2-production-root-selection"
+        measurements.lifetime = .keepAlways
+        add(measurements)
+        XCTAssertLessThanOrEqual(toolbar.maxY, card.minY + host.pixel,
+                                 "The actual selection toolbar must finish above the actual sync card")
         XCTAssertLessThanOrEqual(usable.maxY, toolbar.minY + host.pixel)
+        XCTAssertGreaterThanOrEqual(toolbar.minY, host.window.bounds.minY)
+        XCTAssertGreaterThanOrEqual(card.minX, host.window.bounds.minX)
+        XCTAssertLessThanOrEqual(card.maxX, host.window.bounds.maxX + host.pixel)
+        XCTAssertLessThanOrEqual(card.maxY, navigation.minY + host.pixel)
+        XCTAssertLessThanOrEqual(navigation.maxY, host.window.bounds.maxY + host.pixel)
+        XCTAssertTrue(f.app.photoSync.canCancel)
+        try host.assertRootToolbarHitTargets(in: toolbar, excluding: searchScroll)
+        // Keep the existing child text/progress/44-point action checks as well;
+        // root non-overlap and scrolling above it now use native window frames.
         try assertCardGeometry(host, cancel: true)
         f.navigation.select(.cleanup)
         try await host.wait { f.cleanup.hasScanned }
         await f.cleanup.waitUntilIdle()
         XCTAssertNotNil(host.sync[.card])
+        XCTAssertTrue(host.hasRootBottomFrame(.syncToast))
+        XCTAssertFalse(host.hasRootBottomFrame(.selectionToolbar), "Search actions must not leak onto cleanup")
         XCTAssertEqual(f.app.photoSync.phase, .updating)
         let groupIDs = f.cleanup.displayGroups.map(\.id)
         let cleanupSession = f.cleanup.selectionSessionID
 
         f.cleanup.prepareDeletion() // Empty-selection alert only; never confirm/delete.
-        try await host.wait { host.controller.presentedViewController != nil && host.sync[.card] == nil }
+        try await host.wait {
+            host.controller.presentedViewController != nil && host.sync[.card] == nil
+                && !host.hasRootBottomFrame(.syncToast)
+        }
         let anchors = controlsDescendants(host.controller.view, PrimaryPageAccessibilityAnchorView.self)
         XCTAssertTrue(anchors.contains { $0.owningNavigationController?.view.accessibilityElementsHidden == true })
         XCTAssertFalse(host.window.accessibilityElementsHidden)
         XCTAssertFalse(host.controller.view.accessibilityElementsHidden)
         f.cleanup.dismissMessage()
-        try await host.wait { host.controller.presentedViewController == nil && host.sync[.card] != nil }
+        try await host.wait {
+            host.controller.presentedViewController == nil && host.sync[.card] != nil
+                && host.hasRootBottomFrame(.syncToast)
+        }
 
         let indexEpoch = f.app.indexSourceEpoch
         try await service.commit(using: access)
@@ -208,11 +250,19 @@ final class PhotoSyncPresentationTests: XCTestCase {
         f.navigation.select(.search)
         try await host.settle()
         XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === searchScroll)
+        let returnedToolbar = try host.rootSelectionToolbarFrame()
+        XCTAssertLessThanOrEqual(returnedToolbar.maxY, try host.rootBottomFrame(.syncToast).minY + host.pixel)
+        try host.assertRootToolbarHitTargets(in: returnedToolbar, excluding: searchScroll)
         NotificationCenter.default.post(name: UIResponder.keyboardWillShowNotification, object: nil)
-        try await host.wait { host.sync[.card] == nil }
+        try await host.wait { host.sync[.card] == nil && !host.hasRootBottomFrame(.syncToast) }
         XCTAssertFalse(host.tabs.isEmpty, "Only hide the card, not the existing keyboard/navigation layout")
+        XCTAssertTrue(host.hasRootBottomFrame(.selectionToolbar))
+        XCTAssertTrue(host.hasRootBottomFrame(.navigation))
         NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil)
-        try await host.wait { host.sync[.card] != nil }
+        try await host.wait { host.sync[.card] != nil && host.hasRootBottomFrame(.syncToast) }
+        XCTAssertLessThanOrEqual(try host.rootSelectionToolbarFrame().maxY,
+                     try host.rootBottomFrame(.syncToast).minY + host.pixel)
+        XCTAssertTrue(f.app.photoSync.canCancel)
         let calls = await service.calls
         XCTAssertEqual(calls, 1)
         // Public notification + native scope evidence, not a real keyboard tap
@@ -265,6 +315,72 @@ final class PhotoSyncPresentationTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(progress.minY + host.pixel, text.maxY)
             XCTAssertLessThanOrEqual(progress.maxX, card.maxX + host.pixel)
         }
+    }
+}
+
+@MainActor
+private extension ControlsNativeHost {
+    func hasRootBottomFrame(_ part: RootBottomLayoutPart) -> Bool {
+        controlsDescendants(controller.view, RootBottomLayoutProbeView.self).contains {
+            $0.part == part && $0.window === window && $0.windowFrame != nil
+        }
+    }
+
+    func rootBottomProbe(_ part: RootBottomLayoutPart) throws -> RootBottomLayoutProbeView {
+        let probes = controlsDescendants(controller.view, RootBottomLayoutProbeView.self).filter {
+            $0.part == part && $0.window === window && $0.windowFrame != nil
+        }
+        XCTAssertEqual(probes.count, 1, "Exactly one attached native root \(part), not merged preference entries")
+        let probe = try XCTUnwrap(probes.count == 1 ? probes.first : nil)
+        XCTAssertFalse(probe.isUserInteractionEnabled)
+        XCTAssertFalse(probe.isAccessibilityElement)
+        XCTAssertTrue(probe.accessibilityElementsHidden)
+        return probe
+    }
+
+    func rootBottomFrame(_ part: RootBottomLayoutPart) throws -> CGRect {
+        try XCTUnwrap(rootBottomProbe(part).windowFrame)
+    }
+
+    func rootSelectionToolbarFrame() throws -> CGRect {
+        try rootBottomFrame(.selectionToolbar)
+    }
+
+    func assertRootToolbarHitTargets(in toolbar: CGRect, excluding scroll: UIScrollView) throws {
+        for part in [RootBottomLayoutPart.shareAction, .favoriteAction, .albumAction] {
+            let probe = try rootBottomProbe(part)
+            let frame = try XCTUnwrap(probe.windowFrame)
+            XCTAssertGreaterThanOrEqual(frame.width, 44)
+            XCTAssertGreaterThanOrEqual(frame.height, 44)
+            XCTAssertGreaterThanOrEqual(frame.minX + pixel, toolbar.minX)
+            XCTAssertLessThanOrEqual(frame.maxX, toolbar.maxX + pixel)
+            XCTAssertGreaterThanOrEqual(frame.minY + pixel, toolbar.minY)
+            XCTAssertLessThanOrEqual(frame.maxY, toolbar.maxY + pixel)
+            let hit = try XCTUnwrap(window.hitTest(CGPoint(x: frame.midX, y: frame.midY), with: nil))
+            XCTAssertFalse(hit === window || hit === probe)
+            XCTAssertFalse(hit === scroll || hit.isDescendant(of: scroll), "A selection action must not hit the result scroller")
+            let container = try XCTUnwrap(probe.superview)
+            XCTAssertTrue(probe.isDescendant(of: hit) || hit.isDescendant(of: container),
+                          "Native hit must reach the action's hosting branch; never invoke Photos actions in this test")
+        }
+    }
+
+    func attachRootSyncWindow(to test: XCTestCase) throws {
+        layout()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = window.screen.scale
+        format.opaque = true
+        format.preferredRange = .standard
+        var drawn = false
+        let image = UIGraphicsImageRenderer(size: window.bounds.size, format: format).image { context in
+            UIColor.black.setFill(); context.fill(window.bounds)
+            drawn = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        guard drawn else { XCTFail("Root UIWindow capture failed"); throw ControlsPresentationFailure.drawing }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "UIReview-photo-sync-v2-production-root-selection-working"
+        attachment.lifetime = .keepAlways
+        test.add(attachment)
     }
 }
 

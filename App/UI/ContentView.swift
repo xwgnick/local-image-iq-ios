@@ -59,18 +59,28 @@ struct ContentView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
+                // Search has one ordered inset, not a second inset inside its
+                // retained NavigationStack that must inherit this root inset.
+                // Cleanup continues to own its separate selection controls.
+                if isSearchPageActive {
+                    searchFooter.accessibilityHidden(!isSearchPageAccessible)
+                }
                 // Always mount the observing child. AppState does not forward
                 // photoSync publications, including completion auto-hide.
                 PhotoSyncToast(state: state.photoSync,
                                isPresented: !hasPresentedSurface && !keyboardVisible)
+                    .rootBottomFrame(.syncToast)
                 PrimaryNavigationBar(page: navigation.page, switchingDisabled: switchingDisabled) { page in
                     guard !switchingDisabled else { return }
                     isSearchFocused = false
                     navigation.select(page)
                 }
+                // Keep the gate on the actual controls, as before nesting the
+                // footer stack: the outer VStack alone did not hide tabs in XCUI.
+                .accessibilityHidden(hasPresentedSurface)
+                .rootBottomFrame(.navigation)
             }
-            // Outside both native page scopes. Inner selection insets remain
-            // above this entire stack, never underneath the sync card.
+            // Outside both native page AX scopes; gate the shared footer too.
             .accessibilityHidden(hasPresentedSurface)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -195,17 +205,6 @@ struct ContentView: View {
             }
             .background(IQStyle.background)
             .foregroundStyle(IQStyle.text)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if state.isSelectingResults {
-                    selectionToolbar.accessibilityHidden(!isSearchPageAccessible)
-                } else {
-                    libraryStatus
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 8)
-                        .background(IQStyle.background)
-                        .accessibilityHidden(!isSearchPageAccessible)
-                }
-            }
             .navigationTitle(showingResults ? "照片搜索" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(IQStyle.background, for: .navigationBar)
@@ -256,6 +255,17 @@ struct ContentView: View {
         photoWriteInFlight = photoActions.isBusy
     }
 
+    @ViewBuilder private var searchFooter: some View {
+        if state.isSelectingResults {
+            selectionToolbar
+        } else {
+            libraryStatus
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(IQStyle.background)
+        }
+    }
+
     private var selectionToolbar: some View {
         VStack(spacing: 6) {
             ViewThatFits(in: .horizontal) {
@@ -278,12 +288,14 @@ struct ContentView: View {
                 }
                 .accessibilityIdentifier("share-selected-photos")
                 .frame(minWidth: 44, minHeight: 44)
+                .rootBottomFrame(.shareAction)
                 Menu {
                     Button("加入收藏") { performPhotoAction(.favorite(true), ids: state.orderedSelectedResultIDs) }
                     Button("取消收藏") { performPhotoAction(.favorite(false), ids: state.orderedSelectedResultIDs) }
                 } label: { Label("收藏", systemImage: "heart") }
                 .accessibilityIdentifier("favorite-selected-photos")
                 .frame(minWidth: 44, minHeight: 44)
+                .rootBottomFrame(.favoriteAction)
                 Button {
                     albumActionIDs = state.orderedSelectedResultIDs
                     photoActions.loadAlbums()
@@ -291,6 +303,7 @@ struct ContentView: View {
                 } label: { Label("相册", systemImage: "folder.badge.plus") }
                 .accessibilityIdentifier("album-selected-photos")
                 .frame(minWidth: 44, minHeight: 44)
+                .rootBottomFrame(.albumAction)
             }
             .font(.subheadline)
             .frame(minHeight: 44)
@@ -300,6 +313,7 @@ struct ContentView: View {
         .padding(.horizontal, 20).padding(.vertical, 8)
         .foregroundStyle(IQStyle.text).tint(IQStyle.accent).background(IQStyle.background)
         .syncFrame(.selectionToolbar)
+        .rootBottomFrame(.selectionToolbar)
     }
 
     private var selectionActionLayout: AnyLayout {
@@ -512,5 +526,52 @@ struct ContentView: View {
           guard navigation.page == .search,
               let boundary, boundary.frame.minY < viewportHeight, boundary.frame.maxY > 0 else { return }
         state.loadMoreResults(sessionID: boundary.sessionID, after: boundary.visibleCount)
+    }
+}
+
+/// Passive native bounds, read on demand after layout. Unlike a merged SwiftUI
+/// preference, these cannot retain a frame from the preceding toast/tab state.
+/// The toast probe includes its existing horizontal and bottom padding; its
+/// top edge is exactly the card's top edge (there is no top padding).
+enum RootBottomLayoutPart: Hashable {
+    case selectionToolbar, shareAction, favoriteAction, albumAction, syncToast, navigation
+}
+
+final class RootBottomLayoutProbeView: UIView {
+    var part: RootBottomLayoutPart = .selectionToolbar
+
+    var windowFrame: CGRect? {
+        guard let window, bounds.width > 0, bounds.height > 0 else { return nil }
+        return convert(bounds, to: window)
+    }
+}
+
+@MainActor
+private struct RootBottomLayoutProbe: UIViewRepresentable {
+    let part: RootBottomLayoutPart
+
+    func makeUIView(context: Context) -> RootBottomLayoutProbeView {
+        let view = RootBottomLayoutProbeView(frame: .zero)
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
+        view.part = part
+        return view
+    }
+
+    func updateUIView(_ uiView: RootBottomLayoutProbeView, context: Context) {
+        uiView.part = part
+    }
+}
+
+@MainActor
+private extension View {
+    func rootBottomFrame(_ part: RootBottomLayoutPart) -> some View {
+        background {
+            RootBottomLayoutProbe(part: part)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
