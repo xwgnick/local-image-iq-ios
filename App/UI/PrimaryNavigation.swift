@@ -179,37 +179,50 @@ private final class PrimaryPageAccessibilityBoundary {
 struct PrimaryNavigationBar: View {
     let page: PrimaryPage
     let switchingDisabled: Bool
+    var accessibilityActive: Bool = true
     let select: (PrimaryPage) -> Void
 
     var body: some View {
         HStack(spacing: 8) {
             ForEach(PrimaryPage.allCases) { item in
-                Button { select(item) } label: {
-                    Label(item.title, systemImage: item.symbol)
-                        .font(.subheadline.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                        .padding(.horizontal, 8)
-                        .foregroundStyle(page == item ? IQStyle.accent : IQStyle.secondary)
-                        .background(page == item ? IQStyle.accentSoft : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 16))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(switchingDisabled)
-                .accessibilityIdentifier(item.accessibilityID)
-                .accessibilityAddTraits(page == item ? .isSelected : [])
-                .background {
-                    GeometryReader { geometry in
-                        Color.clear.preference(key: PrimaryNavigationFrames.self,
-                                               value: [item: geometry.frame(in: .global)])
+                if accessibilityActive {
+                    Button { select(item) } label: { tabLabel(item) }
+                    .buttonStyle(.plain)
+                    .disabled(switchingDisabled)
+                    .accessibilityIdentifier(item.accessibilityID)
+                    .accessibilityAddTraits(page == item ? .isSelected : [])
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(key: PrimaryNavigationFrames.self,
+                                                   value: [item: geometry.frame(in: .global)])
+                        }
                     }
+                } else {
+                    // No Button or tab identifier behind a presented surface.
+                    // The same noninteractive label keeps its natural height,
+                    // including Dynamic Type, without measuring/caching a size.
+                    tabLabel(item).hidden()
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 10)
         .background(IQStyle.background)
         .overlay(alignment: .top) { Rectangle().fill(IQStyle.line).frame(height: 1) }
+        .accessibilityHidden(!accessibilityActive)
+    }
+
+    private func tabLabel(_ item: PrimaryPage) -> some View {
+        Label(item.title, systemImage: item.symbol)
+            .font(.subheadline.weight(.semibold))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .padding(.horizontal, 8)
+            .foregroundStyle(page == item ? IQStyle.accent : IQStyle.secondary)
+            .background(page == item ? IQStyle.accentSoft : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 16))
+            .contentShape(Rectangle())
     }
 }
 

@@ -152,6 +152,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
             NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil)
         }
         f.app.query = "TEST retained search"
+        let query = f.app.query
         f.app.search()
         await f.app.waitUntilIdle()
         f.app.setSelectingResults(true)
@@ -207,7 +208,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(card.maxY, navigation.minY + host.pixel)
         XCTAssertLessThanOrEqual(navigation.maxY, host.window.bounds.maxY + host.pixel)
         XCTAssertTrue(f.app.photoSync.canCancel)
-        try host.assertRootToolbarHitTargets(in: toolbar, excluding: searchScroll)
+        try host.assertRootActionRegionsRouteOutsideScroll(in: toolbar, excluding: searchScroll)
         // Keep the existing child text/progress/44-point action checks as well;
         // root non-overlap and scrolling above it now use native window frames.
         try assertCardGeometry(host, cancel: true)
@@ -220,6 +221,8 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertEqual(f.app.photoSync.phase, .updating)
         let groupIDs = f.cleanup.displayGroups.map(\.id)
         let cleanupSession = f.cleanup.selectionSessionID
+        let navigationBeforeModal = try host.rootBottomFrame(.navigation)
+        XCTAssertEqual(Set(host.tabs.keys), Set(PrimaryPage.allCases))
 
         f.cleanup.prepareDeletion() // Empty-selection alert only; never confirm/delete.
         try await host.wait {
@@ -230,11 +233,21 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertTrue(anchors.contains { $0.owningNavigationController?.view.accessibilityElementsHidden == true })
         XCTAssertFalse(host.window.accessibilityElementsHidden)
         XCTAssertFalse(host.controller.view.accessibilityElementsHidden)
+        // Only mounted Button branches publish tab regions; placeholders have
+        // neither those preferences nor identifiers. Strict AX absence remains
+        // an external XCUI check, not an in-process AX-tree inference.
+        XCTAssertTrue(host.tabs.isEmpty)
+        XCTAssertEqual(try host.rootBottomFrame(.navigation).height,
+                       navigationBeforeModal.height, accuracy: host.pixel)
+        XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === searchScroll)
         f.cleanup.dismissMessage()
         try await host.wait {
             host.controller.presentedViewController == nil && host.sync[.card] != nil
                 && host.hasRootBottomFrame(.syncToast)
         }
+        XCTAssertEqual(Set(host.tabs.keys), Set(PrimaryPage.allCases))
+        XCTAssertEqual(try host.rootBottomFrame(.navigation).height,
+                       navigationBeforeModal.height, accuracy: host.pixel)
 
         let indexEpoch = f.app.indexSourceEpoch
         try await service.commit(using: access)
@@ -250,9 +263,10 @@ final class PhotoSyncPresentationTests: XCTestCase {
         f.navigation.select(.search)
         try await host.settle()
         XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === searchScroll)
+        XCTAssertEqual(f.app.query, query)
         let returnedToolbar = try host.rootSelectionToolbarFrame()
         XCTAssertLessThanOrEqual(returnedToolbar.maxY, try host.rootBottomFrame(.syncToast).minY + host.pixel)
-        try host.assertRootToolbarHitTargets(in: returnedToolbar, excluding: searchScroll)
+        try host.assertRootActionRegionsRouteOutsideScroll(in: returnedToolbar, excluding: searchScroll)
         NotificationCenter.default.post(name: UIResponder.keyboardWillShowNotification, object: nil)
         try await host.wait { host.sync[.card] == nil && !host.hasRootBottomFrame(.syncToast) }
         XCTAssertFalse(host.tabs.isEmpty, "Only hide the card, not the existing keyboard/navigation layout")
@@ -346,7 +360,9 @@ private extension ControlsNativeHost {
         try rootBottomFrame(.selectionToolbar)
     }
 
-    func assertRootToolbarHitTargets(in toolbar: CGRect, excluding scroll: UIScrollView) throws {
+    func assertRootActionRegionsRouteOutsideScroll(in toolbar: CGRect, excluding scroll: UIScrollView) throws {
+        let card = try rootBottomFrame(.syncToast)
+        let navigation = try rootBottomFrame(.navigation)
         for part in [RootBottomLayoutPart.shareAction, .favoriteAction, .albumAction] {
             let probe = try rootBottomProbe(part)
             let frame = try XCTUnwrap(probe.windowFrame)
@@ -356,12 +372,25 @@ private extension ControlsNativeHost {
             XCTAssertLessThanOrEqual(frame.maxX, toolbar.maxX + pixel)
             XCTAssertGreaterThanOrEqual(frame.minY + pixel, toolbar.minY)
             XCTAssertLessThanOrEqual(frame.maxY, toolbar.maxY + pixel)
-            let hit = try XCTUnwrap(window.hitTest(CGPoint(x: frame.midX, y: frame.midY), with: nil))
+            let center = CGPoint(x: frame.midX, y: frame.midY)
+            XCTAssertTrue(frame.contains(center) && toolbar.contains(center))
+            XCTAssertFalse(card.contains(center) || navigation.contains(center))
+            let hit = try XCTUnwrap(window.hitTest(center, with: nil))
+            XCTAssertTrue(hit.window === window)
             XCTAssertFalse(hit === window || hit === probe)
             XCTAssertFalse(hit === scroll || hit.isDescendant(of: scroll), "A selection action must not hit the result scroller")
-            let container = try XCTUnwrap(probe.superview)
-            XCTAssertTrue(probe.isDescendant(of: hit) || hit.isDescendant(of: container),
-                          "Native hit must reach the action's hosting branch; never invoke Photos actions in this test")
+            XCTAssertTrue(hit.convert(hit.bounds, to: window).contains(center))
+            var ancestor: UIView? = hit
+            while let view = ancestor {
+                XCTAssertFalse(view.isHidden)
+                XCTAssertTrue(view.isUserInteractionEnabled)
+                XCTAssertGreaterThan(view.alpha, 0)
+                if let control = view as? UIControl { XCTAssertTrue(control.isEnabled) }
+                ancestor = view.superview
+            }
+            // A passive background probe has no supported ancestry contract
+            // with SwiftUI's action host. This checks native routing only, not
+            // SwiftUI action dispatch, and never invokes a Photos operation.
         }
     }
 

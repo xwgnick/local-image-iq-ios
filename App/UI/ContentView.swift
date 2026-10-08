@@ -23,8 +23,8 @@ struct ContentView: View {
     @FocusState private var isSearchFocused: Bool
     private var showingResults: Bool { state.completedQuery != nil || state.activity == .searching }
     private var isSearchPageActive: Bool { navigation.page == .search }
-    // Presentation only changes AX exposure, never logical tab activity or
-    // cleanup readiness (which would cancel/invalidate retained grouping work).
+    // Presentation gates page AX and stateless footer controls, never logical
+    // tab activity or cleanup readiness (which would invalidate retained work).
     private var hasPresentedSurface: Bool {
         showLibrary || showSettings || showFilters || showAlbumAction
             || photoActions.share != nil || photoActions.sharingPresented
@@ -48,20 +48,24 @@ struct ContentView: View {
     }
 
     var body: some View {
-        ZStack {
-            searchPage.modifier(RetainedPrimaryPage(active: navigation.page == .search))
-            SimilarPhotoCleanupSheet(state: similarCleanup, appState: state,
-                                    embedded: true, isPageActive: navigation.page == .cleanup,
-                                    accessibilityActive: !hasPresentedSurface,
-                                    openLibrary: openLibrary, openSettings: openSettings,
-                                    onPresentedSurfaceChanged: { cleanupSurfacePresented = $0 })
-                .modifier(RetainedPrimaryPage(active: navigation.page == .cleanup))
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        VStack(spacing: 0) {
+            ZStack {
+                searchPage.modifier(RetainedPrimaryPage(active: navigation.page == .search))
+                SimilarPhotoCleanupSheet(state: similarCleanup, appState: state,
+                                        embedded: true, isPageActive: navigation.page == .cleanup,
+                                        accessibilityActive: !hasPresentedSurface,
+                                        openLibrary: openLibrary, openSettings: openSettings,
+                                        onPresentedSurfaceChanged: { cleanupSurfacePresented = $0 })
+                    .modifier(RetainedPrimaryPage(active: navigation.page == .cleanup))
+            }
+            // Allocate the actual remaining height to both retained navigation
+            // trees, rather than relying on a root inset crossing their bounds.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+
             VStack(spacing: 0) {
-                // Search has one ordered inset, not a second inset inside its
-                // retained NavigationStack that must inherit this root inset.
-                // Cleanup continues to own its separate selection controls.
+                // The shared footer is outside both page trees. Cleanup still
+                // owns its separate selection controls inside its own page.
                 if isSearchPageActive {
                     searchFooter.accessibilityHidden(!isSearchPageAccessible)
                 }
@@ -70,19 +74,20 @@ struct ContentView: View {
                 PhotoSyncToast(state: state.photoSync,
                                isPresented: !hasPresentedSurface && !keyboardVisible)
                     .rootBottomFrame(.syncToast)
-                PrimaryNavigationBar(page: navigation.page, switchingDisabled: switchingDisabled) { page in
+                PrimaryNavigationBar(page: navigation.page, switchingDisabled: switchingDisabled,
+                                     accessibilityActive: !hasPresentedSurface) { page in
                     guard !switchingDisabled else { return }
                     isSearchFocused = false
                     navigation.select(page)
                 }
-                // Keep the gate on the actual controls, as before nesting the
-                // footer stack: the outer VStack alone did not hide tabs in XCUI.
-                .accessibilityHidden(hasPresentedSurface)
                 .rootBottomFrame(.navigation)
             }
+            .fixedSize(horizontal: false, vertical: true)
             // Outside both native page AX scopes; gate the shared footer too.
             .accessibilityHidden(hasPresentedSurface)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(IQStyle.background)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             keyboardVisible = true
         }
@@ -307,7 +312,7 @@ struct ContentView: View {
             }
             .font(.subheadline)
             .frame(minHeight: 44)
-            .disabled(state.selectedResultIDs.isEmpty || photoActions.isBusy || state.isBusy)
+            .disabled(state.selectedResultIDs.isEmpty || photoActions.isBusy)
             if photoActions.isBusy { ProgressView("正在处理照片…").font(.caption) }
         }
         .padding(.horizontal, 20).padding(.vertical, 8)
