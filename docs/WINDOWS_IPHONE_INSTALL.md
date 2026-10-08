@@ -1,6 +1,41 @@
+# Windows → iPhone 安装 — build 33 当前交付
+
+## 当前：0.12.0（build 33）— 自动增量同步与简约清理页，含用户批准的单项 UI 例外
+
+**DELIVERED／USER-APPROVED EXCEPTION／PENDING-DEVICE。**本机已经完整下载核验：**[../build/device-download/37752566636/LocalImageIQ-0.12.0-build33-iphoneos-unsigned.ipa](../build/device-download/37752566636/LocalImageIQ-0.12.0-build33-iphoneos-unsigned.ipa)** · [公开 Release ci-37752566636-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37752566636-1)。本机无需重下；另一台电脑从这个 Release 下载同一版本。仍需 Sideloadly 本机重签，不是免签安装或手机已经通过。
+
+> **USER-APPROVED EXCEPTION：UI14＝13通过／1批准跳过／0失败，不是14全通过。**解释“搜索页拖动收起键盘”后，用户明确回复「**可以了算通过吧**」。本版只在绑定 bundle 的 `CFBundleVersion == "33"` 时跳过 `testDraggingScrollViewDismissesKeyboard`，保留正文，其他build继续执行。**拖动收键盘仍未验证修复，可点“完成”收起**；该例外不涉及照片拖选、滑杆、同步取消或删除安全。
+
+### 覆盖安装后正常使用
+
+1. 选择上述 **0.12.0／build33**，沿用**原 Sideloadly Apple 账号／原有效 Bundle ID 覆盖安装**。**不卸载、不清库、不为升级重索引、不重新授权**；不更换现有照片网络许可。下方历史第1–4节仅供签名步骤参考，不执行旧版本迁移、清库或第5节旧网格诊断。
+2. 正常打开，启动准备成功且已有可读Photos授权后，会自动检查并增量同步**新增／修改、完整ID／revision变化及旧模型／缺失无效向量**；未变化的有效向量复用。没有权限不会自动弹授权或把空枚举当作清库。同步只移除已删除／不可访问照片的**App索引**，不自动删除系统照片，也不自动OCR。
+3. 有已提交的有效图片索引即可搜索，不必等待整轮结束。底部卡片显示实际进度；点“取消”后可能先显示“正在取消…”，**排空后才是“同步已取消”**，已提交索引保留。用户取消后切页／普通刷新／回前台不立即重启；显式“重新同步”或下一次进程冷启动恢复检查。键盘／弹层只隐藏卡片，不自动取消任务；完成提示约3秒后收起仅为UI行为。
+4. 点底部“**相似清理**”，默认滑杆收起，点44点下拉箭头展开，设置不再重复放滑杆。**0.90只适用于没有有效偏好的情况；升级后若仍显示0.80，这是保留的有效旧选择。想用0.90，请选一次并点“更新结果”**。拖动只改草稿、不保存／计算；旧组仍可浏览，更新后才应用新值，待更新不能沿用旧选择删除。阈值不是重复概率或安全删除保证。
+5. 分组按最新照片**创建时间**优先、再按大小、最后组ID稳定排序，缺时间最后；五列浏览／拖选／对比保留。**本次不要求真实删除照片来验收**。确需删除时仍由用户逐张核对、明确选择及确认，系统“最近删除”和iCloud同步规则不变；同步卡的“移除索引”不是该删除操作。
+
+**并发有边界：**同步编码准备可与前台读取并行，但搜索／OCR／清理整次操作的读租约可能让SQL提交等待；手动索引仍先排空自动同步再串行写入。不是所有操作无条件并行、瞬时完成或零UI影响；不保证关闭App后继续后台编码。完整说明见 [AUTOMATIC_PHOTO_SYNC_AND_CLEANUP.md](AUTOMATIC_PHOTO_SYNC_AND_CLEANUP.md)。
+
+### build33 包、测试与证据
+
+- 最终源码 **`dfc65208fae0ecd0982aab5152b0b039ff8f30e9`**；[run 37752566636](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37752566636)／[job 113229119465](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37752566636/job/113229119465) **第六次整体验证SUCCESS，前五次FAILED且无IPA**。最后变更只增加上述build33限定测试skip；CI配置、runner和模型门槛未改，不能说未新增任何跳过。
+- **Core79；App1718＝1717通过／1既有SQLite物理保护模拟器跳过／0失败，509.846秒，wall533.457秒**。新增169项／8套件全通过且已计入；真实模型 **8／128.318秒，CPU／`.all`／20 actor** 保留。独立UI **14＝13通过／1批准跳过／0失败，1269.727秒**；导航9全通过／1058.511秒，键盘5＝4通过／1跳过／211.216秒。
+- Release **406661356**，**2026-10-08T09:36:33Z**，**9资产、prerelease、非draft**。IPA asset **621373456**，**1,419,687,431 bytes**，实际全文件流式SHA-256 **`540b1a7cc24ab35dd5af365a5644de36ca5de7a2ddc1ffd3eadcd66175b140a0`**；**7-Zip26.04全量CRC PASS：11目录、30文件、解压后1,568,456,942 bytes**。记录：[../build/device-download/37752566636/release-fetch-09afd384-37f1-462b-bd80-c827ca4beea4.json](../build/device-download/37752566636/release-fetch-09afd384-37f1-462b-bd80-c827ca4beea4.json)。
+- 小型IPA元数据确认 **0.12.0／33、arm64 Release、未签名、最低iOS17、SDK18.5／Xcode16.4、LaunchScreen**。SigLIP768、模型／策略／数据库schema／OCR、B02及地点hash沿用；**没有跨版本完整模型字节比较**。原包校验不验证Sideloadly重签包或手机安装。
+
+父流程已实际查看 [../build/ui-review/37752566636/sync-cleanup-review.jpg](../build/ui-review/37752566636/sync-cleanup-review.jpg)（1020×1580，6张原生合成来源）：三张是顶部“完成”的**独立清理宿主，不含主导航**，两张小屏同步状态，一张根页面选择／同步／导航；金色色块与未授权格子不是真实照片。最终根视口与工具栏／卡片／导航严格不重叠检查通过，但**不是HTML 1:1、生产真机全流程、完整同步E2E或拖动键盘修复证明**。没有真实Photos授权、私人照片读取或删除验证。
+
+本版包含已交付build32的系统路径兼容修复；build31手机1550的**具体路径仍未知，build32／33是否消除手机现象仍未确认**。若正常进入清理仍报错，只需一张带短码的普通弹窗截图，不需清库／重索引或找旧日志。build32历史交付见 [SIMILAR_CLEANUP_SYSTEM_PATH_FIX.md](SIMILAR_CLEANUP_SYSTEM_PATH_FIX.md)；六轮账本、UI资产哈希与审图细节见 [BUILD_STATUS.md](BUILD_STATUS.md)。本次只整理父流程结果，未运行终端、Git、CI、下载、校验、重新审图或手机操作。
+
+## 完整安装历史（截至 build31，保留原第1–5节与全部尾部）
+
+**以下旧全文完整保留，仅将build31的“当前”小标题标为“历史”。旧文中的“当前／本轮”、旧包、手动索引、阈值、未新增跳过及历史迁移／清库要求均仅属于当时版本；安装包和操作以顶部build33为准。已有工具、配对、账号、Bundle ID及授权无需重置。**
+
+---
+
 # Windows → iPhone 安装 — build 31 当前交付
 
-## 当前：0.11.1（build 31）— 错误分类与普通弹窗诊断已交付
+## 历史：0.11.1（build 31）— 错误分类与普通弹窗诊断已交付
 
 **DELIVERED／PENDING-DEVICE。**[../build/device-download/37632945316/LocalImageIQ-0.11.1-build31-iphoneos-unsigned.ipa](../build/device-download/37632945316/LocalImageIQ-0.11.1-build31-iphoneos-unsigned.ipa) · [公开 Release ci-37632945316-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37632945316-1)。本机已经完整下载核验，无需重下；另一台电脑从该 Release 下载同一版本包。仍须 Sideloadly 本机重签，不是手机安装已验证。
 

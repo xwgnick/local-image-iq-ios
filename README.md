@@ -1,3 +1,41 @@
+# Local Image IQ · Native iOS — 0.12.0 / build 33 当前交付
+
+**DELIVERED／USER-APPROVED EXCEPTION／PENDING-DEVICE。**本轮全部功能已获批准；解释搜索页“拖动收起键盘”后，用户明确回复「**可以了算通过吧**」，接受该项未解决的交互限制。最终源码 **`dfc65208fae0ecd0982aab5152b0b039ff8f30e9`**，[run 37752566636](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37752566636)／[job 113229119465](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37752566636/job/113229119465) **第六次整体验证 SUCCESS，前五次 FAILED**，不是首轮成功。
+
+> **USER-APPROVED EXCEPTION：独立 UI 14＝13 通过／1 项用户批准跳过／0 失败，不是 14 项全通过。**最后一次源码修改仅让 `testDraggingScrollViewDismissesKeyboard` 在绑定 bundle 的 `CFBundleVersion == "33"` 时明确跳过；测试正文保留，其他 build 仍执行。**拖动收起键盘未验证修复**，可用“完成”收起；不涉及照片拖选、阈值滑杆、同步取消或删除安全检查。CI 配置、runner、模型门槛未改，不能把这项显式测试例外说成“没有新增跳过”。
+
+## 安装包与已完成验证
+
+**[build/device-download/37752566636/LocalImageIQ-0.12.0-build33-iphoneos-unsigned.ipa](build/device-download/37752566636/LocalImageIQ-0.12.0-build33-iphoneos-unsigned.ipa)** · [公开 Release ci-37752566636-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37752566636-1)。Release **406661356** 于 **2026-10-08T09:36:33Z** 发布，**9 项资产、prerelease、非 draft**；IPA asset **621373456**，**1,419,687,431 bytes**。父流程已实际完整流式下载并核验 SHA-256 **`540b1a7cc24ab35dd5af365a5644de36ca5de7a2ddc1ffd3eadcd66175b140a0`**，**7-Zip 26.04 全量 CRC PASS**（11 目录、30 文件，解压后 **1,568,456,942 bytes**），不是只核对远端声明。
+
+- **Core 79 全通过；App 1718＝1717 通过／1 项既有 SQLite 物理保护模拟器跳过／0 失败**，测试 **509.846 秒，wall 533.457 秒**；相对 build32 新增 **169 项、8 套件全通过**，已计入 App 总数。
+- 真实模型 Generated **8／128.318 秒**通过，完整 **CPU／`.all`／20 actor** 保留。独立 UI **14＝13通过／1批准跳过／0失败，1269.727秒**；导航 **9／1058.511秒全通过**，键盘 **5＝4通过／1跳过，211.216秒**。两种跳过分别是既有 SQLite 限制与本版明确发布例外，不能混为一项。
+- 小型 IPA 元数据确认 **0.12.0／33、arm64 Release、未签名、最低 iOS17、SDK18.5／Xcode16.4、LaunchScreen**。SigLIP 768、模型／图像策略／数据库 schema／OCR 身份、B02 和地点 hash 沿用；**未做跨版本完整模型字节比较**。原包完整性不等于重签包或手机已验收。
+
+## 本版功能与直接使用
+
+- **自动增量图片同步**：启动准备成功、已有可读 Photos 授权后自动检查新增、修改、完整 ID／revision 变化及旧模型／缺失无效向量；保留未变化的有效向量。移除已删除／不可访问照片的 **App 索引**，不自动删除系统照片、不自动 OCR、不自动请求授权。实际提交后的统计来自 `currentSummary`，已有可搜索记录即可使用，不必等整轮完成；不清当前查询／搜索会话。
+- **真实取消**：先停止派发并排空，再显示“同步已取消”；已提交记录保留。用户取消后，切页／普通刷新／回前台不立即重启，显式重新同步或下次进程冷启动才恢复自动检查。键盘／弹层仅隐藏卡片，不等于取消；完成提示约3秒后收起仅是 UI 时间。
+- **清理 V3**：默认折叠，点下拉箭头展开滑杆，设置不再重复放置。只有偏好缺失／无效才默认 **0.90**；有效旧 **0.80 会保留，想用0.90须手动选一次并点“更新结果”**。拖动只改草稿，不计算／持久化或清旧组；更新后才应用，旧结果在待更新时只供浏览，不继续授权选择／删除。
+- **显示排序**：组内最新照片创建时间降序，其次组大小降序，再以组 ID 稳定排序，无创建时间的组最后；仅改展示投影，旧缓存规范顺序、成员及严格两两阈值不变。
+- **并行有限度**：自动编码准备可与前台读取并行；搜索／OCR／清理等持有整次操作读租约至发布，SQL 提交可能等待长 OCR／分组。手动索引仍先排空自动任务再串行写入，**不是所有操作自由并行或零 UI／性能影响**。NOFOLLOW、源监视、权限／revision、事务及删除 guards 全部保留，手动撤权空枚举误清索引缺口也已修正。
+
+**沿用原 Sideloadly 账号／原有效 Bundle ID 覆盖安装，不卸载、不清库、不为升级重索引、不重置已有授权。**正常打开即可按已有授权自动同步；不要求真实照片删除测试。详细步骤见 [docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)，功能与精确文案见 [docs/AUTOMATIC_PHOTO_SYNC_AND_CLEANUP.md](docs/AUTOMATIC_PHOTO_SYNC_AND_CLEANUP.md)。
+
+父流程已实际查看 [build/ui-review/37752566636/sync-cleanup-review.jpg](build/ui-review/37752566636/sync-cleanup-review.jpg)（**1020×1580，6 张原生合成图**）：三张清理是**独立宿主、顶部“完成”、没有底部主导航**，不是嵌入主页面；另有两张小屏同步卡与一张实际根页面宿主。最终根搜索视口止于 **y=592.666…**，与选择工具栏、同步卡、导航严格不重叠测试通过；第二轮曾延伸至840，不能抹去旧失败。金色色块与未授权格子不是真实私人照片，**不是HTML 1:1、生产真机全流程或完整同步 E2E**；公共命中路由辅助测试也不等于证明每个 SwiftUI 按钮精确派发。完整图像范围、六轮账本和已知等待统计见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+
+## 补记上版：0.11.2 / build 32
+
+build32 已实际交付，不再是待构建：源码 **`c8ce2548f1e9630314112e9b6e76b621a7f0c699`**，[run 37652398749](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37652398749)／[job 112898842218](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37652398749/job/112898842218) **首次且唯一一次完整 CI SUCCESS**，Core79；App1549＝1548通过／1既有SQLite跳过／0失败；UI14全通过。已修正可信系统基目录别名与 SQLite NOFOLLOW 的兼容机制，**手机1550的具体路径仍未知，真机问题是否消失未确认**。历史 Release [ci-37652398749-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37652398749-1) 已发布并完成全包哈希／CRC；没有 build32 UI 改动或审图记录。交付明细见 [docs/SIMILAR_CLEANUP_SYSTEM_PATH_FIX.md](docs/SIMILAR_CLEANUP_SYSTEM_PATH_FIX.md)。
+
+本次仅依据用户提供的父流程已完成结果更新这五份文档，**未运行终端、Git、CI、测试、下载、解包、重新审图或手机操作**。用户批准的发布例外不等于真机端到端验收。
+
+## 完整历史 README（截至 build 31，旧全文原样保留）
+
+**以下从旧页首到最后一段完整原样保留，包括已有 build30／更早历史及归档链接。旧文所有“当前／本轮”、手动索引、0.80设置滑杆及“未新增跳过”等说法只属于当时版本；现行行为、安装包与明确例外以顶部 build33 为准，不执行旧迁移／清库要求。**
+
+---
+
 # Local Image IQ · Native iOS — 当前交付
 
 ## 当前交付：0.11.1 / build 31
