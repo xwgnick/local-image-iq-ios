@@ -1,3 +1,30 @@
+# Windows → iPhone 安装 — build 35 当前交付
+
+## 当前：0.12.2（build 35）— 查询范围修复IPA已交付，真机结果待确认
+
+**[../build/device-download/37820463496/LocalImageIQ-0.12.2-build35-iphoneos-unsigned.ipa](../build/device-download/37820463496/LocalImageIQ-0.12.2-build35-iphoneos-unsigned.ipa)** · [IPA直链](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-37820463496-1/LocalImageIQ-0.12.2-build35-iphoneos-unsigned.ipa) · [公开Release ci-37820463496-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37820463496-1)。本机已有完整核验的包，无需重下；另一台电脑可用直链。Release为prerelease、非draft，IPA仍须Sideloadly本机重签。
+
+### 覆盖安装后正常使用
+
+1. 选择上述 **0.12.2／build35**，沿用**原Sideloadly账号／原有效Bundle ID覆盖安装**；**不卸载、不清库、不为升级重索引、不重新授权**，保留已有配对、偏好和照片网络许可。
+2. 正常打开、使用修复后的App。已有 `SS-ENCODING-PHOTO-CHANGED` 截图已收到，**不再等待首次诊断截图，不安排常规调试安装／重复截图或手动重试取证**。历史签名步骤仅供参考，不执行旧迁移／清库／诊断要求。
+
+这是**实际修复包，不是诊断专用IPA**：完整枚举和单ID读取与既有批量／搜索统一使用新建的查询选项，包含隐藏及全部连拍照片；权限、revision、安全检查、schema与模型保持，不新增清库／重建／重试。合成图库＋真实临时SQLite已验证旧失败／新成功，**但未证明手机具体失败照片属于隐藏／连拍，也未确认手机故障已消失**。
+
+### build35 包与验收摘要
+
+- 最终源码 **`c792c46e4299c4223357b57f32e9c0b9e000db2b`**；[run 37820463496／job 113459870636](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37820463496/job/113459870636) **首次且唯一一次完整发布验证SUCCESS**。Core79通过；App1740＝1739通过／1既有SQLite模拟器跳过／0失败；UI14＝13通过／1批准键盘跳过／0失败；新增8项通过，真实模型8项及CPU／`.all`／20 actor门槛保留。
+- 用户2026-10-09选择「沿用例外，直接出修复包」；键盘例外限已批准build33／34／35，不自动延续到后续版本。**拖动收键盘未验证修复，仍可点“完成”**；没有其他静默豁免。
+- IPA **1,419,698,527 bytes**，实际全文件SHA-256 **`3ecc4b2f35bcc818bbbc87b15611cc5534baca62291ee0fdcc535bf10fcdd86e`**；完整下载、第二次整文件复核及**7-Zip26.04全量CRC**通过。设备报告：**0.12.2／35、arm64 Release、未签名、Xcode16.4／SDK18.5、最低iOS17**。
+
+本轮无UI改动，未下载新的UI ZIP或审阅新截图；未访问／删除私人Photos或完成手机E2E。原包校验不等于重签包或手机已验收。完整下载／复核记录见 [BUILD_STATUS.md](BUILD_STATUS.md)，修复证据见 [PHOTO_FETCH_SCOPE_FIX.md](PHOTO_FETCH_SCOPE_FIX.md)。
+
+## 完整安装历史（截至 build34，旧全文原样保留）
+
+**以下含原build34页首、全部更早正文、第1–5节及尾部，均原样保留；旧“当前／待截图／诊断版”和操作要求仅属历史，本次以上方build35两步为准。**
+
+---
+
 # Windows → iPhone 安装 — build 34 当前交付
 
 ## 当前：0.12.1（build 34）— 自动同步诊断IPA已交付，手机根因仍未知

@@ -1,3 +1,28 @@
+# Local Image IQ · Native iOS — 0.12.2 / build 35 当前交付
+
+**DELIVERED／REPAIR-IPA／USER-APPROVED EXCEPTION／PENDING-DEVICE。**这是包含实际查询范围修复的IPA，不是诊断专用包。用户已提供 `SS-ENCODING-PHOTO-CHANGED` 截图，并于2026-10-09要求「修复，出新的ipa」、选择「沿用例外，直接出修复包」；不再等待首次诊断截图。
+
+## build35 修复与验证
+
+- 生产修复 `61fcfa0794e1821e8fc8007092c31cc865b79dfe`：`PhotoLibraryClient` 完整枚举和单ID查询与既有批量／搜索统一使用每次新建的 `searchFetchOptions()`，包含 `includeHiddenAssets=true`／`includeAllBurstAssets=true`。权限、revision、安全检查、schema及模型不改，不新增清库／重建／重试。
+- 定点原生 **124通过／0失败／0跳过**，含新增8项；最终发布源码 **`c792c46e4299c4223357b57f32e9c0b9e000db2b`**，[run 37820463496／job 113459870636](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37820463496/job/113459870636) **首次且唯一一次完整发布验证 SUCCESS**。
+- 最终 **Core79通过；App1740＝1739通过／1既有SQLite模拟器跳过／0失败；UI14＝13通过／1明确批准的键盘跳过／0失败**。真实模型8项及CPU／`.all`／20 actor门槛保留；完整账本见 [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+- 键盘例外仅限已批准的build33／34／35，不自动授权后续版本；拖动收键盘未验证修复，仍可点“完成”。合成图库＋真实临时SQLite证明旧／新范围差异的回归修复，**不是手机具体失败照片属于隐藏／连拍的证据，真机故障是否消失仍待确认**。
+
+## 已校验修复包与正常使用
+
+**[build/device-download/37820463496/LocalImageIQ-0.12.2-build35-iphoneos-unsigned.ipa](build/device-download/37820463496/LocalImageIQ-0.12.2-build35-iphoneos-unsigned.ipa)** · [IPA直链](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-37820463496-1/LocalImageIQ-0.12.2-build35-iphoneos-unsigned.ipa) · [公开Release ci-37820463496-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37820463496-1)（prerelease，非draft）。
+
+IPA **1,419,698,527 bytes**；实际全文件SHA-256 **`3ecc4b2f35bcc818bbbc87b15611cc5534baca62291ee0fdcc535bf10fcdd86e`**。完整流式下载、第二次整文件复核及7-Zip26.04全量CRC均通过；设备报告确认 **0.12.2／35、arm64 Release、未签名、最低iOS17**。
+
+**沿用原Sideloadly账号／原有效Bundle ID覆盖安装，然后正常打开、使用修复后的App。无需卸载、清库、为升级重索引或重新授权，不安排常规调试安装／截图取证。**本轮无UI改动，未下载新的UI ZIP或审阅新截图，也未访问／删除私人Photos或完成手机E2E；包校验不等于手机验收。见 [docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)、[docs/PHOTO_FETCH_SCOPE_FIX.md](docs/PHOTO_FETCH_SCOPE_FIX.md)。
+
+## 完整历史 README（截至 build34，旧全文原样保留）
+
+**以下全部旧正文（含原页首、各版历史及尾部）保持原样；其中“当前／待截图／诊断版”等均指历史阶段，现行交付、例外和操作以上方build35为准。**
+
+---
+
 # Local Image IQ · Native iOS — 0.12.1 / build 34 当前交付
 
 **DELIVERED／DIAGNOSTIC-ONLY／USER-APPROVED EXCEPTION／PENDING-DEVICE。**build33 手机反馈：自动同步显示“正在检查照片”约 **1 秒**后失败，手动重新同步仍一样。build34 已交付普通同步卡诊断，**不是手机根因修复；实际失败阶段／返回码仍待新卡片截图**。最终发布源码 **`2e1a05bbe387b6c8b60853cbfb5cbc94b7bc1806`**；[最终 run 37782669079／job 113329435394](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37782669079/job/113329435394) SUCCESS。共 **2 次定点验证、2 次完整发布验证**，第一次完整验证 FAILED，第二次同源码 SUCCESS，不是一次完整验证通过。
