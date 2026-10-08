@@ -190,6 +190,13 @@ struct ContentView: View {
                     .accessibilityHidden(!isSearchPageAccessible)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // Keep FocusState in step with a user's scroll gesture. In the
+                // bounded page, UIKit's interactive dismissal alone can leave
+                // the field focused and the keyboard up after a complete drag.
+                // Simultaneous recognition preserves normal scrolling and taps.
+                .simultaneousGesture(DragGesture().onChanged { _ in
+                    if isSearchFocused { isSearchFocused = false }
+                })
                 .coordinateSpace(name: ResultPageBoundary.coordinateSpace)
                 .onPreferenceChange(ResultPageBoundaryPreference.self) { boundary in
                     visiblePageBoundary = boundary
