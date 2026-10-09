@@ -1,3 +1,27 @@
+# Windows → iPhone 安装 — build 36 当前交付
+
+**0.13.0／build36 — DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**本机已有父流程完整核验的包，仍需Sideloadly本机重签，不是免签或手机已验收。
+
+**[../build/device-download/37885978904/LocalImageIQ-0.13.0-build36-iphoneos-unsigned.ipa](../build/device-download/37885978904/LocalImageIQ-0.13.0-build36-iphoneos-unsigned.ipa)** · [IPA直链](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-37885978904-1/LocalImageIQ-0.13.0-build36-iphoneos-unsigned.ipa) · [Release ci-37885978904-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37885978904-1)（prerelease、非draft）。本机无需重下，另一台电脑可用直链。
+
+## 覆盖安装后正常使用
+
+1. 选择上述build36，沿用**原Sideloadly账号／原有效Bundle ID覆盖安装**。**不卸载、不清库、不为升级重索引、不重新授权**；保留已有配对、偏好与网络许可，不执行下方历史迁移／清库要求。
+2. 正常使用清理页：默认一行“相似度”＋箭头，展开调节、松手自动提交，无障碍增减也提交；**正常嵌入页不再要求手动更新**。同步检查／更新／取消排空时等待合并，结束后在可见／前台／就绪时恢复或计算，不每张图重算；取消／失败保留显式继续／重试，不自动循环。宽松说明与删除确认警告保留。
+3. 详情从**左屏幕边缘向右滑**返回，保留总览滚动位置；短拖取消、中部拖选照常。根标签没有上一级，比较弹层没有新增边缘关闭；实现不是原生NavigationStack pop。
+
+**不安排诊断专用安装、常规重复截图或真实删照片验收。**来源变化立即撤销选择／删除意图；仅索引变化可保留旧组浏览，真实Photos／访问变化清内容。未做手机Photos访问／删除、E2E或性能验证，合成模拟器提速不保证8000张真机时长。
+
+- 最终源码 **`d9472b54c3938f0f783a7658fc0364d6bfca0fc5`**；[run 37885978904／job 113675973943](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37885978904/job/113675973943) 第二次完整验证SUCCESS；本阶段5次定点＋2次完整，首次完整FAILED且无IPA。Core79；App1784＝1783通过／1既有SQLite跳过／0失败；UI16＝15通过／1永久键盘跳过／0失败，真实模型8项及CPU／`.all`／20 actor门槛保留。
+- 用户明确“**永久沿用，以后不必询问**”：仅 `testDraggingScrollViewDismissesKeyboard` 永久 `XCTSkipIf(true)`，正文保留；不再逐版问，SKIP不是PASS，拖动收键盘未修复验证。仍可点“完成”；其他键盘／图库／导航／模型／数据安全与全部其他门槛不豁免。
+- IPA **1,419,732,027 bytes**；整文件SHA-256 **`531a3e48a9a7e928735e99b020e68394acc289cd660173cfaf2e524c76b8cff2`**；完整流式下载与7-Zip26.04全量CRC通过。小元数据：0.13.0／36、LaunchScreen、Xcode16.4／SDK18.5、最低iOS17，未跨版本完整比较模型字节。
+- 父流程审阅的小拼图是**仍有旧手动按钮的独立宿主**，不是生产无按钮预览；无按钮／松手提交另有原生嵌入／实际未授权UI测试。完整账本与证据限制见 [BUILD_STATUS.md](BUILD_STATUS.md)、[CLEANUP_AUTOMATIC_REFRESH_PERFORMANCE.md](CLEANUP_AUTOMATIC_REFRESH_PERFORMANCE.md)。本次未运行终端、Git、CI、下载、Python或浏览器。
+
+## 完整安装历史（截至 build35，以下旧全文原样保留）
+**旧“当前／手动更新／例外不延续／待截图”等仅属历史；现行版本、长期单项例外及操作以上方build36为准，旧页首、全部历史及尾部不改。**
+
+---
+
 # Windows → iPhone 安装 — build 35 当前交付
 
 ## 当前：0.12.2（build 35）— 查询范围修复IPA已交付，真机结果待确认

@@ -1,3 +1,53 @@
+# Cloud build status — build 36
+
+**Current: 0.13.0／build36 — DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**最终源码 **`d9472b54c3938f0f783a7658fc0364d6bfca0fc5`**。本阶段 **5次定点＋2次完整验证**；第一次完整FAILED、第二次SUCCESS。
+
+- 正常嵌入页一行“相似度”＋展开箭头，无常驻手动更新按钮；宽松／删除警告保留，阈值拖动预览、松手／无障碍增减提交。
+- 可见／前台／就绪时恢复优先，缺失／失效自动算；同步检查／更新／取消排空时合并至结束，不每张重算。来源变化立即撤销结果／选择／删除授权；仅索引变化保浏览组／会话，真实Photos／访问变化清内容。取消／失败显式重试，无循环、人为容量或截止时间。
+- 左屏幕边缘右滑退详情、保总览位置，短拖取消、中部拖选保留；UIKit适配器非NavigationStack pop，根标签无假返回，比较弹层无新增边缘关闭。
+- 用户明确“**永久沿用，以后不必询问**”：仅 `testDraggingScrollViewDismissesKeyboard` 永久 `XCTSkipIf(true)`，正文保留、SKIP不算PASS，不再逐版询问；“完成”／其他键盘／图库／导航／模型与安全门槛不豁免。
+
+### build36 完整尝试账本（按实际顺序；耗时单位秒）
+
+|范围|源码／run／job|结果／测试耗时与wall|
+|---|---|---|
+|定点1|`4089e720ebbaea16d96491874d231184266672d3`；[37878385543／113652126376](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37878385543/job/113652126376)|**编译FAILED**：UIView同名方法缺override，未运行测试。|
+|定点2|`ffb0ea89734e41ccd9cad6f31ab317b8c0c549a4`；[37878667034／113653018083](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37878667034/job/113653018083)|**FAILED**：App304，1用例2断言失败，索引变化丢浏览身份；323.491／wall324.998。UI2通过／99.957；性能通过，当时未读分阶段计时。|
+|定点3|`3e7832310ad6624610a6bd196cc8ab8ca3ebf5b6`；[37880322461／113658298383](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37880322461/job/113658298383)|**FAILED**：App304，14失败记录＝3旧授权预期12断言＋1弹窗等待2记录；353.221／wall355.775。UI2通过／68.345；此前核心冷92.031→47.963、暖78.286→42.292，保留为前轮观测。|
+|定点4|`9fe4d9682d6866220756704d7108f3b47fcafa0c`；[37881581470／113662243324](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37881581470/job/113662243324)|**68通过／0失败／0跳过**，36.593／wall36.835；迁移授权变化清内容预期，通用等待器只补调用位置。|
+|完整1|`6c0bd7b2bf6357eaf695e6b253fead596922d61b`；[37882039411／113663644823](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37882039411/job/113663644823)|**FAILED，无IPA**。App1784／1既有SQLite跳过，1用例2失败记录，684.276／wall702.707；UI16＝15通过／1永久键盘跳过／0失败，960.653。|
+|定点5|`d9472b54c3938f0f783a7658fc0364d6bfca0fc5`；[37885297274／113673844814](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37885297274/job/113673844814)|**29通过／0失败／0跳过**＝同步展示4＋控件8＋自动刷新17，45.780／wall46.676。|
+|完整2／交付|同一最终`d9472b54c3938f0f783a7658fc0364d6bfca0fc5`；[37885978904／113675973943](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37885978904/job/113675973943)|**SUCCESS**；Core79；App1784＝1783通过／1既有SQLite跳过／0失败，742.886／wall755.688；UI16＝15通过／1永久键盘跳过／0失败，1177.808／wall1177.830。|
+
+完整1唯一失败为旧同步根宿主用例在保持同步updating期间等待 `f.cleanup.hasScanned`，与新延后计算契约冲突。**仅迁移测试**：先种已有组，验证同步期间不重算、提交撤销授权，取消／排空后自动计算一次并产生新session；原modal／footer／keyboard断言仍运行，未改生产或放宽门槛。完整方法名见 [CLEANUP_AUTOMATIC_REFRESH_PERFORMANCE.md](CLEANUP_AUTOMATIC_REFRESH_PERFORMANCE.md)。
+定点3弹窗等待在定点4未复现；**弹窗行为／等待超时未改，不宣称根因已修复**。测试耗时不是CI全程墙钟，开发重试与完整发布分开计数。
+
+### 最终完整验证明细（下列子集已计入总数）
+|范围|实际结果／秒|
+|---|---|
+|App／新增|1784＝1783通过／1既有物理SQLite模拟器跳过／0失败；相对build35新增44个App方法已计入。|
+|真实模型Generated|8通过／137.584；CPU／`.all`／完整20 actor正常门槛保留。|
+|相关App子集|自动刷新17／0.076；优化17／6.511；边缘宿主5／16.327；同步原生展示4／21.054，均通过。|
+|独立UI／导航|16＝15通过／1永久键盘跳过／0失败；导航11通过／948.269，含2项实际坐标边缘／网格拖选测试；无其他豁免。|
+
+最终单次模拟器8000×768核心：冷 **70.708252667→34.679293042秒（约2.04×）**，暖阈值0.75 **72.168007499→39.483659333秒（约1.83×）**；排序候选31,996,000→0、比较116,559,656→0，双方仍8000次mmul＋31,996,000次sdot，结果位级不变。不可变全候选／norms／矩阵按完整键复用但不绑阈值；3次Photos＋3次来源核验保留。**仍O(N²D)，非增量局部分组、非手机速度**；96张服务冷0.300731709／暖0.117397917、解码96→0、来源3→3，不同阈值不能隔离缓存因果。原始附件与前轮数据见专题。
+
+### 发布、完整性及证据边界
+
+- [Release ci-37885978904-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37885978904-1)：ID **407554801**，**2026-10-09T05:41:55Z**，9资产、**prerelease、非draft**。
+- IPA asset **624018755**：[../build/device-download/37885978904/LocalImageIQ-0.13.0-build36-iphoneos-unsigned.ipa](../build/device-download/37885978904/LocalImageIQ-0.13.0-build36-iphoneos-unsigned.ipa) · [直链](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-37885978904-1/LocalImageIQ-0.13.0-build36-iphoneos-unsigned.ipa)；**1,419,732,027 bytes**；实际整文件SHA-256 **`531a3e48a9a7e928735e99b020e68394acc289cd660173cfaf2e524c76b8cff2`**。
+- 父流程完整流式下载核验＋**7-Zip26.04全量CRC Everything is Ok**：11目录／30文件／解压后1,568,691,006 bytes；[../build/device-download/37885978904/release-fetch-cb68b784-f6a9-4823-830a-a69c7c544abb.json](../build/device-download/37885978904/release-fetch-cb68b784-f6a9-4823-830a-a69c7c544abb.json)。
+- UI ZIP asset **624018561**，**9,510,614 bytes**，完整SHA-256 **`573fb41141c70debc6cdbe27a6ec065d4e5c9a06449a7516097fcbaeb529c5c4`**已核验。父流程实看960×780小拼图（三张1179×2556来源）：**独立宿主、顶部完成、无主标签、仍有旧手动按钮**，只证明紧凑标题／展开样式，不能作生产无按钮预览；后者与松手提交另有原生嵌入／实际未授权UI测试。
+- IPA小元数据：0.13.0／36、LaunchScreen、Xcode16.4／SDK18.5、最低iOS17；未跨版本完整比较模型字节，未做真实Photos访问／删除、手机E2E或手机性能验证。
+- 原Sideloadly账号／原有效Bundle ID覆盖安装、正常使用；不卸载、清库、为升级重索引或重新授权，不安排诊断专用包／常规截图。见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)。
+- 本次只整理父流程已验证记录，没有运行终端、Git、CI、下载、Python或浏览器；包完整性不等于手机验收。
+
+## 完整历史正文（截至 build35，以下旧全文原样保留）
+
+**旧“当前／未延续键盘例外／手动更新”等仅属历史，现行状态以上方build36为准；以下含旧页首及所有历史、尾部，不作删改。**
+
+---
+
 # Cloud build status — build 35
 
 ## Current: 0.12.2 (build 35) — 查询范围修复已交付；首次完整验证 SUCCESS

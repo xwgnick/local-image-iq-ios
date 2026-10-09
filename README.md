@@ -1,3 +1,27 @@
+# Local Image IQ · Native iOS — 0.13.0 / build 36 当前交付
+
+**DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**最终源码 **`d9472b54c3938f0f783a7658fc0364d6bfca0fc5`**；[最终 run 37885978904／job 113675973943](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37885978904/job/113675973943) SUCCESS。本阶段共 **5次定点、2次完整验证**，首次完整FAILED、第二次SUCCESS，不是首轮通过。
+
+## build36：简约、自动更新与边缘返回
+
+- 正常嵌入清理页默认仅一行“相似度”＋展开箭头，**无常驻手动更新按钮**；展开后的宽松说明和删除警告保留。滑杆拖动预览、松手提交，无障碍增减提交。
+- 页面可见／前台／就绪时先恢复，缓存缺失或失效才自动计算；同步检查／更新／取消排空期间合并变化、结束后处理，不每写一张重算。来源变化立即撤销结果授权／选择／删除意图；仅索引变化保留浏览组与会话，真实Photos／访问变化清内容。取消／失败须显式重试，不循环。
+- 完整输入键下复用不可变全候选／norms／矩阵，阈值独立；精确seed过滤后仍用原分数排序、逐成员核验，位级等价测试通过，保留3次Photos＋3次来源核验。8000张单次模拟器核心冷 **70.708→34.679秒（约2.04×）**、暖 **72.168→39.484秒（约1.83×）**；仍为全矩阵每seed评分 **O(N²D)**，不是只算增量或已证明手机提速，不增人为容量／截止时间。
+- 详情从**左屏幕边缘向右滑**返回并保留总览滚动位置；短拖取消、中部网格拖选不变。这是UIKit适配器，不是原生NavigationStack pop；根标签不造返回，比较弹层未新增边缘关闭。
+
+最终 **Core79通过；App1784＝1783通过／1既有物理SQLite模拟器跳过／0失败；UI16＝15通过／1永久键盘跳过／0失败**。新增44个App方法已计入；真实模型8项及CPU／`.all`／20 actor等其他门槛保留。完整账本与精确性能见 [docs/CLEANUP_AUTOMATIC_REFRESH_PERFORMANCE.md](docs/CLEANUP_AUTOMATIC_REFRESH_PERFORMANCE.md)、[docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)。
+
+**用户明确“永久沿用，以后不必询问”**：仅 `testDraggingScrollViewDismissesKeyboard` 改为永久 `XCTSkipIf(true)`，原正文保留；不再逐版询问，SKIP不算PASS。拖动收键盘未验证修复，“完成”及其他键盘／图库／导航／模型／安全门槛不豁免。
+
+**[build/device-download/37885978904/LocalImageIQ-0.13.0-build36-iphoneos-unsigned.ipa](build/device-download/37885978904/LocalImageIQ-0.13.0-build36-iphoneos-unsigned.ipa)** · [IPA直链](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-37885978904-1/LocalImageIQ-0.13.0-build36-iphoneos-unsigned.ipa) · [Release ci-37885978904-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37885978904-1)（prerelease、非draft）。**1,419,732,027 bytes**；实际整包SHA-256 **`531a3e48a9a7e928735e99b020e68394acc289cd660173cfaf2e524c76b8cff2`**，父流程完整流式下载及7-Zip26.04全量CRC通过。
+
+**原Sideloadly账号／原有效Bundle ID覆盖安装，正常使用；不卸载、清库、为升级重索引或重新授权，不安排诊断专用包／常规重复截图。**见 [docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)。父流程小拼图是仍带旧手动按钮的独立宿主，仅证明紧凑标题／展开样式；正常嵌入页无按钮与松手提交另有原生嵌入测试／实际未授权UI测试，不能混作生产预览。未做真实Photos访问／删除、手机E2E或手机性能验证。
+
+## 完整历史 README（截至 build35，以下旧全文原样保留）
+**旧“当前／手动更新／例外不延续”等仅属历史；现行状态、永久单项例外和安装操作以上方build36为准。**
+
+---
+
 # Local Image IQ · Native iOS — 0.12.2 / build 35 当前交付
 
 **DELIVERED／REPAIR-IPA／USER-APPROVED EXCEPTION／PENDING-DEVICE。**这是包含实际查询范围修复的IPA，不是诊断专用包。用户已提供 `SS-ENCODING-PHOTO-CHANGED` 截图，并于2026-10-09要求「修复，出新的ipa」、选择「沿用例外，直接出修复包」；不再等待首次诊断截图。
