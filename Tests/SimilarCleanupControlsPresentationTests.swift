@@ -327,7 +327,8 @@ final class ControlsNativeHost {
         controller.view.setNeedsLayout(); controller.view.layoutIfNeeded()
     }
 
-    func wait(_ observed: @escaping @MainActor () -> Bool) async throws {
+    func wait(file: StaticString = #filePath, line: UInt = #line,
+              _ observed: @escaping @MainActor () -> Bool) async throws {
         let inspect: @MainActor () -> Bool = { self.layout(); return observed() }
         let predicate = NSPredicate { _, _ in
             if Thread.isMainThread { return MainActor.assumeIsolated { inspect() } }
@@ -335,7 +336,7 @@ final class ControlsNativeHost {
         }
         let ready = XCTNSPredicateExpectation(predicate: predicate, object: nil)
         guard await XCTWaiter.fulfillment(of: [ready], timeout: 5) == .completed else {
-            XCTFail("Missing native layout/publication milestone")
+            XCTFail("Missing native layout/publication milestone", file: file, line: line)
             throw ControlsPresentationFailure.layout
         }
         try await settle()
