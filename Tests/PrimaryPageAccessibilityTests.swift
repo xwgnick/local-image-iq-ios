@@ -80,13 +80,13 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         defer { host.close() }
         let scopes = try pageScopes(host)
         let scroll = try primarySearchScrollView(in: host.controller.view)
-        try await settleVisibleResults(c, host: host, scroll: scroll, boundary: boundary)
+        try await settleVisibleResults(c, host: host, scroll: scroll, boundary: boundary, phase: "initial")
         let original = scroll.contentOffset
         let bottom = max(-scroll.adjustedContentInset.top,
                          scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
         XCTAssertGreaterThan(bottom, original.y, "Exercise actual scrolling, not an out-of-content offset")
         scroll.setContentOffset(CGPoint(x: original.x, y: min(original.y + 100, bottom)), animated: false)
-        try await settleVisibleResults(c, host: host, scroll: scroll, boundary: boundary)
+        try await settleVisibleResults(c, host: host, scroll: scroll, boundary: boundary, phase: "after-scroll")
         XCTAssertGreaterThan(scroll.contentOffset.y, original.y)
         // Native five-column layout can auto-fill multiple pages both at mount
         // and after scrolling. Capture retention ONLY after those real events.
@@ -117,7 +117,7 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         XCTAssertEqual(c.cleanup.selectedIDs, Set([photo.id]))
 
         c.navigation.select(.search)
-        try await settleVisibleResults(c, host: host, scroll: scroll, boundary: boundary)
+        try await settleVisibleResults(c, host: host, scroll: scroll, boundary: boundary, phase: "returned")
         assertScopes(scopes, scroll: scroll, active: .search, host: host)
         XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === scroll)
         XCTAssertEqual(scroll.contentOffset.x, offset.x)
@@ -283,12 +283,22 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
 
     private func attachSearchGeometry(_ c: PrimaryAXContext, host: PrimaryAXHost, scroll: UIScrollView,
                                       boundary: PrimaryAXBoundaryProbe, phase: String) {
-        let attachment = XCTAttachment(string: """
+        let history = boundary.history.enumerated().map { index, measurement in
+            "measurement=\(index + 1) actualViewport=\(measurement.viewportHeight) boundary=\(String(describing: measurement.value))"
+        }.joined(separator: "\n")
+        let lastValue = boundary.history.last { $0.value != nil }?.value
+        let report = """
         phase=\(phase) page=\(c.navigation.page) count=\(c.state.results.count)
-        window=\(host.window.bounds) viewport=\(scroll.bounds) insets=\(scroll.adjustedContentInset)
+        total=\(c.state.totalResultCount) hasMore=\(c.state.hasMoreResults) busy=\(c.state.isBusy)
+        probe.actualViewport=\(String(describing: boundary.viewportHeight))
+        window=\(host.window.bounds) scroll.bounds=\(scroll.bounds) insets=\(scroll.adjustedContentInset)
         content=\(scroll.contentSize) offset=\(scroll.contentOffset)
         boundary=\(String(describing: boundary.latest)) session=\(String(describing: c.state.resultSessionID))
-        """)
+        lastNonNilBoundary=\(String(describing: lastValue))
+        \(history)
+        """
+        print(report) // Geometry and synthetic session only; no photo IDs/query/error descriptions.
+        let attachment = XCTAttachment(string: report)
         attachment.name = "primary-AX-search-geometry-\(phase)"
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -296,16 +306,29 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
 
     private func settleVisibleResults(_ c: PrimaryAXContext, host: PrimaryAXHost,
                                       scroll: UIScrollView, boundary: PrimaryAXBoundaryProbe,
+                                      phase: String,
                                       file: StaticString = #filePath, line: UInt = #line) async throws {
-        try await settle(host)
-        try await requireLayout(host, file: file, line: line) {
-            guard c.navigation.page == .search, !c.state.isBusy, scroll.window === host.window,
-                  scroll.bounds.height > 0, !c.state.results.isEmpty else { return false }
-            if !c.state.hasMoreResults { return boundary.latest == nil }
-            guard let value = boundary.latest, value.sessionID == c.state.resultSessionID,
-                  value.visibleCount == c.state.results.count,
-                  value.frame.minY.isFinite, value.frame.width > 0, value.frame.height > 0 else { return false }
-            return value.frame.minY >= scroll.bounds.height || value.frame.maxY <= 0
+        do {
+            try await settle(host)
+            try await requireLayout(host, file: file, line: line) {
+                guard c.navigation.page == .search, !c.state.isBusy, scroll.window === host.window,
+                      let viewportHeight = boundary.viewportHeight, viewportHeight.isFinite, viewportHeight > 0,
+                      !c.state.results.isEmpty else { return false }
+                if !c.state.hasMoreResults {
+                    // Full ranked coverage, not hasMore alone. SwiftUI may defer
+                    // boundary disappearance or coalesce nil; neither is another page.
+                    return c.state.results.count == c.worker.hits.count
+                        && c.state.totalResultCount == c.worker.hits.count
+                }
+                guard let value = boundary.latest, value.sessionID == c.state.resultSessionID,
+                      value.visibleCount == c.state.results.count,
+                      value.frame.minY.isFinite, value.frame.maxY.isFinite,
+                      value.frame.width > 0, value.frame.height > 0 else { return false }
+                return value.frame.minY >= viewportHeight || value.frame.maxY <= 0
+            }
+        } catch {
+            attachSearchGeometry(c, host: host, scroll: scroll, boundary: boundary, phase: "\(phase)-unsettled")
+            throw error
         }
     }
 
@@ -402,7 +425,7 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
     private func mountContent(_ c: PrimaryAXContext, boundary: PrimaryAXBoundaryProbe? = nil) async throws -> PrimaryAXHost {
         let host = try await mount(AnyView(ContentView(state: c.state, photoActionService: PrimaryAXNoPhotos(),
             similarCleanupState: c.cleanup, navigation: c.navigation,
-            onPageBoundaryMeasured: { boundary?.latest = $0 })))
+            onPageBoundaryMeasured: { boundary?.observe($0, viewportHeight: $1) })))
         do {
             try await requireLayout(host) {
                 self.descendants(host.controller.view, PrimaryPageAccessibilityAnchorView.self).count == 2
@@ -489,7 +512,21 @@ private enum PrimaryAXFailure: Error { case layout, photosReadable, unexpectedWo
 
 @MainActor
 private final class PrimaryAXBoundaryProbe {
-    var latest: ResultPageBoundaryValue?
+    struct Measurement {
+        let value: ResultPageBoundaryValue?
+        let viewportHeight: CGFloat
+    }
+
+    private(set) var latest: ResultPageBoundaryValue?
+    private(set) var viewportHeight: CGFloat?
+    private(set) var history: [Measurement] = []
+
+    func observe(_ value: ResultPageBoundaryValue?, viewportHeight: CGFloat) {
+        latest = value
+        self.viewportHeight = viewportHeight
+        // Record every actual callback (including nil) before production admission.
+        history.append(Measurement(value: value, viewportHeight: viewportHeight))
+    }
 }
 
 @MainActor

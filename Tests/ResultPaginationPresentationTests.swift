@@ -82,7 +82,7 @@ final class ResultPaginationPresentationTests: XCTestCase {
         // Exercise layout and the new physical bottom once more, without any
         // inverted expectation or arbitrary wait for a non-event.
         scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: bottomOffset(of: scroll)), animated: false)
-        try await waitForContentLayout(hosted, scroll: scroll)
+        try await waitForContentLayout(hosted, state: state, scroll: scroll)
         assertPage(context, count: 37, session: session)
         XCTAssertNil(hosted.boundary.latest, "Layout at exhaustion must not restore a boundary")
         assertPageTrace(pages, expectedCounts: [12, 24, 36, 37], context: context)
@@ -96,69 +96,60 @@ final class ResultPaginationPresentationTests: XCTestCase {
         let session = try XCTUnwrap(state.resultSessionID)
         let resolution = state.completedSearchQuery
         let status = state.status
+        let probe = ResultPaginationPresentationBoundaryProbe()
         var pages: [[SearchHit]] = []
-        let subscription = state.$results.sink { pages.append($0) }
+        let subscription = state.$results.sink { page in
+            // @Published sends before the state count changes. Freeze the latest
+            // already-delivered production measurement HERE, not after layout.
+            probe.recordPublication(count: page.count, previousCount: state.results.count,
+                                    sessionID: state.resultSessionID)
+            pages.append(page)
+        }
         defer { subscription.cancel() }
 
-        let hosted = try await mount(state, size: phone)
+        let hosted = try await mount(state, size: phone, boundary: probe)
         defer { hosted.close() }
         let scroll = try verticalScroll(in: hosted)
+        let settledCount = state.results.count
+        attachGeometry(hosted, scroll: scroll, count: settledCount, name: "phone-first-settled")
         XCTAssertEqual(hosted.window.bounds.size, phone)
         XCTAssertEqual(scroll.contentOffset.y, -scroll.adjustedContentInset.top, accuracy: 1)
 
-        // Measure the real 12- and 24-result boundaries before ANY scrolling.
-        // Their two-row displacement supplies the native row pitch; no assumed
-        // tile height, toolbar height or hardcoded final count of 36.
-        let first = try XCTUnwrap(hosted.boundary.history.last { $0.visibleCount == 12 })
-        let second = try XCTUnwrap(hosted.boundary.history.last { $0.visibleCount == 24 })
-        let viewportHeight = scroll.bounds.height
-        let rowPitch = (second.frame.minY - first.frame.minY) / CGFloat(rows(24) - rows(12))
-        XCTAssertGreaterThan(rowPitch, 0)
-        XCTAssertLessThan(first.frame.minY, viewportHeight, "This phone fixture must exercise automatic filling")
-        XCTAssertGreaterThan(first.frame.maxY, 0)
+        // Do not predict grid row pitch or a final count from earlier positions.
+        // Every append must have an actual intersecting boundary recorded before
+        // its publication; settlement must be offscreen or exhaust all 37 hits.
         let pageCounts = [12, 24, 36, 37]
-        let expectedCount = try XCTUnwrap(pageCounts.first { count in
-            let top = first.frame.minY + CGFloat(rows(count) - rows(12)) * rowPitch
-            return count == state.totalResultCount || top >= viewportHeight || top + first.frame.height <= 0
-        })
-        assertPage(context, count: expectedCount, session: session)
-        assertPageTrace(pages, expectedCounts: pageCounts.filter { $0 <= expectedCount }, context: context)
-        for count in pageCounts where count <= expectedCount && count < state.totalResultCount {
-            let measured = try XCTUnwrap(hosted.boundary.history.last { $0.visibleCount == count })
-            XCTAssertEqual(measured.sessionID, session)
-            XCTAssertEqual(measured.frame.minY,
-                           first.frame.minY + CGFloat(rows(count) - rows(12)) * rowPitch,
-                           accuracy: 1 / hosted.window.screen.scale)
-            XCTAssertGreaterThan(measured.frame.height, 0)
-            if count < expectedCount {
-                XCTAssertLessThan(measured.frame.minY, viewportHeight, "Only visible boundaries may auto-append")
-                XCTAssertGreaterThan(measured.frame.maxY, 0)
-            }
-        }
+        XCTAssertGreaterThan(settledCount, 12, "This phone fixture must exercise automatic filling")
+        XCTAssertTrue(pageCounts.contains(settledCount))
+        assertPage(context, count: settledCount, session: session)
+        assertPageTrace(pages, expectedCounts: pageCounts.filter { $0 <= settledCount }, context: context)
+        try assertMeasuredAdmissions(probe, pages: pages, session: session)
         if state.hasMoreResults {
-            try assertOffscreenBoundary(in: hosted, scroll: scroll, session: session, count: expectedCount)
+            try assertOffscreenBoundary(in: hosted, scroll: scroll, session: session, count: settledCount)
         } else {
-            XCTAssertNil(hosted.boundary.latest)
+            XCTAssertEqual(settledCount, 37, "Exhaustion requires the full ranked response, not a missing boundary")
         }
         assertStaleCallbacksIgnored(context, session: session)
-        attachGeometry(hosted, scroll: scroll, count: expectedCount, name: "phone-auto-filled")
+        attachGeometry(hosted, scroll: scroll, count: settledCount, name: "phone-auto-filled")
 
         // Finish through genuine scrolling. Check every publication, including
         // the one-result tail, even when the first viewport admitted several pages.
-        for count in pageCounts where count > expectedCount {
+        for count in pageCounts where count > settledCount {
             try await scrollToNextPage(count, state: state, scroll: scroll, hosted: hosted)
             assertPage(context, count: count, session: session)
+            try assertMeasuredAdmissions(probe, pages: pages, session: session)
             assertStaleCallbacksIgnored(context, session: session)
         }
         scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: bottomOffset(of: scroll)), animated: false)
-        try await waitForContentLayout(hosted, scroll: scroll)
+        try await waitForContentLayout(hosted, state: state, scroll: scroll)
+        attachGeometry(hosted, scroll: scroll, count: state.results.count, name: "phone-exhausted")
         assertPage(context, count: 37, session: session)
         assertPageTrace(pages, expectedCounts: pageCounts, context: context)
-        XCTAssertNil(hosted.boundary.latest)
+        try assertMeasuredAdmissions(probe, pages: pages, session: session)
+        XCTAssertFalse(state.hasMoreResults)
         XCTAssertTrue(try verticalScroll(in: hosted) === scroll)
         XCTAssertEqual(state.completedSearchQuery, resolution)
         XCTAssertEqual(state.status, status)
-        attachGeometry(hosted, scroll: scroll, count: 37, name: "phone-exhausted")
     }
 
     func testSmallLandscapeViewportDoesNotAutoAppendOrResetCompletedSession() async throws {
@@ -293,20 +284,56 @@ final class ResultPaginationPresentationTests: XCTestCase {
         for staleCount in [12, 24, 36] where staleCount < count {
             context.state.loadMoreResults(sessionID: session, after: staleCount)
         }
-        context.state.loadMoreResults(sessionID: UUID(), after: count)
+        let staleSession = UUID()
+        XCTAssertNotEqual(staleSession, session, "The equal-count rejection probe must use a distinct session")
+        context.state.loadMoreResults(sessionID: staleSession, after: count)
         if !context.state.hasMoreResults {
             context.state.loadMoreResults(sessionID: session, after: count)
         }
         assertPage(context, count: count, session: session)
     }
 
-    private func mount(_ state: AppState, size: CGSize) async throws -> ResultPaginationPresentationHost {
+    private func assertMeasuredAdmissions(_ probe: ResultPaginationPresentationBoundaryProbe,
+                                          pages: [[SearchHit]], session: UUID,
+                                          file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(probe.publications.map(\.count), pages.map(\.count), file: file, line: line)
+        XCTAssertEqual(probe.publications.first?.count, 12, file: file, line: line)
+        var previousCount = 12
+        var previousMeasurementCount = 0
+        for publication in probe.publications.dropFirst() {
+            XCTAssertEqual(publication.previousCount, previousCount, "Capture the pre-publication count",
+                           file: file, line: line)
+            XCTAssertEqual(publication.count, min(previousCount + 12, 37), file: file, line: line)
+            XCTAssertEqual(publication.sessionID, session, file: file, line: line)
+            XCTAssertGreaterThan(publication.measurementCount, previousMeasurementCount,
+                                 "A fresh measurement must precede each new page", file: file, line: line)
+            let measurement = try XCTUnwrap(publication.measurement,
+                                            "No production measurement preceded this append", file: file, line: line)
+            let boundary = try XCTUnwrap(measurement.value,
+                                         "Nil cannot admit a page", file: file, line: line)
+            XCTAssertEqual(boundary.sessionID, session, file: file, line: line)
+            XCTAssertEqual(boundary.visibleCount, previousCount, file: file, line: line)
+            XCTAssertTrue(measurement.viewportHeight.isFinite, file: file, line: line)
+            XCTAssertGreaterThan(measurement.viewportHeight, 0, file: file, line: line)
+            XCTAssertTrue(boundary.frame.minY.isFinite && boundary.frame.maxY.isFinite, file: file, line: line)
+            XCTAssertGreaterThan(boundary.frame.width, 0, file: file, line: line)
+            XCTAssertGreaterThan(boundary.frame.height, 0, file: file, line: line)
+            XCTAssertLessThan(boundary.frame.minY, measurement.viewportHeight,
+                              "Actual admission must intersect 0..<the production viewport", file: file, line: line)
+            XCTAssertGreaterThan(boundary.frame.maxY, 0, file: file, line: line)
+            previousCount = publication.count
+            previousMeasurementCount = publication.measurementCount
+        }
+    }
+
+    private func mount(_ state: AppState, size: CGSize,
+                       boundary suppliedBoundary: ResultPaginationPresentationBoundaryProbe? = nil) async throws -> ResultPaginationPresentationHost {
         guard !PhotoLibraryClient.canRead else { throw ResultPaginationPresentationFailure.photosAlreadyReadable }
         let session = try XCTUnwrap(state.resultSessionID)
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let scene = try XCTUnwrap(scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first,
                                   "These tests require the native iOS application test host")
-        let boundary = ResultPaginationPresentationBoundaryProbe()
+        let boundary = suppliedBoundary ?? ResultPaginationPresentationBoundaryProbe()
         let content = VStack(spacing: 0) {
             Text("TEST • synthetic results / no Photos")
                 .font(.caption2.weight(.semibold)).foregroundStyle(.white)
@@ -314,7 +341,7 @@ final class ResultPaginationPresentationTests: XCTestCase {
             // Capture the production reader's actual callback before it can
             // append a page; no separately coalesced ancestor preference reader.
             ContentView(state: state, cleanupPreferences: nil,
-                        onPageBoundaryMeasured: { boundary.observe($0) })
+                        onPageBoundaryMeasured: { boundary.observe($0, viewportHeight: $1) })
         }
         .preferredColorScheme(.light)
         .environment(\.locale, Locale(identifier: "en_US"))
@@ -347,17 +374,21 @@ final class ResultPaginationPresentationTests: XCTestCase {
         hosted.window.makeKeyAndVisible()
         hosted.layout()
         await fulfillment(of: [laidOut, boundaryObserved], timeout: 5)
+        if !didLayout || !didObserveBoundary {
+            attachGeometry(hosted, scroll: try? verticalScroll(in: hosted), count: state.results.count,
+                           name: "mount-unsettled")
+        }
         guard didLayout else { throw ResultPaginationPresentationFailure.layoutNotDelivered }
         guard didObserveBoundary else { throw ResultPaginationPresentationFailure.boundaryNotObserved(12) }
         let scroll = try verticalScroll(in: hosted)
-        try await waitForContentLayout(hosted, scroll: scroll)
+        try await waitForContentLayout(hosted, state: state, scroll: scroll)
         try await waitForPageSettlement(state, hosted: hosted, scroll: scroll)
         XCTAssertEqual(hosted.host.view.bounds.size, size)
         mounted = true
         return hosted
     }
 
-    private func waitForContentLayout(_ hosted: ResultPaginationPresentationHost, scroll: UIScrollView,
+    private func waitForContentLayout(_ hosted: ResultPaginationPresentationHost, state: AppState, scroll: UIScrollView,
                                       growingFrom previousHeight: CGFloat? = nil,
                                       shrinkingFrom removedBoundaryHeight: CGFloat? = nil) async throws {
         let laidOut = expectation(description: previousHeight == nil
@@ -398,7 +429,10 @@ final class ResultPaginationPresentationTests: XCTestCase {
         // observation began. A queued turn alone is never completion evidence.
         requestLayout()
         await fulfillment(of: [laidOut], timeout: 5)
-        guard didLayout else { throw ResultPaginationPresentationFailure.layoutNotDelivered }
+        guard didLayout else {
+            attachGeometry(hosted, scroll: scroll, count: state.results.count, name: "content-layout-unsettled")
+            throw ResultPaginationPresentationFailure.layoutNotDelivered
+        }
     }
 
     private func verticalScroll(in hosted: ResultPaginationPresentationHost) throws -> UIScrollView {
@@ -409,13 +443,16 @@ final class ResultPaginationPresentationTests: XCTestCase {
                                        scroll: UIScrollView) async throws {
         let inspect: @MainActor () -> Bool = {
             hosted.layout()
-            guard scroll.window === hosted.window, scroll.bounds.height > 0, !state.isBusy else { return false }
-            if !state.hasMoreResults { return hosted.boundary.latest == nil }
+            guard scroll.window === hosted.window, !state.isBusy,
+                let viewportHeight = hosted.boundary.viewportHeight,
+                viewportHeight.isFinite, viewportHeight > 0 else { return false }
+            if !state.hasMoreResults { return state.results.count == 37 && state.totalResultCount == 37 }
             guard let boundary = hosted.boundary.latest,
                   boundary.sessionID == state.resultSessionID,
                   boundary.visibleCount == state.results.count,
-                boundary.frame.minY.isFinite, boundary.frame.width > 0, boundary.frame.height > 0 else { return false }
-            return boundary.frame.minY >= scroll.bounds.height || boundary.frame.maxY <= 0
+                boundary.frame.minY.isFinite, boundary.frame.maxY.isFinite,
+                boundary.frame.width > 0, boundary.frame.height > 0 else { return false }
+            return boundary.frame.minY >= viewportHeight || boundary.frame.maxY <= 0
         }
         let predicate = NSPredicate { _, _ in
             if Thread.isMainThread { return MainActor.assumeIsolated { inspect() } }
@@ -435,12 +472,15 @@ final class ResultPaginationPresentationTests: XCTestCase {
         let boundary = try XCTUnwrap(hosted.boundary.latest,
                                      "The real offscreen boundary must already reach the production preference callback",
                                      file: file, line: line)
+        let viewportHeight = try XCTUnwrap(hosted.boundary.viewportHeight, file: file, line: line)
+        XCTAssertTrue(viewportHeight.isFinite, file: file, line: line)
+        XCTAssertGreaterThan(viewportHeight, 0, file: file, line: line)
         XCTAssertEqual(boundary.sessionID, session, file: file, line: line)
         XCTAssertEqual(boundary.visibleCount, count, file: file, line: line)
         XCTAssertTrue(boundary.frame.minY.isFinite, file: file, line: line)
         XCTAssertGreaterThan(boundary.frame.height, 0, file: file, line: line)
-        XCTAssertGreaterThanOrEqual(boundary.frame.minY, scroll.bounds.height,
-                                    "Precreated is not visible", file: file, line: line)
+        XCTAssertTrue(boundary.frame.minY >= viewportHeight || boundary.frame.maxY <= 0,
+                  "The real boundary must not intersect the production viewport", file: file, line: line)
     }
 
     private func bottomOffset(of scroll: UIScrollView) -> CGFloat {
@@ -454,7 +494,7 @@ final class ResultPaginationPresentationTests: XCTestCase {
         let previousCount = state.results.count
         let previousHeight = scroll.contentSize.height
         let previousBoundary = try XCTUnwrap(hosted.boundary.latest)
-        let viewportHeight = scroll.bounds.height
+        let viewportHeight = try XCTUnwrap(hosted.boundary.viewportHeight)
         let historyStart = hosted.boundary.history.count
         XCTAssertEqual(previousBoundary.sessionID, session)
         XCTAssertEqual(previousBoundary.visibleCount, previousCount)
@@ -462,6 +502,7 @@ final class ResultPaginationPresentationTests: XCTestCase {
                                     "Each manual append starts with a genuinely offscreen boundary")
         let bottom = bottomOffset(of: scroll)
         guard bottom.isFinite, bottom > scroll.contentOffset.y else {
+            attachGeometry(hosted, scroll: scroll, count: state.results.count, name: "scroll-\(count)-no-bottom")
             throw ResultPaginationPresentationFailure.noNewScrollableBottom
         }
         let appended = expectation(description: "Real geometry publishes exactly \(count) results")
@@ -494,14 +535,19 @@ final class ResultPaginationPresentationTests: XCTestCase {
         scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: bottom), animated: false)
         hosted.layout()
         await fulfillment(of: [appended, boundaryObserved], timeout: 5)
+        if !received || !didObserveBoundary {
+            attachGeometry(hosted, scroll: scroll, count: state.results.count, name: "scroll-\(count)-unsettled")
+        }
         // A failed expectation must NOT lead to another page wait or screenshot.
         // Throwing unwinds all subscriptions and the window's defer cleanup.
         guard received else { throw ResultPaginationPresentationFailure.pageNotPublished(count) }
         guard didObserveBoundary else { throw ResultPaginationPresentationFailure.boundaryNotObserved(count) }
-        let triggeringBoundary = try XCTUnwrap(hosted.boundary.history.dropFirst(historyStart).first {
-            $0.sessionID == session && $0.visibleCount == previousCount
-                && $0.frame.minY < viewportHeight && $0.frame.maxY > 0
+        let triggeringMeasurement = try XCTUnwrap(hosted.boundary.history.dropFirst(historyStart).first { measurement in
+            guard let value = measurement.value else { return false }
+            return value.sessionID == session && value.visibleCount == previousCount
+                && value.frame.minY < measurement.viewportHeight && value.frame.maxY > 0
         }, "The actual scroll must bring the old boundary into view before appending")
+        let triggeringBoundary = try XCTUnwrap(triggeringMeasurement.value)
         XCTAssertNotEqual(triggeringBoundary.frame, previousBoundary.frame)
         // @Published is a willSet notification, not evidence of rendered rows.
         // 36 and 37 both occupy eight rows in five columns. Removing the exhausted
@@ -509,7 +555,7 @@ final class ResultPaginationPresentationTests: XCTestCase {
         // than accepting its earlier nil preference or requiring another row.
         let addsRow = rows(count) > rows(previousCount)
         let removesBoundaryWithoutRow = !addsRow && count == state.totalResultCount
-        try await waitForContentLayout(hosted, scroll: scroll,
+        try await waitForContentLayout(hosted, state: state, scroll: scroll,
                            growingFrom: addsRow ? previousHeight : nil,
                            shrinkingFrom: removesBoundaryWithoutRow ? previousHeight : nil)
         try await waitForPageSettlement(state, hosted: hosted, scroll: scroll)
@@ -531,17 +577,24 @@ final class ResultPaginationPresentationTests: XCTestCase {
                        "Retain the scroll position, allowing only the measured exhaustion-bottom clamp")
     }
 
-    private func attachGeometry(_ hosted: ResultPaginationPresentationHost, scroll: UIScrollView,
+    private func attachGeometry(_ hosted: ResultPaginationPresentationHost, scroll: UIScrollView?,
                                  count: Int, name: String) {
-        let history = hosted.boundary.history.map {
-            "count=\($0.visibleCount) frame=\($0.frame) session=\($0.sessionID)"
+        let history = hosted.boundary.history.enumerated().map { index, measurement in
+            "measurement=\(index + 1) actualViewport=\(measurement.viewportHeight) boundary=\(String(describing: measurement.value))"
         }.joined(separator: "\n")
-        let attachment = XCTAttachment(string: """
-        window=\(hosted.window.bounds) viewport=\(scroll.bounds) insets=\(scroll.adjustedContentInset)
-        content=\(scroll.contentSize) offset=\(scroll.contentOffset) count=\(count)
+        let publications = hosted.boundary.publications.map {
+            "publication=\($0.previousCount)->\($0.count) precedingMeasurements=\($0.measurementCount) actualViewport=\(String(describing: $0.measurement?.viewportHeight)) boundary=\(String(describing: $0.measurement?.value))"
+        }.joined(separator: "\n")
+        let report = """
+        phase=\(name) count=\(count) probe.actualViewport=\(String(describing: hosted.boundary.viewportHeight))
+        window=\(hosted.window.bounds) scroll.bounds=\(String(describing: scroll?.bounds)) insets=\(String(describing: scroll?.adjustedContentInset))
+        content=\(String(describing: scroll?.contentSize)) offset=\(String(describing: scroll?.contentOffset))
         latest=\(String(describing: hosted.boundary.latest))
         \(history)
-        """)
+        \(publications)
+        """
+        print(report) // Same safe geometry in the log and attachment, even on timeout.
+        let attachment = XCTAttachment(string: report)
         attachment.name = "result-pagination-geometry-\(name)"
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -585,16 +638,36 @@ private struct ResultPaginationPresentationContext {
 
 @MainActor
 private final class ResultPaginationPresentationBoundaryProbe {
+    struct Measurement {
+        let value: ResultPageBoundaryValue?
+        let viewportHeight: CGFloat
+    }
+
+    struct Publication {
+        let count: Int
+        let previousCount: Int
+        let sessionID: UUID?
+        let measurementCount: Int
+        let measurement: Measurement?
+    }
+
     private(set) var latest: ResultPageBoundaryValue?
-    private(set) var history: [ResultPageBoundaryValue] = []
+    private(set) var viewportHeight: CGFloat?
+    private(set) var history: [Measurement] = []
+    private(set) var publications: [Publication] = []
     var onChange: ((ResultPageBoundaryValue?) -> Void)?
 
-    func observe(_ value: ResultPageBoundaryValue?) {
+    func observe(_ value: ResultPageBoundaryValue?, viewportHeight: CGFloat) {
         latest = value
-        if let value, value.frame.minY.isFinite, value.frame.width > 0, value.frame.height > 0 {
-            history.append(value)
-        }
+        self.viewportHeight = viewportHeight
+        // No filtering or inferred coordinates: retain even nil/invalid callbacks.
+        history.append(Measurement(value: value, viewportHeight: viewportHeight))
         onChange?(value)
+    }
+
+    func recordPublication(count: Int, previousCount: Int, sessionID: UUID?) {
+        publications.append(Publication(count: count, previousCount: previousCount, sessionID: sessionID,
+                                        measurementCount: history.count, measurement: history.last))
     }
 }
 
