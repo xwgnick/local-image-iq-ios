@@ -1,3 +1,29 @@
+# Windows → iPhone 安装 — build 37 当前交付
+
+**0.14.0／build37 — DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**V5全部12项及追加的最近3条搜索已在同一功能包交付，仍需Sideloadly本机重签，不是诊断专用包或真机验收结论。
+
+**[../build/device-download/37943428136/LocalImageIQ-0.14.0-build37-iphoneos-unsigned.ipa](../build/device-download/37943428136/LocalImageIQ-0.14.0-build37-iphoneos-unsigned.ipa)** · [IPA直链](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-37943428136-1/LocalImageIQ-0.14.0-build37-iphoneos-unsigned.ipa) · [Release ci-37943428136-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37943428136-1)（prerelease、非draft）。本机已有父流程完整核验的包，无需重下；另一台电脑可用直链。
+
+## 覆盖安装后正常使用
+
+1. 选择上述build37，沿用**原Sideloadly账号／原有效Bundle ID覆盖安装**；**不卸载、不清库、不为升级重索引、不重新授权**，不重置已有偏好或照片网络许可。
+2. 正常搜索即可：合法显式提交自动记去首尾空白的原文，最近3个唯一查询最新在左；不足时以**身份证／猫猫追逐逗猫棒／海边日落**依次补齐且不重复。草稿、翻译重试／切换、筛选、翻页、找相似不记。长标签只在单行显示时省略，点击和无障碍仍用全文。
+3. 历史单独保存在受保护、排除备份、原子写入的本机JSON；**设置 → 隐私与关于**的次级清除历史不动数据库、照片、输入或结果。中文自动翻译只有一个次级持久设置，结果菜单可切“译文／原文”；五列按实际可见边界补页，内部仍12张一批，无用户结果数量选项。
+4. 同步胶囊普通字号224×44、预留52pt，大字号允许增高；显示“**同步最新照片12/38**”，点主体查看统计／SS详情。取消及显式重新同步等待真实排空，不是隐藏提示即停工。首页下方160pt的02透明图形不是B02 App图标替换；图库3入口、设置4入口、44pt薄导航及OCR“文本（ocr）增强搜索 → i → 开关”已实现。
+5. 清理**只有缺失／无效偏好才默认0.95，有效旧值继续保留**。大图先本地 `.current`／HQ／`aspectFit` 短边224，有可用HQ即显示，仅无HQ才Fast回退，联网仍需显式许可；不保证实际像素或原图。
+
+纯删除维护仅用于本App成功确认且剩余完整revision／全部行摘要／授权不变的来源；等待Photos确认全部消失，修剪旧组并刷新授权／会话／缓存，不全库评分。**可能漏掉删除后新解锁组合，不等价完整重跑**；新增／编辑／模型／授权／阈值变化仍正常重算。**不要求实际删除私人照片来验收，也不安排诊断专用包或常规重复截图。**
+
+- 最终源码 **`1933f61a42340793097e0d7c5439f7b3112cc4e3`**；[run 37943428136／job 113863394567](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37943428136/job/113863394567) 第二次完整验证SUCCESS；本阶段6次定点＋2次完整，首次完整FAILED、无IPA。Core79；App1901＝1900通过／1既有SQLite跳过／0失败；UI16＝15通过／1永久键盘跳过／0失败，真实模型8项及CPU／`.all`／20 actor门槛保留。
+- 用户“**永久沿用，以后不必询问**”仅适用于 `testDraggingScrollViewDismissesKeyboard`；不再逐版问，SKIP不是PASS，拖动收键盘未验证修复，可用“完成”；其他键盘／图库／导航／模型／数据安全门槛不豁免。
+- IPA **1,420,147,357 bytes**；实际整文件SHA-256 **`d3c28701f2456f303752e35c935d45b416004e808e4a891bd635fa2649a3286d`**；父流程完整流式下载与7-Zip26.04全量CRC通过。实际小元数据为0.14.0／37、LaunchScreen、arm64未签名、Xcode16.4／SDK18.5、最低iOS17；未跨版本完整比较模型字节。
+- 父流程实际查看的6张原生宿主图含合成历史／同步统计与未授权照片占位，**不是HTML、真机、真实Photos或V5逐像素一致证明**；没有实际私人Photos访问／删除测试。完整契约、真实生产布局修复与8次账本见 [MINIMAL_ALBUM_AND_RECENT_SEARCH.md](MINIMAL_ALBUM_AND_RECENT_SEARCH.md)、[BUILD_STATUS.md](BUILD_STATUS.md)。原包完整性不等于重签包或手机验收。
+
+## 完整安装历史（截至 build36，以下旧全文原样保留）
+**旧“当前／两列／默认值／诊断步骤”等仅属历史；现行版本与操作以上方build37为准，不执行旧迁移／清库要求。**
+
+---
+
 # Windows → iPhone 安装 — build 36 当前交付
 
 **0.13.0／build36 — DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**本机已有父流程完整核验的包，仍需Sideloadly本机重签，不是免签或手机已验收。

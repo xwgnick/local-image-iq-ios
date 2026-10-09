@@ -1,3 +1,54 @@
+# Cloud build status — build 37
+
+**Current: 0.14.0／build37 — DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**最终源码 **`1933f61a42340793097e0d7c5439f7b3112cc4e3`**；V5全部12项及追加的最近3条搜索已一起交付。本阶段**6次定点＋2次完整，共8次；首次完整FAILED，第二次SUCCESS**。
+
+- `recentSearchQueries` 仅记录 `canSearch` 成立的显式提交之去首尾空白用户原文，最多3个唯一项、最新左置；默认身份证／猫猫追逐逗猫棒／海边日落渐进补齐且不重复。草稿、译文重试／切换、筛选、翻页、找相似不记；单行省略不截断存储／点击／AX全文。独立受保护、排除备份、原子JSON，测试默认内存；隐私次级清除不动数据库／照片／输入／结果。
+- 仅缺失／无效偏好默认0.95；大图先本地 `.current`／HQ／`aspectFit` 短边224，有HQ即显示，无HQ才Fast，联网需显式许可，非实际像素／原图保证。同步224×44、52pt预留及大字号适配，“同步最新照片12/38”，点看统计／SS，取消／重启等排空。
+- 五列按可见边界自动补内部12张分页，不暴露结果数量；中文自动翻译仅一个次级持久设置，结果菜单译文／原文；图库3入口、设置4入口及次级管理保留，首页02透明图形下方居中160pt（非B02 App图标），OCR文字→i→开关、44pt薄导航。
+- 纯删除仅本App成功mutation／匹配baselineID／确认子集，完整剩余PhotoRevision、全部行摘要含过期／单张、授权不变才维护；SQL先prune而Photos仍可见时 `awaitingDeletion` 保留维护凭据，不全算。全部消失后修剪旧组、去掉不足2张、仅重算受影响子组最小值，刷新授权／会话／缓存。**非完整重跑，可能漏新解锁组合**；新增／编辑／模型／授权／阈值照常失效全算，legacy注入协议默认noop。
+- **真实生产修复**：`SearchLayoutDelivery` 延后合并偏好写入，`SearchHeaderHeight` 去掉结果反馈、最新nil生效；`AppState` 同步及 `loadMore` guards不改。并非全部失败都只是夹具问题。
+
+## build37 完整尝试账本（实际顺序，秒；详解见专题）
+
+|顺序／范围|源码／run／job|实际结果及耗时|
+|---|---|---|
+|1／定点1|`9a36cb31e8001e56470ec2d0d93a1ba35fcef8ca`；[37914578595／113767548008](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37914578595/job/113767548008)|**FAILED，编译成功**；363测试／11失败记录，156.788／wall156.907。长历史尾空格5条；3个同步UI用例6条，含旧几何、12→24分页及小屏进度等待；HQ／删除／历史核心等通过。|
+|2／定点2|`886d99cebb4834f1e0365915089897ea64c0ed90`；[37916228921／113772968073](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37916228921/job/113772968073)|**49通过／0跳过／0失败**，58.580／wall58.787；胶囊分支几何过滤＋真实原生探针、trim夹具与根页正常追加前缀检查。|
+|3／完整1|`76b404b7405c865486e77fb7a3444b626c1df9f3`；[37917072980／113775780070](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37917072980/job/113775780070)|**FAILED，无IPA**。App旧PrimaryAX两条断言、两项分页展示夹具误设12而非36及已36仍等24；App总数未核实，不填。UI16／1永久跳过／1失败，1572.625；滑杆内部坐标目标0.95实际0.94。|
+|4／定点3|`072e9a699b633a91dfc53e1ba6015fe9ace049f7`；[37922950065／113795026697](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37922950065/job/113795026697)|**FAILED**。App28／3记录涉及2用例：AX布局超时2＋外层首边界缺失1；核心分页18通过。UI1失败，99.884，归一化滑杆目标0.95实际0.96。|
+|5／定点4|`edc3465e33c7991e7f42e44a219beb134c50f736`；[37924345233／113799591924](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37924345233/job/113799591924)|**整轮FAILED**。App28／3记录：AX布局2＋线性网格估算798.5实际797；核心18通过。UI1**通过**／330.267：移除不成立的内部触点精度断言，保留真实端点及原生精确0.95测试，非skip。|
+|6／定点5|`a2f5e5011c8c050c9138751e84aa9f3b66552e86`；[37926258498／113805823288](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37926258498/job/113805823288)|**FAILED**。App28／2记录，均同一AX用例；分页展示4＋核心18均通过，32.077／wall37.162。达到三次修复限制后，用户明确选择“继续定位修好后再出IPA”。|
+|7／定点6|`1933f61a42340793097e0d7c5439f7b3112cc4e3`；[37942295951／113859492687](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37942295951/job/113859492687)|**47通过／0跳过／0失败**，91.971／wall92.005：布局2＋AX6＋分页展示4＋核心分页18＋首页9＋同步8。|
+|8／完整2，最终|同一最终`1933f61a42340793097e0d7c5439f7b3112cc4e3`；[37943428136／113863394567](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37943428136/job/113863394567)|**SUCCESS**；Core79；App1901＝1900通过／1既有SQLite跳过／0失败，772.642／wall782.247；UI16＝15通过／1永久键盘跳过／0失败，2014.932／wall2014.958。|
+
+定点5实际日志：结果24、content height609，最新边界却仍为12／frame441，viewport499.666；`ResultPageBoundaryPreference` 与 `SearchHeaderHeight` 均有同帧多次更新警告。随后修复生产偏好传递，不放松 `loadMore`／同步guards或把AX失败豁免。夹具与测量错误造成的额外迭代完整保留；测试／wall不是整次CI总耗时或手机性能。
+
+## 最终测试明细（子集已计入，不重复加总）
+
+|范围|最终结果／秒|
+|---|---|
+|App总数／新增|1901＝1900通过／1既有物理SQLite模拟器跳过／0失败；相对1784新增117个App方法已计入。|
+|真实模型Generated|8通过／145.964；CPU／`.all`／完整20 actor门槛保留。|
+|HQ／历史|HQ21／0.235；历史状态16／0.167；历史策略／存储16／0.226，均通过。|
+|删除／AX|删除服务26／2.126；删除状态10／0.622；PrimaryAX6／14.002，均通过。|
+|独立UI例外|16＝15通过／1永久键盘跳过／0失败；用户“永久沿用，以后不必询问”仅限 `testDraggingScrollViewDismissesKeyboard`，SKIP不算PASS，“完成”及其他门槛不豁免。|
+
+## 发布、完整性与审图范围（父流程已完成记录）
+
+- [Release ci-37943428136-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37943428136-1)：ID **408051015**，**2026-10-09T15:30:57Z**发布，**9资产、prerelease、非draft**。
+- IPA asset **625365790**：[../build/device-download/37943428136/LocalImageIQ-0.14.0-build37-iphoneos-unsigned.ipa](../build/device-download/37943428136/LocalImageIQ-0.14.0-build37-iphoneos-unsigned.ipa) · [直链](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-37943428136-1/LocalImageIQ-0.14.0-build37-iphoneos-unsigned.ipa)；**1,420,147,357 bytes**，实际整文件SHA-256 **`d3c28701f2456f303752e35c935d45b416004e808e4a891bd635fa2649a3286d`**。
+- 完整流式下载＋**7-Zip26.04全量CRC：Everything is Ok**，**11目录／30文件／解压后1,569,823,990 bytes**；[../build/device-download/37943428136/release-fetch-42594767-5c8f-41b1-89e4-01c3d5109bfc.json](../build/device-download/37943428136/release-fetch-42594767-5c8f-41b1-89e4-01c3d5109bfc.json)。
+- 实际读取IPA小元数据：**0.14.0／37、LaunchScreen、arm64未签名、Xcode16.4／SDK18.5、最低iOS17**；沿用SigLIP768／Places身份，**未跨版本完整比较模型字节**。
+- 最终UI ZIP asset **625365513**，**10,581,102 bytes**，完整核验SHA-256 **`8dea61c9edeb9e8719817e01637291c1141fbe7558f1269a363ea41295ce253a`**；父流程实际查看 [../build/ui-review/37943428136/minimal-native-review.jpg](../build/ui-review/37943428136/minimal-native-review.jpg)（**1020×1550，6张各1179×2556原生宿主**），记录 [../build/ui-review/37943428136/minimal-native-review.json](../build/ui-review/37943428136/minimal-native-review.json)。
+- 六图为首页02／长历史／五列结果（选择＋无访问占位）／图库8003未授权／设置4行／同步12/38合成列表；**是原生，不是HTML；不是真机、真实Photos或V5逐像素一致证明**。未实际访问／删除私人Photos，未完成手机E2E。
+- 首次完整失败UI也由父流程实际审阅：run **37917072980**，保留draft **407833160**／asset **624727132**，**17,485,109 bytes**，SHA-256 **`563d026ec849e189e088dbff429af180635cbdb895c505a5ab2e3f7ac22a744f`**；**不是IPA或当前交付**。
+- 原Sideloadly账号／原有效Bundle ID覆盖安装、正常使用与自动历史；不卸载、清库、为升级重索引或重新授权，不要求诊断专用包／私照删除验证。详见 [WINDOWS_IPHONE_INSTALL.md](WINDOWS_IPHONE_INSTALL.md)；全部契约及失败修正详解见 [MINIMAL_ALBUM_AND_RECENT_SEARCH.md](MINIMAL_ALBUM_AND_RECENT_SEARCH.md)。
+
+## 完整历史正文（截至 build36，以下旧全文原样保留）
+**旧“当前／默认值／两列／诊断要求”等只属对应历史；现行状态与操作以上方build37为准。**
+
+---
+
 # Cloud build status — build 36
 
 **Current: 0.13.0／build36 — DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**最终源码 **`d9472b54c3938f0f783a7658fc0364d6bfca0fc5`**。本阶段 **5次定点＋2次完整验证**；第一次完整FAILED、第二次SUCCESS。

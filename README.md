@@ -1,3 +1,27 @@
+# Local Image IQ · Native iOS — 0.14.0 / build 37 当前交付
+
+**DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**已交付用户批准的V5全部12项及追加的最近3条搜索；不是诊断专用包。最终源码 **`1933f61a42340793097e0d7c5439f7b3112cc4e3`**；[run 37943428136／job 113863394567](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37943428136/job/113863394567) **第二次完整验证SUCCESS**，本阶段共**6次定点＋2次完整**，不隐去失败与夹具迭代。
+
+## build37：极简界面与真实搜索历史
+
+- 首页采用已批准的**02透明图形，下方居中160pt**，不替换B02 App图标／启动画面；五列搜索、44pt薄导航、图库3入口／设置4入口，管理与说明保留在次级页。OCR顺序为“文本（ocr）增强搜索 → i → 开关”。
+- 三个查询块自动成为 `recentSearchQueries`：仅 `canSearch` 成立的显式提交记录去首尾空白的用户原文，唯一、最新在左、最多3条；不足时依次用**身份证／猫猫追逐逗猫棒／海边日落**补齐且不重复。草稿、译文重试／切换、筛选、翻页、找相似不记；长文字单行省略，存储、点击与无障碍保留全文。
+- 历史使用独立受保护、排除备份、原子写入的本机JSON；隐私次级页可单独清除，不动数据库、照片、当前输入或结果。中文自动翻译只有一个次级持久设置，结果菜单保留“译文／原文”；不再暴露结果数量设置，内部仍12张分页，五列按可见边界自动补页。
+- 大图**先请求本地 `.current`／`highQualityFormat`／`aspectFit` 短边224**，有可用HQ即显示；仅无可用HQ才兼容Fast，联网仍需显式许可；不保证实际返回224像素或原图。同步普通字号224×44胶囊、52pt预留，大字号可增高；“同步最新照片12/38”，点主体看统计／SS详情，取消与重启等待真实排空。
+- 清理**仅缺失／无效偏好默认0.95，有效旧值保留**。纯删除维护仅接受本App成功删除及匹配基线／确认子集，完整剩余revision、全部行摘要（含过期／单张）与授权须一致；等待Photos确认全部消失后修剪旧组、去掉不足2张、只重算受影响子组最小值，刷新授权／会话／缓存，不全库评分。**不等价完整重跑，可能漏掉删除后新解锁组合**；新增／编辑／模型／授权／阈值变化照常失效重算。
+- 修复真实生产布局反馈：`SearchLayoutDelivery` 延后合并偏好写入，`SearchHeaderHeight` 不再随结果回馈高度且最新nil生效；`AppState` 同步及 `loadMore` guards未改。不是把全部失败都归为夹具问题。
+
+最终 **Core79通过；App1901＝1900通过／1既有物理SQLite模拟器跳过／0失败；UI16＝15通过／1永久键盘跳过／0失败**；新增117个App方法已计入，真实模型8项及CPU／`.all`／20 actor门槛保留。用户“**永久沿用，以后不必询问**”仅豁免 `testDraggingScrollViewDismissesKeyboard`；SKIP不算PASS，“完成”及其他门槛不豁免。
+
+**[build/device-download/37943428136/LocalImageIQ-0.14.0-build37-iphoneos-unsigned.ipa](build/device-download/37943428136/LocalImageIQ-0.14.0-build37-iphoneos-unsigned.ipa)** · [IPA直链](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-37943428136-1/LocalImageIQ-0.14.0-build37-iphoneos-unsigned.ipa) · [Release ci-37943428136-1](https://github.com/xwgnick/local-image-iq-ios/releases/tag/ci-37943428136-1)（prerelease、非draft）。**1,420,147,357 bytes**；整文件SHA-256 **`d3c28701f2456f303752e35c935d45b416004e808e4a891bd635fa2649a3286d`**；父流程完整流式下载及7-Zip26.04全量CRC通过。
+
+**原Sideloadly账号／原有效Bundle ID覆盖安装，正常使用，历史自动记录；不卸载、清库、为升级重索引或重新授权，不要求诊断专用安装／私照删除验证。**父流程实际审阅6张原生合成宿主拼图，不是真机／真实Photos或V5逐像素一致证明。完整契约、8次账本与证据范围见 [docs/MINIMAL_ALBUM_AND_RECENT_SEARCH.md](docs/MINIMAL_ALBUM_AND_RECENT_SEARCH.md)、[docs/BUILD_STATUS.md](docs/BUILD_STATUS.md)；安装见 [docs/WINDOWS_IPHONE_INSTALL.md](docs/WINDOWS_IPHONE_INSTALL.md)。
+
+## 完整历史 README（截至 build36，以下旧全文原样保留）
+**旧“当前／默认值／两列／手动设置／诊断要求”等仅属对应历史；现行交付与操作以上方build37为准。**
+
+---
+
 # Local Image IQ · Native iOS — 0.13.0 / build 36 当前交付
 
 **DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**最终源码 **`d9472b54c3938f0f783a7658fc0364d6bfca0fc5`**；[最终 run 37885978904／job 113675973943](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37885978904/job/113675973943) SUCCESS。本阶段共 **5次定点、2次完整验证**，首次完整FAILED、第二次SUCCESS，不是首轮通过。
