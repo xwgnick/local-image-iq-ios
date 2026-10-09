@@ -117,7 +117,7 @@ final class CleanupBackNavigationAnchor: UIView, UIGestureRecognizerDelegate {
             && progress + velocity * 0.15 / width >= 0.5
     }
 
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         gestureRecognizer === edgePan && configuration?.enabled == true
             && configuration?.routeID != nil && configuration?.canReturn() == true
             && Self.accepts(edgePan.velocity(in: gestureView))
