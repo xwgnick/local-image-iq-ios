@@ -658,7 +658,12 @@ final class SimilarPhotoCleanupState: ObservableObject {
     /// Photos observations invalidate only READ state, including during deletion.
     /// Do not discard the mutation handle or its eventual real completion message.
     func invalidateAccess() {
-        if hasEnteredPage { requestAutomaticRefresh() }
+        if hasEnteredPage {
+            // Access can be revoked or reduced: unlike an index-only commit,
+            // it must immediately remove old Photos content from browsing too.
+            invalidateRead()
+            requestAutomaticRefresh()
+        }
         else {
             invalidateRead()
             refreshPending = true
@@ -763,7 +768,10 @@ final class SimilarPhotoCleanupState: ObservableObject {
         // Retain the tail until finishGrouping; later explicit scans must drain it.
         result = nil
         resultIndexRevision = nil
-        sessionID = nil
+        // Retain only the presentation identity for safe index-only browsing.
+        // result=nil plus generation/revision fences revoke ALL selection and
+        // immutable confirmations; fresh publication assigns a new session.
+        if !preservingBrowsing { sessionID = nil }
         selectedIDs = []
         pendingDeletion = nil
         progress = SimilarPhotoGroupingProgress()

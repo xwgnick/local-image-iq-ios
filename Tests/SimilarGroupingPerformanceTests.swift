@@ -134,6 +134,9 @@ final class SimilarGroupingPerformanceTests: XCTestCase {
 
     private func attach(name: String, report: [String: Any]) throws {
         let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+        // Synthetic counts/timings only, also readable without decoding xcresult.
+        let compact = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
+        print("SIMILAR-GROUPING-PERFORMANCE \(name) \(String(decoding: compact, as: UTF8.self))")
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
         attachment.name = name
         attachment.lifetime = .keepAlways

@@ -387,7 +387,7 @@ final class SimilarCleanupDraftTests: XCTestCase {
         XCTAssertTrue(f.state.hasScanned)
         XCTAssertFalse(f.state.canSelect)
         XCTAssertFalse(f.state.canUpdateResults)
-        XCTAssertNil(f.state.selectionSessionID, "Browsing identity is not selection authority")
+        XCTAssertEqual(f.state.selectionSessionID, session, "Keep presentation identity, never selection authority")
         XCTAssertEqual(f.state.resultThreshold, threshold)
         XCTAssertEqual(f.state.groups.map(\.id), ["old", "new"])
         XCTAssertEqual(f.state.displayGroups.map(\.id), ["new", "old"])
