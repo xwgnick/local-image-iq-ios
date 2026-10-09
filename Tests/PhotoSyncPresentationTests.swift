@@ -21,7 +21,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         try await host.wait { host.sync[.progress] != nil }
         XCTAssertEqual(PhotoSyncToast(state: state).compactTitle, "同步最新照片12/38")
         XCTAssertEqual(PhotoSyncToast(state: state).fraction, Double(12) / 38)
-        try assertCardGeometry(host, cancel: true)
+        try assertCardGeometry(host, cancel: true, progress: true)
         let card = try XCTUnwrap(host.sync[.card])
         let text = try XCTUnwrap(host.sync[.text])
         let reservation = try XCTUnwrap(host.sync[.reservation])
@@ -61,7 +61,9 @@ final class PhotoSyncPresentationTests: XCTestCase {
         let reservation = try XCTUnwrap(host.sync[.reservation])
         let tab = try XCTUnwrap(host.tabs[.search])
         visibility.isPresented = false
-        try await host.wait { host.sync[.card] == nil }
+        try await host.wait { !host.attachedSyncProbes.contains { $0.part == .card } }
+        XCTAssertEqual(host.attachedSyncProbes.map(\.part), [.reservation])
+        XCTAssertNil(host.sync[.card])
         XCTAssertEqual(host.sync[.reservation], reservation)
         XCTAssertEqual(host.tabs[.search], tab)
         XCTAssertNil(host.sync[.mainAction])
@@ -77,7 +79,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertNil(host.sync[.card])
         visibility.isPresented = true
         try await host.wait { host.sync[.card] != nil }
-        try assertCardGeometry(host, cancel: false)
+        try assertCardGeometry(host, cancel: false, progress: false)
         XCTAssertEqual(host.sync[.reservation], reservation)
         XCTAssertTrue(state.canRestart)
         let calls = await service.calls
@@ -161,9 +163,12 @@ final class PhotoSyncPresentationTests: XCTestCase {
         let host = try ControlsNativeHost(content: AnyView(SyncCardFixture(state: state)),
                                          size: CGSize(width: 320, height: 568))
         defer { host.close() }
-        try await host.wait { !host.tabs.isEmpty }
-        XCTAssertNil(host.sync[.card], "The non-observing parent mounts an initially idle child")
-        let idleReservation = try XCTUnwrap(host.sync[.reservation])
+        try await host.wait { host.tabs[.search] != nil && host.liveSync[.reservation] != nil }
+        recordSyncStage(host, state: state, stage: "small-idle-mounted")
+        XCTAssertEqual(host.attachedSyncProbes.map(\.part), [.reservation],
+                   "The non-observing parent mounts an initially idle child, not a hidden working card")
+        XCTAssertNil(host.sync[.card])
+        let idleReservation = try XCTUnwrap(host.liveSync[.reservation])
         XCTAssertEqual(idleReservation.height, 52, accuracy: host.pixel)
         XCTAssertNil(host.sync[.mainAction])
         XCTAssertNil(host.sync[.action])
@@ -172,19 +177,39 @@ final class PhotoSyncPresentationTests: XCTestCase {
         let idleUsable = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: host.window)
         state.updateAvailability(ready: true, networkAllowed: false)
         try await reached(run.entered)
-        try await host.wait { host.sync[.progress] != nil }
+        recordSyncStage(host, state: state, stage: "small-backend-reported-working")
+        do {
+            // Require geometry from the current mounted branch, independently
+            // of a merged preference update. No state-derived fallback frame.
+            try await host.wait { host.liveSync[.progress] != nil }
+        } catch {
+            recordSyncStage(host, state: state, stage: "small-working-wait-failed-before-capture")
+            do {
+                try host.attachRootSyncWindow(to: self, name: "UIReview-sync-small-initial-working-failure")
+            } catch {
+                let attachment = XCTAttachment(string: "Failure screenshot could not be drawn: \(error)")
+                attachment.name = "Geometry-sync-small-failure-capture-error"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            // Drawing can itself realize layout. Keep both snapshots and the
+            // ORIGINAL failure; never turn capture-driven recovery into PASS.
+            recordSyncStage(host, state: state, stage: "small-working-wait-failed-after-capture")
+            throw error
+        }
+        recordSyncStage(host, state: state, stage: "small-working-mounted")
         XCTAssertEqual(PhotoSyncToast(state: state).fraction, 0.25)
         XCTAssertEqual(PhotoSyncToast(state: state).title, "正在同步照片")
         XCTAssertEqual(PhotoSyncToast(state: state).compactTitle, "同步最新照片2/8")
         XCTAssertEqual(state.progress.removed, 3)
-        try assertCardGeometry(host, cancel: true)
-        XCTAssertEqual(try XCTUnwrap(host.sync[.card]).width, 224, accuracy: host.pixel)
-        XCTAssertEqual(try XCTUnwrap(host.sync[.card]).height, 44, accuracy: host.pixel)
-        XCTAssertEqual(host.sync[.reservation], idleReservation)
+        try assertCardGeometry(host, cancel: true, progress: true)
+        XCTAssertEqual(try XCTUnwrap(host.liveSync[.card]).width, 224, accuracy: host.pixel)
+        XCTAssertEqual(try XCTUnwrap(host.liveSync[.card]).height, 44, accuracy: host.pixel)
+        XCTAssertEqual(host.liveSync[.reservation], idleReservation)
         XCTAssertEqual(host.tabs[.search], idleTab)
         let usable = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: host.window)
         XCTAssertEqual(usable, idleUsable, "Starting sync must not change the photo viewport")
-        XCTAssertLessThanOrEqual(usable.maxY, try XCTUnwrap(host.sync[.card]).minY + host.pixel)
+        XCTAssertLessThanOrEqual(usable.maxY, try XCTUnwrap(host.liveSync[.card]).minY + host.pixel)
         let start = scroll.contentOffset
         scroll.setContentOffset(CGPoint(x: start.x,
             y: scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom), animated: false)
@@ -196,10 +221,11 @@ final class PhotoSyncPresentationTests: XCTestCase {
         try host.attach(to: self, name: "UIReview-sync-capsule-v1-working-small")
 
         state.cancel()
-        try await host.wait { host.sync[.progress] == nil }
+        try await host.wait { !host.attachedSyncProbes.contains { $0.part == .progress } }
         XCTAssertEqual(state.phase, .cancelling)
         XCTAssertFalse(state.canCancel)
         XCTAssertFalse(state.canRestart, "A held backend is not already stopped")
+        try assertCardGeometry(host, cancel: true, progress: false)
         run.release.open()
         await state.waitUntilIdle()
         try await host.settle()
@@ -209,8 +235,8 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertNil(PhotoSyncToast(state: state).fraction)
         XCTAssertNil(host.sync[.progress])
         XCTAssertTrue(state.canRestart)
-        try assertCardGeometry(host, cancel: false)
-        XCTAssertEqual(host.sync[.reservation], idleReservation)
+        try assertCardGeometry(host, cancel: false, progress: false)
+        XCTAssertEqual(host.liveSync[.reservation], idleReservation)
         XCTAssertEqual(host.tabs[.search], idleTab)
         try host.attach(to: self, name: "UIReview-sync-capsule-v1-cancelled-small")
     }
@@ -229,7 +255,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         try await host.wait { host.sync[.card] != nil }
         XCTAssertEqual(PhotoSyncToast(state: state).title, "正在检查照片")
         XCTAssertNil(host.sync[.progress])
-        try assertCardGeometry(host, cancel: true)
+        try assertCardGeometry(host, cancel: true, progress: false)
         XCTAssertEqual(host.sync[.reservation], idleReservation)
         XCTAssertGreaterThan(try XCTUnwrap(host.sync[.card]).height, 44)
         XCTAssertEqual(try XCTUnwrap(host.sync[.card]).width, 312, accuracy: host.pixel)
@@ -240,12 +266,12 @@ final class PhotoSyncPresentationTests: XCTestCase {
         await service.report(PhotoSyncProgress(phase: .updating, total: 8, completed: 3, encoded: 3))
         try await host.wait { host.sync[.progress] != nil }
         XCTAssertEqual(PhotoSyncToast(state: state).fraction, 0.375)
-        try assertCardGeometry(host, cancel: true)
+        try assertCardGeometry(host, cancel: true, progress: true)
         XCTAssertEqual(host.sync[.reservation], idleReservation)
         await service.report(PhotoSyncProgress(phase: .updating, total: 38, completed: 12, encoded: 12))
         try await host.settle()
         XCTAssertEqual(PhotoSyncToast(state: state).compactTitle, "同步最新照片12/38")
-        try assertCardGeometry(host, cancel: true)
+        try assertCardGeometry(host, cancel: true, progress: true)
         XCTAssertEqual(host.sync[.reservation], idleReservation)
         state.cancel()
         first.release.open()
@@ -260,7 +286,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertEqual(state.phase, .cancelled)
         let before = await service.calls
         XCTAssertEqual(before, 1, "Rendering/ordinary readiness cannot auto-restart user cancellation")
-        try assertCardGeometry(host, cancel: false)
+        try assertCardGeometry(host, cancel: false, progress: false)
         state.restart()
         try await reached(second.entered)
         try await host.wait { host.sync[.progress] != nil }
@@ -286,10 +312,20 @@ final class PhotoSyncPresentationTests: XCTestCase {
             let idleTab = try XCTUnwrap(host.tabs[.search])
             state.updateAvailability(ready: true, networkAllowed: false)
             try await reached(run.entered)
+            // Realize the old branch before finishing, so this regression
+            // cannot pass by coalescing checking straight into a terminal UI.
+            try await host.wait { host.liveSync[.action] != nil }
+            try assertCardGeometry(host, cancel: true, progress: false)
             run.release.open()
             await state.waitUntilIdle()
-            try await host.wait { host.sync[.card] != nil }
+            try await host.wait {
+                host.liveSync[.card] != nil
+                    && !host.attachedSyncProbes.contains { $0.part == .action }
+            }
             XCTAssertEqual(state.phase, expected)
+            // Check mounted controls as well as the legacy preference snapshot:
+            // pruning a key must not conceal a real stale cancel button/ring.
+            try assertCardGeometry(host, cancel: false, progress: false)
             XCTAssertNil(PhotoSyncToast(state: state).fraction)
             XCTAssertNil(host.sync[.progress])
             XCTAssertEqual(host.sync[.reservation], idleReservation)
@@ -301,7 +337,14 @@ final class PhotoSyncPresentationTests: XCTestCase {
                 XCTAssertNil(host.sync[.action])
                 try await reached(delayEntered)
                 delay.open()
-                try await host.wait { !state.visible && host.sync[.card] == nil }
+                // The logical preference snapshot can be empty before the
+                // unchanged fade-out removes its native branch. Wait for
+                // removal too, rather than treating filtered keys as proof.
+                try await host.wait {
+                    !state.visible && !host.attachedSyncProbes.contains { $0.part == .card }
+                }
+                XCTAssertEqual(host.attachedSyncProbes.map(\.part), [.reservation])
+                XCTAssertNil(host.sync[.card])
                 XCTAssertEqual(host.sync[.reservation], idleReservation)
                 XCTAssertEqual(host.tabs[.search], idleTab)
                 XCTAssertNil(host.sync[.mainAction])
@@ -398,6 +441,8 @@ final class PhotoSyncPresentationTests: XCTestCase {
         add(measurements)
         XCTAssertEqual(card, idleReservation)
         XCTAssertEqual(toolbar, beforeToast, "Working sync must not move the selection toolbar or photos")
+        XCTAssertEqual(host.sync[.selectionToolbar], beforePreference,
+                   "Toast snapshot cleanup must preserve the sibling selection-toolbar preference")
         XCTAssertLessThanOrEqual(toolbar.maxY, card.minY + host.pixel,
                                  "The actual selection toolbar must finish above the actual sync card")
         XCTAssertLessThanOrEqual(usable.maxY, toolbar.minY + host.pixel)
@@ -410,7 +455,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         try host.assertRootActionRegionsRouteOutsideScroll(in: toolbar, excluding: searchScroll)
         // Keep the existing child text/progress/44-point action checks as well;
         // root non-overlap and scrolling above it now use native window frames.
-        try assertCardGeometry(host, cancel: true)
+        try assertCardGeometry(host, cancel: true, progress: true)
         f.navigation.select(.cleanup)
         try await host.wait { f.cleanup.isPageVisible && f.cleanup.isAutomaticRefreshDeferred }
         await f.cleanup.waitUntilIdle()
@@ -426,6 +471,17 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertTrue(host.hasRootBottomFrame(.syncToast))
         XCTAssertFalse(host.hasRootBottomFrame(.selectionToolbar), "Search actions must not leak onto cleanup")
         XCTAssertEqual(f.app.photoSync.phase, .updating)
+
+        // Five columns can expose the initial page boundary and legitimately
+        // append a page while mounting search. Preserve the original ordered
+        // prefix/session, then freeze the settled visible list on the inactive
+        // search page immediately before this test's controlled index commit.
+        await f.app.waitUntilIdle()
+        try await host.settle()
+        let settledResults = f.app.results.map(\.id)
+        XCTAssertEqual(Array(settledResults.prefix(results.count)), results)
+        XCTAssertEqual(f.app.resultSessionID, searchSession)
+        XCTAssertEqual(f.app.selectedResultIDs, Set([selected]))
 
         // Commit while the fake backend is still held: browsing survives, but
         // old selection authority is revoked and refresh remains coalesced.
@@ -446,7 +502,8 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertFalse(f.cleanup.isRestoring)
         XCTAssertEqual(f.grouping.thresholds.count, prepCount, "A held sync commit must not compute cleanup")
         XCTAssertEqual(f.app.resultSessionID, searchSession)
-        XCTAssertEqual(f.app.results.map(\.id), results)
+        XCTAssertEqual(f.app.results.map(\.id), settledResults,
+                   "The controlled commit must preserve the settled visible search results exactly")
         XCTAssertEqual(f.app.selectedResultIDs, Set([selected]))
         XCTAssertEqual(f.app.query, query)
         XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === searchScroll)
@@ -476,7 +533,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertTrue(f.app.photoSync.visible)
         XCTAssertEqual(PhotoSyncToast(state: f.app.photoSync).title, "同步已取消")
         XCTAssertNil(host.sync[.progress])
-        try assertCardGeometry(host, cancel: false)
+        try assertCardGeometry(host, cancel: false, progress: false)
         let navigationBeforeModal = try host.rootBottomFrame(.navigation)
         XCTAssertEqual(Set(host.tabs.keys), Set(PrimaryPage.allCases))
 
@@ -486,7 +543,9 @@ final class PhotoSyncPresentationTests: XCTestCase {
         try await host.wait {
             host.controller.presentedViewController != nil && host.sync[.card] == nil
                 && host.hasRootBottomFrame(.syncToast)
+                && !host.attachedSyncProbes.contains { $0.part == .card }
         }
+        XCTAssertEqual(host.attachedSyncProbes.map(\.part), [.reservation])
         XCTAssertEqual(try host.rootBottomFrame(.syncToast).height, 52, accuracy: host.pixel)
         XCTAssertNil(host.sync[.mainAction])
         XCTAssertNil(host.sync[.action])
@@ -515,13 +574,18 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === searchScroll)
         XCTAssertEqual(f.app.query, query)
         XCTAssertEqual(f.app.resultSessionID, searchSession)
-        XCTAssertEqual(f.app.results.map(\.id), results)
+        XCTAssertEqual(Array(f.app.results.map(\.id).prefix(settledResults.count)), settledResults,
+                   "Returning may append another page, but must retain every settled ID in order")
         XCTAssertEqual(f.app.selectedResultIDs, Set([selected]))
         let returnedToolbar = try host.rootSelectionToolbarFrame()
         XCTAssertLessThanOrEqual(returnedToolbar.maxY, try host.rootBottomFrame(.syncToast).minY + host.pixel)
         try host.assertRootActionRegionsRouteOutsideScroll(in: returnedToolbar, excluding: searchScroll)
         NotificationCenter.default.post(name: UIResponder.keyboardWillShowNotification, object: nil)
-        try await host.wait { host.sync[.card] == nil && host.hasRootBottomFrame(.syncToast) }
+        try await host.wait {
+            host.sync[.card] == nil && host.hasRootBottomFrame(.syncToast)
+                && !host.attachedSyncProbes.contains { $0.part == .card }
+        }
+        XCTAssertEqual(host.attachedSyncProbes.map(\.part), [.reservation])
         XCTAssertEqual(try host.rootBottomFrame(.syncToast).height, 52, accuracy: host.pixel)
         XCTAssertNil(host.sync[.mainAction])
         XCTAssertNil(host.sync[.action])
@@ -543,7 +607,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
     }
 
     private func ringPixels(_ host: ControlsNativeHost) throws -> Data {
-        let globalFrame = try XCTUnwrap(host.sync[.progress])
+        let globalFrame = try XCTUnwrap(host.liveSync[.progress])
         let localFrame = host.controller.view.convert(globalFrame, from: host.window)
         let image = try host.capture()
         let format = UIGraphicsImageRendererFormat()
@@ -578,11 +642,49 @@ final class PhotoSyncPresentationTests: XCTestCase {
         }
     }
 
-    private func assertCardGeometry(_ host: ControlsNativeHost, cancel: Bool) throws {
-        let card = try XCTUnwrap(host.sync[.card])
-        let text = try XCTUnwrap(host.sync[.text])
-        let main = try XCTUnwrap(host.sync[.mainAction])
-        let reservation = try XCTUnwrap(host.sync[.reservation])
+    private func recordSyncStage(_ host: ControlsNativeHost, state: PhotoSyncState, stage: String) {
+        let probes = host.attachedSyncProbes.map { probe in
+            var ancestors: [String] = []
+            var current: UIView? = probe
+            while let view = current {
+                ancestors.append("\(type(of: view)): bounds=\(view.bounds), hidden=\(view.isHidden), alpha=\(view.alpha)")
+                current = view.superview
+            }
+            return "\(probe.part): windowFrame=\(String(describing: probe.windowFrame)); \(ancestors.joined(separator: " -> "))"
+        }.joined(separator: "\n")
+        let attachment = XCTAttachment(string: """
+        Stage=\(stage); phase=\(state.phase); visible=\(state.visible); progress=\(state.progress)
+        Fraction=\(String(describing: PhotoSyncToast(state: state).fraction)); canCancel=\(state.canCancel)
+        Window=\(host.window.bounds); hidden=\(host.window.isHidden); alpha=\(host.window.alpha); key=\(host.window.isKeyWindow)
+        UIKit animations enabled=\(UIView.areAnimationsEnabled); inherited animation duration=\(UIView.inheritedAnimationDuration)
+        Controller attached to this window=\(host.controller.view.window === host.window)
+        Native snapshot=\(host.liveSync); legacy preferences=\(host.sync); tabs=\(host.tabs)
+        Attached probes (including zero-sized/hidden ones, no phase filtering):
+        \(probes)
+        """)
+        attachment.name = "Geometry-sync-\(stage)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func assertCardGeometry(_ host: ControlsNativeHost, cancel: Bool, progress: Bool) throws {
+        var expected: Set<PhotoSyncFramePart> = [.reservation, .card, .text, .mainAction]
+        if cancel { expected.insert(.action) }
+        if progress { expected.formUnion([.progress, .fill]) }
+        let probes = host.attachedSyncProbes
+        XCTAssertEqual(probes.count, expected.count, "Exactly one native probe per current toast part")
+        XCTAssertEqual(Set(probes.map(\.part)), expected, "Actual branches, not a phase-filtered preference claim")
+        for probe in probes {
+            XCTAssertFalse(probe.isUserInteractionEnabled)
+            XCTAssertFalse(probe.isAccessibilityElement)
+            XCTAssertTrue(probe.accessibilityElementsHidden)
+            XCTAssertNotNil(probe.windowFrame)
+        }
+        let frames = host.liveSync
+        let card = try XCTUnwrap(frames[.card])
+        let text = try XCTUnwrap(frames[.text])
+        let main = try XCTUnwrap(frames[.mainAction])
+        let reservation = try XCTUnwrap(frames[.reservation])
         let tab = try XCTUnwrap(host.tabs[.search])
         XCTAssertGreaterThanOrEqual(card.minX, 0)
         XCTAssertLessThanOrEqual(card.maxX, host.window.bounds.width + host.pixel)
@@ -597,7 +699,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(main.width, 44)
         XCTAssertGreaterThanOrEqual(main.height, 44)
         if cancel {
-            let action = try XCTUnwrap(host.sync[.action])
+            let action = try XCTUnwrap(frames[.action])
             XCTAssertLessThanOrEqual(main.maxX, action.minX + host.pixel)
             XCTAssertLessThanOrEqual(action.maxX, card.maxX + host.pixel)
             XCTAssertGreaterThanOrEqual(action.minY + host.pixel, card.minY)
@@ -607,22 +709,40 @@ final class PhotoSyncPresentationTests: XCTestCase {
         } else {
             XCTAssertNil(host.sync[.action], "Stopped/failure main action opens details, never an automatic retry")
         }
-        if let progress = host.sync[.progress] {
-            XCTAssertEqual(progress.height, 14, accuracy: host.pixel)
-            XCTAssertEqual(progress.width, 14, accuracy: host.pixel)
-            XCTAssertLessThanOrEqual(progress.maxX, text.minX + host.pixel)
-            XCTAssertEqual(progress.midY, card.midY, accuracy: host.pixel)
-            let arc = try XCTUnwrap(host.sync[.fill])
+        if progress {
+            let ring = try XCTUnwrap(frames[.progress])
+            XCTAssertEqual(ring.height, 14, accuracy: host.pixel)
+            XCTAssertEqual(ring.width, 14, accuracy: host.pixel)
+            XCTAssertLessThanOrEqual(ring.maxX, text.minX + host.pixel)
+            XCTAssertEqual(ring.midY, card.midY, accuracy: host.pixel)
+            let arc = try XCTUnwrap(frames[.fill])
             XCTAssertEqual(arc.width, 12, accuracy: host.pixel)
             XCTAssertEqual(arc.height, 12, accuracy: host.pixel)
-            XCTAssertEqual(arc.midX, progress.midX, accuracy: host.pixel)
-            XCTAssertEqual(arc.midY, progress.midY, accuracy: host.pixel)
+            XCTAssertEqual(arc.midX, ring.midX, accuracy: host.pixel)
+            XCTAssertEqual(arc.midY, ring.midY, accuracy: host.pixel)
+        } else {
+            XCTAssertNil(host.sync[.progress])
+            XCTAssertNil(host.sync[.fill])
         }
     }
 }
 
 @MainActor
 private extension ControlsNativeHost {
+    var attachedSyncProbes: [PhotoSyncLayoutProbeView] {
+        controlsDescendants(controller.view, PhotoSyncLayoutProbeView.self).filter { $0.window === window }
+    }
+
+    var liveSync: [PhotoSyncFramePart: CGRect] {
+        // Recompute from this host's current subtree. Do not retain old views,
+        // use a process-global registry, filter by desired phase, or merge away
+        // duplicates. Exact probe counts are asserted separately above.
+        Dictionary(grouping: attachedSyncProbes, by: \.part).compactMapValues { (probes: [PhotoSyncLayoutProbeView]) -> CGRect? in
+            guard probes.count == 1 else { return nil }
+            return probes[0].windowFrame
+        }
+    }
+
     func hasRootBottomFrame(_ part: RootBottomLayoutPart) -> Bool {
         controlsDescendants(controller.view, RootBottomLayoutProbeView.self).contains {
             $0.part == part && $0.window === window && $0.windowFrame != nil

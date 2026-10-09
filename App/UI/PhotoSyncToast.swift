@@ -70,26 +70,47 @@ struct PhotoSyncToast: View {
         return state.progress.fraction
     }
 
+    private var showsCancelAction: Bool {
+        state.phase == .checking || state.phase == .updating || state.phase == .cancelling
+    }
+
     var body: some View {
         let metrics = PhotoSyncCapsuleMetrics(fontSize: labelSize,
                                                accessibility: dynamicTypeSize.isAccessibilitySize)
+        let showsCapsule = isPresented && state.visible && !detailsPresented
+        let showsAction = showsCapsule && showsCancelAction
+        let showsProgress = showsCapsule && fraction != nil
         PhotoSyncReservationLayout(metrics: metrics) {
             ZStack {
-                if isPresented && state.visible && !detailsPresented {
+                if showsCapsule {
                     capsule
                         .transition(.opacity.combined(with: .offset(y: reduceMotion ? 0 : 4)))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(reduceMotion || !isPresented || detailsPresented ? nil : .easeOut(duration: 0.18),
-                       value: isPresented && state.visible && !detailsPresented)
+                       value: showsCapsule)
             // A disappearing transition must not leave an interactive/AX card
             // beneath a modal. Only this branch is gated, never the sheet.
-            .allowsHitTesting(isPresented && state.visible && !detailsPresented)
-            .accessibilityHidden(!isPresented || !state.visible || detailsPresented)
+            .allowsHitTesting(showsCapsule)
+            .accessibilityHidden(!showsCapsule)
         }
         .frame(maxWidth: .infinity)
-        .syncFrame(.reservation)
+        .toastFrame(.reservation)
+        // Bound this subtree's diagnostic snapshot to its current branches.
+        // An outgoing animated branch can still contribute old preferences;
+        // only remove invalid entries, never invent missing geometry. The
+        // shared key/reducer and the root's selection-toolbar entry stay intact.
+        .transformPreference(PhotoSyncFrames.self) { frames in
+            frames = frames.filter { entry in
+                switch entry.key {
+                case .reservation, .selectionToolbar: return true
+                case .card, .text, .mainAction: return showsCapsule
+                case .action: return showsAction
+                case .progress, .fill: return showsProgress
+                }
+            }
+        }
         .sheet(isPresented: $detailsPresented, onDismiss: {
             onPresentedSurfaceChanged(false)
         }) {
@@ -113,7 +134,7 @@ struct PhotoSyncToast: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
                         .accessibilityIdentifier("photo-sync-title")
-                        .syncFrame(.text)
+                        .toastFrame(.text)
                         // Count text keeps its baseline; only the arc animates.
                         .transaction { $0.animation = nil }
                 }
@@ -126,9 +147,9 @@ struct PhotoSyncToast: View {
             .accessibilityLabel(compactTitle)
             .accessibilityHint("查看同步详情")
             .accessibilityIdentifier("photo-sync-open-details")
-            .syncFrame(.mainAction)
+            .toastFrame(.mainAction)
 
-            if state.phase == .checking || state.phase == .updating || state.phase == .cancelling {
+            if showsCancelAction {
                 Button { state.cancel() } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .medium))
@@ -137,13 +158,13 @@ struct PhotoSyncToast: View {
                 .buttonStyle(.plain).disabled(!state.canCancel)
                 .accessibilityLabel("取消同步")
                 .accessibilityIdentifier("cancel-photo-sync")
-                .syncFrame(.action)
+                .toastFrame(.action)
             }
         }
         .foregroundStyle(IQStyle.text).tint(IQStyle.accent)
         .background(IQStyle.surface, in: Capsule())
         .overlay(Capsule().strokeBorder(IQStyle.line, lineWidth: 1))
-        .syncFrame(.card)
+        .toastFrame(.card)
     }
 
     @ViewBuilder private var indicator: some View {
@@ -153,7 +174,7 @@ struct PhotoSyncToast: View {
                 .accessibilityLabel("照片同步进度")
                 .accessibilityValue("\(state.progress.completed) / \(state.progress.total ?? 0)")
                 .accessibilityIdentifier("photo-sync-progress")
-                .syncFrame(.progress)
+                .toastFrame(.progress)
         } else {
             // Unknown work is not a made-up percent or a time-driven spinner.
             Image(systemName: statusSymbol).font(.system(size: 14))
@@ -214,7 +235,7 @@ struct PhotoSyncProgressRing: View {
                 .stroke(IQStyle.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: fraction)
-                .syncFrame(.fill)
+                .toastFrame(.fill)
         }
         .padding(1) // Keep the complete 2pt stroke inside the actual 14pt view.
         .frame(width: 14, height: 14)
@@ -315,6 +336,44 @@ struct PhotoSyncDetailSheet: View {
 }
 
 enum PhotoSyncFramePart: Hashable { case reservation, card, text, mainAction, action, progress, fill, selectionToolbar }
+
+/// Passive layout evidence owned by the actual toast branch, not a registry or
+/// a phase-filtered presence claim. Removal is observed by walking the current
+/// native subtree. This is not an accessibility-tree or button-dispatch probe.
+@MainActor
+final class PhotoSyncLayoutProbeView: UIView {
+    let part: PhotoSyncFramePart
+
+    init(part: PhotoSyncFramePart) {
+        self.part = part
+        super.init(frame: .zero)
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        isAccessibilityElement = false
+        accessibilityElementsHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    var windowFrame: CGRect? {
+        guard let window, bounds.width > 0, bounds.height > 0 else { return nil }
+        return convert(bounds, to: window)
+    }
+}
+
+private struct PhotoSyncLayoutProbe: UIViewRepresentable {
+    let part: PhotoSyncFramePart
+    func makeUIView(context: Context) -> PhotoSyncLayoutProbeView { PhotoSyncLayoutProbeView(part: part) }
+    func updateUIView(_ uiView: PhotoSyncLayoutProbeView, context: Context) {}
+}
+
+private extension View {
+    func toastFrame(_ part: PhotoSyncFramePart) -> some View {
+        syncFrame(part)
+            .background(PhotoSyncLayoutProbe(part: part).allowsHitTesting(false).accessibilityHidden(true))
+    }
+}
+
 struct PhotoSyncFrames: PreferenceKey {
     static var defaultValue: [PhotoSyncFramePart: CGRect] { [:] }
     static func reduce(value: inout [PhotoSyncFramePart: CGRect], nextValue: () -> [PhotoSyncFramePart: CGRect]) {

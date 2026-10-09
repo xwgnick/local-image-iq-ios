@@ -68,7 +68,8 @@ final class MinimalSearchPresentationTests: XCTestCase {
 
     func testHistoryReplacesDefaultsNewestFirstAndLongQueriesStayOneRow() async throws {
         let f = try await controlsFixture(in: self)
-        let first = "TEST first history " + String(repeating: "very long unabridged query ", count: 8)
+        let first = ("TEST first history " + String(repeating: "very long unabridged query ", count: 8))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let second = "TEST second full history"
         let third = "TEST third newest history"
         for query in [first, second, third] {
