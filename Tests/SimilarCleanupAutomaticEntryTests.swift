@@ -152,9 +152,12 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         XCTAssertEqual(f.service.trace.events, ["restore", "restore"])
     }
 
-    func testLeavingComputeCancelsAndMissingOnReturnRequiresManualRegroup() async throws {
+    func testLeavingComputeSuspendsAndMissingOnReturnRecomputesAutomatically() async throws {
         let gate = hold()
-        let f = fixture(group: { _, threshold in await gate.wait(); return automaticResult(threshold) })
+        let f = fixture(group: { call, threshold in
+            if call == 0 { await gate.wait() }
+            return automaticResult(threshold)
+        })
         f.state.enterPage(ready: true)
         try await reached(gate.entered)
         f.state.leavePage()
@@ -164,12 +167,13 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         assertUnknown(f.state)
         f.state.enterPage(ready: true)
         await f.state.waitUntilIdle()
-        XCTAssertTrue(f.state.needsRegroup)
-        assertUnknown(f.state)
+        XCTAssertFalse(f.state.needsRegroup)
+        XCTAssertTrue(f.state.hasScanned)
+        XCTAssertTrue(f.state.canSelect)
         f.state.leavePage()
         f.state.enterPage(ready: true)
         await f.state.waitUntilIdle()
-        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore"])
+        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore", "group"])
     }
 
     func testTabRoundTripPreservesCompletedSessionAndCommittedSelectionNotConfirmation() async throws {
@@ -268,16 +272,16 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         }
     }
 
-    func testCorruptOrStaleCacheRequiresManualRegroupWithoutAutomaticComputation() async {
+    func testCorruptOrStaleCacheAutomaticallyRecomputesWithoutFailure() async {
         // The backend maps corrupt binary cache data to .stale, not .missing.
         let f = fixture(restore: { _, _ in .stale })
         await enter(f.state)
-        assertUnknown(f.state)
-        XCTAssertTrue(f.state.needsRegroup)
-        XCTAssertFalse(f.state.canSelect)
-        await exerciseLifecycle(f.state)
-        XCTAssertEqual(f.service.trace.events, ["restore"])
-        f.state.scan()
+        XCTAssertTrue(f.state.hasScanned)
+        XCTAssertTrue(f.state.canSelect)
+        XCTAssertNil(f.state.failureDiagnostic)
+        f.state.leavePage()
+        f.state.enterPage(ready: true)
+        f.state.availabilityChanged(ready: true)
         await f.state.waitUntilIdle()
         XCTAssertTrue(f.state.hasScanned)
         XCTAssertFalse(f.state.needsRegroup)
@@ -347,9 +351,12 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         XCTAssertEqual(service.trace.events, ["restore", "group", "restore"])
     }
 
-    func testReadinessLossCancelsActiveReadAndLaterReadyNeverRecomputesAutomatically() async throws {
+    func testReadinessLossSuspendsActiveReadAndLaterReadyCompletesPendingTarget() async throws {
         let gate = hold()
-        let f = fixture(group: { _, threshold in await gate.wait(); return automaticResult(threshold) })
+        let f = fixture(group: { call, threshold in
+            if call == 0 { await gate.wait() }
+            return automaticResult(threshold)
+        })
         f.state.enterPage(ready: true)
         try await reached(gate.entered)
         f.state.availabilityChanged(ready: false)
@@ -359,8 +366,9 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         await f.state.waitUntilIdle()
         f.state.availabilityChanged(ready: true)
         await f.state.waitUntilIdle()
-        XCTAssertTrue(f.state.needsRegroup)
-        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore"])
+        XCTAssertFalse(f.state.needsRegroup)
+        XCTAssertTrue(f.state.canSelect)
+        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore", "group"])
     }
 
     func testLegacyExplicitHiddenScanAndInvalidationRemainNonAutomatic() async {
@@ -424,7 +432,7 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         try await reached(gate.entered)
         f.state.invalidateAccess()
         XCTAssertTrue(gate.cancelled)
-        XCTAssertTrue(f.state.isRestoring)
+        XCTAssertFalse(f.state.isRestoring, "The fresh request waits for the cancelled tail to drain")
         XCTAssertFalse(f.state.needsRegroup)
         assertUnknown(f.state)
         gate.open()
@@ -502,7 +510,7 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         XCTAssertEqual(f.service.trace.thresholds, [0.72, 0.72])
     }
 
-    func testThresholdEditAfterSeenRequiresManualRegroupAndEqualValueKeepsSelection() async {
+    func testLegacyThresholdEditAfterEntryRequestsAutomaticRefreshAndEqualValueKeepsSelection() async {
         let f = fixture()
         await enter(f.state)
         f.state.toggleSelection("a")
@@ -515,20 +523,18 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         assertUnknown(f.state)
         XCTAssertTrue(f.state.needsRegroup)
         await exerciseLifecycle(f.state)
-        XCTAssertEqual(f.service.trace.events, ["restore", "group"])
-        f.state.scan()
-        await f.state.waitUntilIdle()
         XCTAssertFalse(f.state.needsRegroup)
         XCTAssertTrue(f.state.hasScanned)
-        XCTAssertEqual(f.service.trace.thresholds, [0.90, 0.90, 0.75])
+        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore", "group"])
+        XCTAssertEqual(f.service.trace.thresholds, [0.90, 0.90, 0.75, 0.75])
 
         let seenButNotReady = fixture()
         seenButNotReady.state.enterPage(ready: false)
         seenButNotReady.state.threshold = 0.75
         seenButNotReady.state.availabilityChanged(ready: true)
         await seenButNotReady.state.waitUntilIdle()
-        XCTAssertTrue(seenButNotReady.state.needsRegroup)
-        XCTAssertTrue(seenButNotReady.service.trace.events.isEmpty, "Settings edits are not automatic regroup requests")
+        XCTAssertFalse(seenButNotReady.state.needsRegroup)
+        XCTAssertEqual(seenButNotReady.service.trace.thresholds, [0.75, 0.75])
     }
 
     func testUnchangedInputsNotificationClearsUnsafeStateThenRebindsFreshValidators() async throws {
@@ -545,8 +551,8 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         let session = f.state.selectionSessionID
         old.fail()
         f.state.invalidateAccess()
-        assertUnknown(f.state)
-        XCTAssertFalse(f.state.needsRegroup, "A notification alone is not a stale classification")
+        assertRevokedBrowsing(f.state)
+        XCTAssertTrue(f.state.needsRegroup, "Retained browsing has no authority until fresh validation")
         XCTAssertTrue(f.state.isRestoring)
         f.state.confirmDeletion(intent)
         try await reached(gate.entered)
@@ -563,37 +569,34 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         XCTAssertEqual(f.service.trace.events, ["restore", "restore"])
     }
 
-    func testEditedInputsStaleClassificationNeverComputesUntilManualUpdate() async {
+    func testEditedInputsStaleClassificationAutomaticallyRecomputes() async {
         let f = fixture(restore: { index, threshold in
             index == 0 ? .restored(automaticResult(threshold)) : .stale
         })
         await enter(f.state)
         f.state.invalidateAccess()
-        XCTAssertFalse(f.state.needsRegroup)
-        await f.state.waitUntilIdle()
-        assertUnknown(f.state)
+        assertRevokedBrowsing(f.state)
         XCTAssertTrue(f.state.needsRegroup)
-        await exerciseLifecycle(f.state)
-        XCTAssertEqual(f.service.trace.events, ["restore", "restore"])
-        f.state.scan()
         await f.state.waitUntilIdle()
         XCTAssertFalse(f.state.needsRegroup)
         XCTAssertTrue(f.state.hasScanned)
+        XCTAssertTrue(f.state.canSelect)
         XCTAssertEqual(f.service.trace.events, ["restore", "restore", "group"])
     }
 
-    func testMissingCacheAfterCompletedZeroNeverPermitsAnotherAutomaticCompute() async {
+    func testMissingCacheAfterCompletedZeroRecomputesOnActualSourceEvent() async {
         let f = fixture(group: { _, threshold in automaticResult(threshold, empty: true, candidateCount: 0) })
         await enter(f.state)
         XCTAssertTrue(f.state.hasScanned)
         f.state.invalidateAccess()
         await f.state.waitUntilIdle()
-        XCTAssertTrue(f.state.needsRegroup)
-        assertUnknown(f.state)
-        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore"])
+        XCTAssertFalse(f.state.needsRegroup)
+        XCTAssertTrue(f.state.hasScanned)
+        XCTAssertTrue(f.state.groups.isEmpty)
+        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore", "group"])
     }
 
-    func testHiddenAccessNotificationClearsImmediatelyAndDefersRestoreUntilEntry() async {
+    func testHiddenAccessNotificationRevokesAuthorityAndDefersRestoreUntilEntry() async {
         let f = fixture(restore: { _, threshold in .restored(automaticResult(threshold)) })
         await enter(f.state)
         f.state.toggleSelection("a")
@@ -602,8 +605,8 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         f.state.availabilityChanged(ready: true)
         f.state.resume()
         await f.state.waitUntilIdle()
-        assertUnknown(f.state)
-        XCTAssertFalse(f.state.needsRegroup)
+        assertRevokedBrowsing(f.state)
+        XCTAssertTrue(f.state.needsRegroup)
         XCTAssertEqual(f.service.trace.events, ["restore"])
         await enter(f.state)
         XCTAssertEqual(f.service.trace.events, ["restore", "restore"])
@@ -669,8 +672,9 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         XCTAssertNil(f.state.persistenceIssue)
         f.state.resume()
         await f.state.waitUntilIdle()
-        XCTAssertTrue(f.state.needsRegroup)
-        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore"])
+        XCTAssertFalse(f.state.needsRegroup)
+        XCTAssertTrue(f.state.canSelect)
+        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore", "group"])
     }
 
     func testRestoredEpochOrThresholdFailureCannotPublishCountsOrAuthorizeSelection() async {
@@ -745,17 +749,19 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         XCTAssertTrue(finished)
         XCTAssertFalse(f.state.isDeleting)
         XCTAssertTrue(f.state.canChangeThreshold)
-        XCTAssertTrue(f.state.needsRegroup)
+        XCTAssertFalse(f.state.needsRegroup)
+        XCTAssertTrue(f.state.canSelect)
         XCTAssertEqual(f.state.message, PhotoDeletionRecoveryNotice.success(count: 1))
         XCTAssertEqual(deletion.calls, [intent.revisions])
         XCTAssertFalse(gate.cancelled)
-        XCTAssertEqual(f.service.trace.events, ["restore", "group"])
+        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore", "group"])
         f.state.invalidateAccess() // Photos may deliver the mutation event later.
         XCTAssertEqual(f.state.message, PhotoDeletionRecoveryNotice.success(count: 1))
         await f.state.waitUntilIdle()
         XCTAssertEqual(f.state.message, PhotoDeletionRecoveryNotice.success(count: 1))
-        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore"])
-        XCTAssertTrue(f.state.needsRegroup)
+        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore", "group", "restore", "group"])
+        XCTAssertFalse(f.state.needsRegroup)
+        XCTAssertTrue(f.state.selectedIDs.isEmpty)
     }
 
     // MARK: Deterministic fixtures; timeouts bound tests only, not app work.
@@ -820,6 +826,17 @@ final class SimilarCleanupAutomaticEntryTests: XCTestCase {
         XCTAssertEqual(state.candidateCount, 0, file: file, line: line)
         XCTAssertEqual(state.staleCount, 0, file: file, line: line)
         XCTAssertEqual(state.unindexedCount, 0, file: file, line: line)
+    }
+
+    private func assertRevokedBrowsing(_ state: SimilarPhotoCleanupState,
+                                       file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(state.hasScanned, file: file, line: line)
+        XCTAssertEqual(state.groups.map(\.id), ["pair"], file: file, line: line)
+        XCTAssertEqual(state.candidateCount, 2, file: file, line: line)
+        XCTAssertFalse(state.canSelect, file: file, line: line)
+        XCTAssertTrue(state.selectedIDs.isEmpty, file: file, line: line)
+        XCTAssertNil(state.pendingDeletion, file: file, line: line)
+        XCTAssertNil(state.selectionSessionID, file: file, line: line)
     }
 
     private func hold() -> AutomaticGate {

@@ -203,7 +203,7 @@ struct SimilarPhotoGroupDetail: View {
             }
             .disabled(!enabled || state.isSelecting)
             if state.hasPendingThresholdChange || state.needsRegroup {
-                Text("当前结果仅供浏览，更新分组后再选片清理。")
+                Text("分组待更新，暂时仅供浏览。")
                     .font(.caption).foregroundStyle(IQStyle.secondary)
             }
             if effectiveSelectionMode {

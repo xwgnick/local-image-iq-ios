@@ -12,25 +12,29 @@ struct SimilarPhotoDeletionIntent: Identifiable, Sendable {
     var count: Int { revisions.count }
 }
 
-/// Page-scoped reads and user-confirmed deletion. Only the first ready foreground
-/// entry may compute automatically, after checking the backend's completed cache.
+/// Page-scoped, restore-first automatic refresh and user-confirmed deletion.
+/// Real source events and released thresholds request the latest target; lifecycle
+/// notifications only admit pending work, never retry a failed/cancelled target.
 /// No startup work, indexing, OCR, keeper selection or direct Photos calls.
 @MainActor
 final class SimilarPhotoCleanupState: ObservableObject {
     @Published var threshold: Float = SimilarPhotoGroupingPolicy.defaultThreshold {
         didSet {
             // Programmatic/legacy callers still commit immediately. The slider
-            // uses setDraftThreshold instead, including while a read is active.
+            // uses setDraftThreshold + commitDraftThreshold instead. Internal
+            // application must not overwrite a newer, unreleased draft.
+            guard !applyingAutomaticThreshold else { return }
             draftThreshold = threshold
+            draftNeedsCommit = false
+            pendingThreshold = nil
             guard threshold != oldValue else { return }
             SimilarCleanupPreferences.save(threshold: threshold, in: preferences)
-            let seen = hasEnteredPage || autoAttemptConsumed || hasCompletedResult
+            let seen = hasEnteredPage || hasCompletedResult || groupingTask != nil
             invalidateRead()
-            if seen {
-                needsRegroup = true
-                autoAttemptConsumed = true
-                restoreNeeded = false
-            }
+            if seen { needsRegroup = true }
+            refreshPending = true
+            needsAutomaticRefreshRetry = false
+            tryAutomaticEntry()
         }
     }
     @Published private(set) var draftThreshold: Float = SimilarPhotoGroupingPolicy.defaultThreshold
@@ -40,7 +44,10 @@ final class SimilarPhotoCleanupState: ObservableObject {
     @Published private(set) var progress = SimilarPhotoGroupingProgress()
     @Published private(set) var isGrouping = false
     @Published private(set) var isRestoring = false
+    @Published private(set) var isReadDraining = false
     @Published private(set) var isPageVisible = false
+    @Published private(set) var isAutomaticRefreshDeferred = false
+    @Published private(set) var needsAutomaticRefreshRetry = false
     @Published private(set) var needsRegroup = false
     @Published private(set) var persistenceIssue: String?
     @Published private(set) var isValidating = false
@@ -62,8 +69,11 @@ final class SimilarPhotoCleanupState: ObservableObject {
     var hasPendingThresholdChange: Bool { draftThreshold != threshold }
     var canUpdateResults: Bool {
         isForeground && (!hasEnteredPage || (isPageVisible && pageReady))
-            && !isGrouping && !isRestoring && !isDeleting && !isValidatingSelection
+            && !isAutomaticRefreshDeferred && !isReadDraining && !isGrouping && !isRestoring && !isDeleting && !isValidatingSelection
             && (!hasScanned || needsRegroup || hasPendingThresholdChange || hasStaleIndexRevision)
+    }
+    var canRetryAutomaticRefresh: Bool {
+        automaticReadEligible && needsAutomaticRefreshRetry && groupingTask == nil
     }
     var selectionSessionID: UUID? { sessionID }
     var orderedSelectedPhotos: [IndexedPhoto] {
@@ -92,8 +102,11 @@ final class SimilarPhotoCleanupState: ObservableObject {
     private var pageReady = false
     // History is independent of visible counts: a successful zero is completed.
     private var hasCompletedResult = false
-    private var autoAttemptConsumed = false
-    private var restoreNeeded = true
+    private var refreshPending = true
+    private var pendingThreshold: Float?
+    private var draftNeedsCommit = false
+    private var applyingAutomaticThreshold = false
+    private var observedIndexRevision: UInt64?
     private var requiresVisiblePage = false
 
     private struct RangeSelectionCapture {
@@ -113,6 +126,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
         self.deletion = deletion
         self.preferences = preferences
         self.indexAccess = indexAccess
+        self.observedIndexRevision = indexAccess?.revision
         let saved = SimilarCleanupPreferences.threshold(in: preferences)
         self.threshold = saved
         self.draftThreshold = saved
@@ -134,6 +148,56 @@ final class SimilarPhotoCleanupState: ObservableObject {
         cancelRangeSelection()
         pendingDeletion = nil
         draftThreshold = value
+        draftNeedsCommit = value != threshold
+        // An older released value waiting behind a drain is superseded by this
+        // edit, but the new value is NOT eligible until its own release.
+        pendingThreshold = nil
+    }
+
+    /// Slider release (also call after an accessibility/programmatic draft edit).
+    /// Repeated release callbacks for the same target are not retry requests.
+    func commitDraftThreshold() {
+        guard canChangeThreshold else { return }
+        draftNeedsCommit = false
+        guard draftThreshold != (pendingThreshold ?? threshold) else {
+            tryAutomaticEntry()
+            return
+        }
+        pendingThreshold = draftThreshold
+        requestAutomaticRefresh()
+    }
+
+    /// The UI supplies true throughout sync checking/updating/cancelling, and
+    /// false only once it has drained. This is an admission gate, not a timer.
+    /// Repeated values neither invalidate results nor retry suppressed targets.
+    func setAutomaticRefreshDeferred(_ value: Bool) {
+        guard isAutomaticRefreshDeferred != value else { return }
+        isAutomaticRefreshDeferred = value
+        if value {
+            cancelRangeSelection()
+            pendingDeletion = nil
+            suspendActiveRead()
+        } else {
+            if hasStaleIndexRevision { indexSourceChanged() }
+            tryAutomaticEntry()
+        }
+    }
+
+    /// Explicit user stop, unlike a lifecycle suspension. Suppression survives
+    /// tab/readiness/foreground/defer round trips and message dismissal. A real
+    /// source event, changed released threshold or explicit retry rearms it.
+    /// This never cancels or detaches an already submitted deletion.
+    func cancelAutomaticRefresh() {
+        guard refreshPending || groupingTask != nil else { return }
+        refreshPending = false
+        needsAutomaticRefreshRetry = true
+        invalidateRead(preservingBrowsing: hasEnteredPage)
+        if hasScanned { needsRegroup = true }
+    }
+
+    func retryAutomaticRefresh() {
+        guard canRetryAutomaticRefresh else { return }
+        requestAutomaticRefresh()
     }
 
     /// UI-only explicit commit. Unlike legacy scan(), repeated taps cannot
@@ -142,7 +206,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
         guard canUpdateResults else { return }
         // A failed/rolled-back writer advances revision without a commit event.
         // Clear old selection and choose cache restore before starting this read.
-        if hasStaleIndexRevision { indexSourceChanged() }
+        if hasStaleIndexRevision, !hasEnteredPage { indexSourceChanged() }
         do {
             try SimilarPhotoGroupingPolicy.validate(threshold: draftThreshold)
         } catch {
@@ -150,14 +214,20 @@ final class SimilarPhotoCleanupState: ObservableObject {
             return
         }
         cancelRangeSelection()
+        if hasEnteredPage {
+            draftNeedsCommit = false
+            pendingThreshold = draftThreshold
+            requestAutomaticRefresh()
+            return
+        }
         let restoreUnchangedThreshold = needsRegroup && !hasPendingThresholdChange && resultThreshold == threshold
         threshold = draftThreshold
         if restoreUnchangedThreshold {
             // An index revision can change for irrelevant metadata. On this
             // explicit request only, let the backend compare its full cache key
             // before paying for pairwise grouping again. No commit-triggered work.
-            autoAttemptConsumed = true
-            restoreNeeded = false
+            refreshPending = false
+            needsAutomaticRefreshRetry = false
             invalidateRead()
             message = nil
             deletionNotice = nil
@@ -168,9 +238,10 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     func scan() {
-        guard isForeground, !isDeleting else { return }
-        autoAttemptConsumed = true
-        restoreNeeded = false
+        guard isForeground, !isDeleting, !isAutomaticRefreshDeferred else { return }
+        refreshPending = false
+        pendingThreshold = nil
+        needsAutomaticRefreshRetry = false
         invalidateRead()
         message = nil
         deletionNotice = nil
@@ -196,10 +267,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
         isPageVisible = false
         cancelRangeSelection()
         pendingDeletion = nil
-        if isGrouping || isRestoring {
-            restoreNeeded = true
-            invalidateRead()
-        }
+        suspendActiveRead()
     }
 
     /// Ready includes permission, model/index statistics and absence of app work.
@@ -209,31 +277,57 @@ final class SimilarPhotoCleanupState: ObservableObject {
         if !ready {
             cancelRangeSelection()
             pendingDeletion = nil
-            if isGrouping || isRestoring {
-                restoreNeeded = true
-                invalidateRead()
-            }
+            suspendActiveRead()
         }
         tryAutomaticEntry()
     }
 
+    private var automaticReadEligible: Bool {
+        hasEnteredPage && isPageVisible && isForeground && pageReady
+            && !isAutomaticRefreshDeferred && !isDeleting && !draftNeedsCommit
+    }
+
+    private func requestAutomaticRefresh() {
+        refreshPending = true
+        needsAutomaticRefreshRetry = false
+        invalidateRead(preservingBrowsing: true)
+        if hasScanned { needsRegroup = true }
+        tryAutomaticEntry()
+    }
+
+    private func suspendActiveRead() {
+        guard isGrouping || isRestoring else { return }
+        refreshPending = true
+        invalidateRead(preservingBrowsing: hasEnteredPage)
+    }
+
     private func tryAutomaticEntry() {
-        guard isPageVisible, isForeground, pageReady, !isDeleting,
-              !isGrouping, !isRestoring, restoreNeeded else { return }
-        let mayCompute = !autoAttemptConsumed && !hasCompletedResult && !needsRegroup
-        autoAttemptConsumed = true
-        restoreNeeded = false
-        invalidateRead()
+        // A single pending target coalesces all events while deferred, hidden,
+        // mutating or draining. Do not lose the cancelled predecessor's handle.
+        guard automaticReadEligible, groupingTask == nil, refreshPending,
+              !needsAutomaticRefreshRetry else { return }
+        refreshPending = false
+        let target = pendingThreshold ?? threshold
         // A delayed Photos notification may arrive after mutation completion.
         // Cache classification must not erase that real outcome notice.
         if message != deletionNotice { message = nil }
         do {
-            try SimilarPhotoGroupingPolicy.validate(threshold: threshold)
+            try SimilarPhotoGroupingPolicy.validate(threshold: target)
         } catch {
             recordFailure(SimilarCleanupDiagnostic(phase: .photos, code: .invalidIndex), operation: .restore)
             return
         }
-        startRead(restoring: true, mayCompute: mayCompute)
+        // Only an admitted latest request applies/persists a slider release.
+        // A queued/cancelled intermediate target must never replace preferences.
+        if pendingThreshold != nil {
+            applyingAutomaticThreshold = true
+            threshold = target
+            applyingAutomaticThreshold = false
+            SimilarCleanupPreferences.save(threshold: target, in: preferences)
+            pendingThreshold = nil
+        }
+        invalidateRead(preservingBrowsing: true)
+        startRead(restoring: true, mayCompute: true, recomputeStale: true)
     }
 
     /// Both restore and grouping share a retained drain chain. The missing-cache
@@ -266,6 +360,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
                 try Task.checkCancellation()
                 guard self?.isCurrent(token) == true else { return }
                 let revision = indexAccess?.revision
+                self?.observedIndexRevision = revision
                 if restoring {
                     let restored = try await grouping.restore(threshold: requestedThreshold)
                     try Task.checkCancellation()
@@ -301,6 +396,8 @@ final class SimilarPhotoCleanupState: ObservableObject {
             } catch {
                 guard let self, self.isCurrent(token), !Task.isCancelled else { return }
                 self.progress = SimilarPhotoGroupingProgress()
+                self.refreshPending = false
+                self.needsAutomaticRefreshRetry = true
                 guard !(error is CancellationError) else { return }
                 // Production service errors already carry their exact phase.
                 // Untyped injected/legacy failures get only the known boundary.
@@ -340,6 +437,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
             hasScanned = true
             hasCompletedResult = true
             needsRegroup = false
+            needsAutomaticRefreshRetry = false
         } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             throw Self.readDiagnostic(error, phase: .publication)
@@ -543,39 +641,36 @@ final class SimilarPhotoCleanupState: ObservableObject {
     /// and its navigation identity, but never keep its selection authority.
     /// The parent calls this separately from the Photos/library epoch callback.
     func indexSourceChanged() {
-        // A running front read owns its lease through publication. If it is
-        // still queued, it will capture the new revision after obtaining access.
-        guard !isGrouping, !isRestoring else { return }
-        // A delayed parent callback may follow a fresh cache publication. A
-        // queued (not granted) writer does not make that result revision stale.
-        if indexAccess != nil, result != nil, indexRevisionIsCurrent(resultIndexRevision) { return }
-        // Index sync before the first cleanup entry must not consume first-use
-        // restore/missing-cache computation. No result exists to invalidate yet.
-        guard hasCompletedResult || hasScanned else { return }
-        cancelRangeSelection()
-        generation = UUID()
-        result = nil
-        resultIndexRevision = nil
-        selectedIDs = []
-        pendingDeletion = nil
-        needsRegroup = true
-        autoAttemptConsumed = true
-        restoreNeeded = false
+        // With a coordinator, repeated notifications for an observed revision
+        // are not new events (including after failure/cancellation). A queued
+        // writer has not advanced that revision yet. Without one, each callback
+        // is an actual source event supplied by the parent.
+        if let indexAccess {
+            guard observedIndexRevision != indexAccess.revision else { return }
+            observedIndexRevision = indexAccess.revision
+        }
+        // Preserve the standalone legacy read's lease/capture contract.
+        if !hasEnteredPage, isGrouping || isRestoring { return }
+        guard hasEnteredPage || hasCompletedResult || hasScanned else { return }
+        requestAutomaticRefresh()
     }
 
     /// Photos observations invalidate only READ state, including during deletion.
     /// Do not discard the mutation handle or its eventual real completion message.
     func invalidateAccess() {
-        invalidateRead()
-        restoreNeeded = true
-        // Do not infer stale from a notification or from counts alone. The
-        // backend distinguishes irrelevant changes using fresh full validators.
-        if hasEnteredPage { tryAutomaticEntry() }
+        if hasEnteredPage { requestAutomaticRefresh() }
+        else {
+            invalidateRead()
+            refreshPending = true
+            needsAutomaticRefreshRetry = false
+        }
     }
 
     func pause() {
         isForeground = false
-        if result != nil || isGrouping || isRestoring { restoreNeeded = true }
+        if !needsAutomaticRefreshRetry, result != nil || isGrouping || isRestoring {
+            refreshPending = true
+        }
         invalidateRead()
     }
 
@@ -608,7 +703,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
 
     private var canSelectResult: Bool {
         isForeground && (!hasEnteredPage || (isPageVisible && pageReady))
-            && !isGrouping && !isRestoring && !needsRegroup && !isDeleting && result != nil
+            && !isAutomaticRefreshDeferred && !isGrouping && !isRestoring && !needsRegroup && !isDeleting && result != nil
             && !hasPendingThresholdChange && indexRevisionIsCurrent(resultIndexRevision)
     }
 
@@ -660,25 +755,28 @@ final class SimilarPhotoCleanupState: ObservableObject {
         progress = value
     }
 
-    private func invalidateRead() {
+    private func invalidateRead(preservingBrowsing: Bool = false) {
         cancelRangeSelection()
         generation = UUID()
         groupingTask?.cancel()
+        isReadDraining = groupingTask != nil
         // Retain the tail until finishGrouping; later explicit scans must drain it.
         result = nil
         resultIndexRevision = nil
-        resultThreshold = nil
         sessionID = nil
-        groups = []
-        displayGroups = []
-        displayNumbers = [:]
         selectedIDs = []
         pendingDeletion = nil
         progress = SimilarPhotoGroupingProgress()
-        hasScanned = false
-        candidateCount = 0
-        staleCount = 0
-        unindexedCount = 0
+        if !preservingBrowsing {
+            resultThreshold = nil
+            groups = []
+            displayGroups = []
+            displayNumbers = [:]
+            hasScanned = false
+            candidateCount = 0
+            staleCount = 0
+            unindexedCount = 0
+        }
         isGrouping = false
         isRestoring = false
         isValidating = false
@@ -694,6 +792,10 @@ final class SimilarPhotoCleanupState: ObservableObject {
         if groupingTaskID == token {
             groupingTask = nil
             groupingTaskID = nil
+            // Publish completion even when generation was already revoked, so
+            // retry controls can become available after an uncooperative tail.
+            isReadDraining = false
+            tryAutomaticEntry()
         }
     }
 
@@ -705,7 +807,8 @@ final class SimilarPhotoCleanupState: ObservableObject {
             || (error as? PhotoDeletionError) == .cancelled
         let diagnostic = cancelled ? nil : Self.readDiagnostic(error, phase: .selection)
         invalidateRead()
-        restoreNeeded = true
+        refreshPending = false
+        needsAutomaticRefreshRetry = true
         // A cancelled read still invalidates unsafe selection, but is not a
         // permission/storage failure and must never surface a new diagnostic.
         guard let diagnostic else { return }
@@ -723,6 +826,8 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     private func recordFailure(_ diagnostic: SimilarCleanupDiagnostic, operation: SimilarCleanupOperation) {
+        refreshPending = false
+        needsAutomaticRefreshRetry = true
         failureDiagnostic = diagnostic
         failureOperation = operation
         // One shared safe formatter, with the code/phase first in the ordinary
@@ -732,17 +837,19 @@ final class SimilarPhotoCleanupState: ObservableObject {
 
     private func finishDeletion(message: String) {
         // Failure is not proof of rollback, so discard stale suggestions on both
-        // outcomes. This does not touch the saved image index or start a rescan.
+        // outcomes. Only after the mutation completes may the pending automatic
+        // read start; its notice survives restoration and delayed source events.
         invalidateRead()
-        autoAttemptConsumed = true
         needsRegroup = true
-        restoreNeeded = false
+        refreshPending = true
+        needsAutomaticRefreshRetry = false
         mutationTask = nil
         isDeleting = false
         failureDiagnostic = nil
         failureOperation = nil
         deletionNotice = message
         self.message = message
+        tryAutomaticEntry()
     }
 
     private nonisolated static func expectedPhotoRevision(_ photo: IndexedPhoto) -> PhotoRevision {

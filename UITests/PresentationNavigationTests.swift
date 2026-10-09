@@ -596,10 +596,11 @@ final class PresentationNavigationTests: XCTestCase {
             XCTAssertFalse(springboard.alerts.firstMatch.exists)
         }
 
-        func assertUnreadyCleanup(pendingDraft: Bool = false) {
-            XCTAssertTrue(start.waitForExistence(timeout: 5))
-            XCTAssertEqual(start.label, pendingDraft ? "更新结果" : "开始分组")
-            XCTAssertFalse(start.isEnabled, "Draft editing cannot bypass Photos/index readiness")
+        func assertUnreadyCleanup() {
+            XCTAssertFalse(start.exists, "Production cleanup does not require an everyday Update Results button")
+            XCTAssertFalse(app.buttons["retry-similar-grouping"].exists)
+            XCTAssertTrue(app.staticTexts["similar-cleanup-state"].exists)
+            XCTAssertEqual(app.staticTexts["similar-cleanup-state"].label, "请先允许照片访问")
             XCTAssertFalse(field.exists, "The retained search query must stay outside cleanup's AX scope")
             assertNoWorkOrPrompt()
         }
@@ -640,7 +641,9 @@ final class PresentationNavigationTests: XCTestCase {
             thumbCenter(startValue).press(forDuration: 0.1, thenDragTo: end)
         }
 
-        XCTAssertTrue(app.staticTexts["请先在“我的图库”中允许照片访问。"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["相似度"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["找出相近的照片，方便挑选和清理。"].exists)
+        XCTAssertFalse(app.staticTexts["可手动调节组内照片相似度的严格程度。"].exists)
         assertUnreadyCleanup()
         disclosure.tap()
         expectHittable(threshold)
@@ -653,24 +656,31 @@ final class PresentationNavigationTests: XCTestCase {
         // 40/49. Keep the native thumb/outer-endpoint gestures above unchanged.
         dragThreshold(from: 0.90, to: 0.99)
         expectThreshold(0.99)
-        assertUnreadyCleanup(pendingDraft: true)
+        assertUnreadyCleanup()
         dragThreshold(from: 0.99, to: 0.50)
         expectThreshold(0.50)
         expectHittable(app.staticTexts["similar-cleanup-broad-threshold-note"])
-        assertUnreadyCleanup(pendingDraft: true)
+        assertUnreadyCleanup()
+        disclosure.tap()
+        expectAbsent(threshold)
+        expectAbsent(app.staticTexts["similar-cleanup-broad-threshold-note"])
+        assertUnreadyCleanup()
+        disclosure.tap()
+        expectHittable(threshold)
+        expectHittable(app.staticTexts["similar-cleanup-broad-threshold-note"])
         dragThreshold(from: 0.50, to: 0.90)
         expectThreshold(0.90)
         expectAbsent(app.staticTexts["similar-cleanup-broad-threshold-note"])
         assertUnreadyCleanup()
 
-        // Leave a NON-default draft to distinguish root retention from a
-        // persistence write. This unauthorized/no-index flow must never apply it.
+        // Release a NON-default target to distinguish retention/queued work
+        // from applied preferences. Missing authorization must not admit it.
         dragThreshold(from: 0.90, to: 0.99)
         expectThreshold(0.99)
         disclosure.tap()
         expectAbsent(threshold)
         expectAbsent(thresholdTitle)
-        assertUnreadyCleanup(pendingDraft: true)
+        assertUnreadyCleanup()
         disclosure.tap()
         expectHittable(threshold)
         expectThreshold(0.99)
@@ -696,7 +706,7 @@ final class PresentationNavigationTests: XCTestCase {
         expectAbsent(done)
         expectHittable(threshold)
         expectThreshold(0.99)
-        assertUnreadyCleanup(pendingDraft: true)
+        assertUnreadyCleanup()
 
         app.buttons["primary-search-tab"].tap()
         expectHittable(field)
@@ -714,11 +724,10 @@ final class PresentationNavigationTests: XCTestCase {
         entry.tap()
         expectHittable(threshold)
         expectThreshold(0.99)
-        assertUnreadyCleanup(pendingDraft: true)
+        assertUnreadyCleanup()
 
-        // A retained tab/sheet preserves the draft, but a new process restores
-        // only the applied preference (.90). Never expect unsubmitted .99 to
-        // survive relaunch, and never click the disabled Update Results action.
+        // A retained tab/sheet preserves the queued target, but a new process
+        // restores only the applied preference (.90), not an unready .99.
         app.terminate()
         launch()
         assertHomeControls()
@@ -739,6 +748,111 @@ final class PresentationNavigationTests: XCTestCase {
         assertHomeControls()
         XCTAssertEqual(library.value as? String, "authorization-required")
         assertNoWorkOrPrompt()
+    }
+
+    func testPhysicalCleanupEdgeReturnCancelsShortDragAndPreservesMidGridRangeSelection() throws {
+        app.launchEnvironment["IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE"] = "1"
+        defer { app.launchEnvironment.removeValue(forKey: "IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE") }
+        launch()
+        app.buttons["primary-cleanup-tab"].tap()
+        let cover = app.buttons["similar-cleanup-group-1-photo-176"]
+        expectHittable(cover)
+        cover.tap()
+        let grid = app.collectionViews["similar-cleanup-five-column-grid"]
+        expectHittable(grid)
+        func photo(_ number: Int) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: "similar-cleanup-detail-photo-\(number)").firstMatch
+        }
+        let target = photo(176)
+        expectHittable(target)
+        XCTAssertTrue(grid.frame.contains(target.frame), "The tapped overview sample must be positioned in the detail")
+        XCTAssertFalse(app.buttons["prepare-similar-deletion"].exists, "Opening never selects a photo")
+        let mode = app.buttons["similar-cleanup-selection-mode"]
+        expectHittable(mode)
+        mode.tap()
+        let first = photo(177)
+        let last = photo(179)
+        expectHittable(first)
+        expectHittable(last)
+        XCTAssertGreaterThan(first.frame.minX, grid.frame.minX + grid.frame.width / 5)
+        // Real coordinate touch injection. This is not controller.beginInteraction
+        // or an accessibility callback pretending to test gesture arbitration.
+        first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.05,
+            thenDragTo: last.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+            withVelocity: .slow, thenHoldForDuration: 0.1)
+        let status = app.staticTexts["similar-cleanup-selection-status"]
+        let committed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "已选3张"), object: status)
+        XCTAssertEqual(XCTWaiter.wait(for: [committed], timeout: 5), .completed)
+        XCTAssertEqual(photo(177).value as? String, "已勾选待删除")
+        XCTAssertEqual(photo(178).value as? String, "已勾选待删除")
+        XCTAssertEqual(photo(179).value as? String, "已勾选待删除")
+        XCTAssertEqual(target.value as? String, "未勾选")
+        XCTAssertTrue(grid.exists, "A horizontal mid-grid range gesture must not dismiss detail")
+        let delete = app.buttons["prepare-similar-deletion"]
+        expectHittable(delete)
+        XCTAssertEqual(delete.label, "删除3张") // Never activate or confirm deletion.
+        let root = app.coordinate(withNormalizedOffset: .zero)
+        let edge = root.withOffset(CGVector(dx: 1, dy: first.frame.midY))
+        let short = root.withOffset(CGVector(dx: 60, dy: first.frame.midY))
+        edge.press(forDuration: 0.05, thenDragTo: short, withVelocity: .slow, thenHoldForDuration: 0.3)
+        expectHittable(grid)
+        XCTAssertEqual(delete.label, "删除3张")
+        XCTAssertEqual(photo(176).value as? String, "未勾选", "Edge motion must not start a range on the first column")
+        let end = root.withOffset(CGVector(dx: app.frame.width * 0.8, dy: first.frame.midY))
+        edge.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+        expectAbsent(grid)
+        expectAbsent(app.buttons["similar-cleanup-all-groups"])
+        expectHittable(cover)
+        XCTAssertEqual(delete.label, "删除3张", "The same selection footer remains on the overview")
+        XCTAssertTrue(app.buttons["primary-cleanup-tab"].isSelected)
+        XCTAssertFalse(app.textFields["photo-query"].exists)
+        // Root has no fabricated back-to-search destination, even at the edge.
+        let rootEdge = root.withOffset(CGVector(dx: 1, dy: app.frame.midY))
+        rootEdge.press(forDuration: 0.05,
+            thenDragTo: root.withOffset(CGVector(dx: app.frame.width * 0.8, dy: app.frame.midY)),
+            withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertTrue(app.buttons["primary-cleanup-tab"].isSelected)
+        XCTAssertFalse(app.textFields["photo-query"].exists)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists)
+    }
+
+    func testPhysicalCleanupEdgeReturnRestoresScrolledOverviewAndVisibleBackFallback() throws {
+        app.launchEnvironment["IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE"] = "1"
+        defer { app.launchEnvironment.removeValue(forKey: "IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE") }
+        launch()
+        app.buttons["primary-cleanup-tab"].tap()
+        let overview = app.scrollViews["similar-cleanup-scroll"]
+        expectHittable(app.buttons["similar-cleanup-group-1-header"])
+        overview.swipeUp()
+        // Pick a fully visible real cover at the new nonzero overview offset.
+        let covers = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@",
+            "similar-cleanup-group-", "-header")).allElementsBoundByIndex
+        let header = try XCTUnwrap(covers.first { $0.isHittable && overview.frame.contains($0.frame) })
+        XCTAssertFalse(app.buttons["similar-cleanup-threshold-disclosure"].isHittable)
+        let before = header.frame
+        header.tap()
+        let grid = app.collectionViews["similar-cleanup-five-column-grid"]
+        expectHittable(grid)
+        let back = app.buttons["similar-cleanup-all-groups"]
+        expectHittable(back)
+        let root = app.coordinate(withNormalizedOffset: .zero)
+        root.withOffset(CGVector(dx: 1, dy: grid.frame.midY)).press(forDuration: 0.05,
+            thenDragTo: root.withOffset(CGVector(dx: app.frame.width * 0.8, dy: grid.frame.midY)),
+            withVelocity: .slow, thenHoldForDuration: 0.1)
+        expectAbsent(grid)
+        expectHittable(header)
+        XCTAssertEqual(header.frame.minY, before.minY, accuracy: 1)
+        XCTAssertEqual(header.frame.minX, before.minX, accuracy: 1)
+        header.tap()
+        expectHittable(grid)
+        expectHittable(back)
+        back.tap()
+        expectAbsent(grid)
+        expectHittable(header)
+        XCTAssertEqual(header.frame.minY, before.minY, accuracy: 1)
+        XCTAssertTrue(app.buttons["primary-cleanup-tab"].isSelected)
+        XCTAssertFalse(app.buttons["prepare-similar-deletion"].exists)
     }
 
     private func launch(largeText: Bool = false) {

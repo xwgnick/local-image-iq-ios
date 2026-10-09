@@ -96,7 +96,13 @@ struct ContentView: View {
         }
         .onChange(of: state.indexSourceEpoch) { _, _ in
             // An index commit is not a Photos permission/revision notification.
-            // Keep current search results and cleanup navigation intact.
+            // Read the child state now: this callback can precede SwiftUI's
+            // cleanup child update. Never start grouping between sync commits.
+            switch state.photoSync.phase {
+            case .checking, .updating, .cancelling:
+                similarCleanup.setAutomaticRefreshDeferred(true)
+            default: break // Cleanup's lifecycle observer owns releasing admission.
+            }
             similarCleanup.indexSourceChanged()
         }
         .onChange(of: navigation.page) { _, _ in isSearchFocused = false }

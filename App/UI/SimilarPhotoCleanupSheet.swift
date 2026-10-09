@@ -8,6 +8,7 @@ import ImageIQCore
 struct SimilarPhotoCleanupSheet: View {
     @ObservedObject var state: SimilarPhotoCleanupState
     @ObservedObject var appState: AppState
+    @ObservedObject private var photoSync: PhotoSyncState
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -25,6 +26,7 @@ struct SimilarPhotoCleanupSheet: View {
     @State private var hasRequestedGrouping = false
     @State private var confirmationIntent: SimilarPhotoDeletionIntent?
     @State private var showsConfirmation = false
+    @State private var backTranslation: CGFloat = 0
 
     init(state: SimilarPhotoCleanupState, appState: AppState,
          browser: SimilarPhotoGroupBrowser? = nil,
@@ -36,6 +38,7 @@ struct SimilarPhotoCleanupSheet: View {
          onPresentedSurfaceChanged: @escaping (Bool) -> Void = { _ in }) {
         self.state = state
         self.appState = appState
+        _photoSync = ObservedObject(wrappedValue: appState.photoSync)
         _browser = StateObject(wrappedValue: browser ?? SimilarPhotoGroupBrowser())
         // Native-host tests may supply synthetic pixels. Production always uses
         // the existing revision/network-aware HQ224-fallback thumbnail cache.
@@ -76,12 +79,37 @@ struct SimilarPhotoCleanupSheet: View {
     }
 
     var body: some View {
+        #if DEBUG
+        if embedded, ProcessInfo.processInfo.environment["IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE"] == "1" {
+            CleanupNavigationUITestHost(appState: appState, isPageActive: isPageActive,
+                accessibilityActive: accessibilityActive, onPresentedSurfaceChanged: onPresentedSurfaceChanged)
+        } else {
+            cleanupBody
+        }
+        #else
+        cleanupBody
+        #endif
+    }
+
+    private var canReturnFromDetail: Bool {
+        browser.detailRoute != nil && !state.isDeleting && isPageAccessible
+            && scenePhase != .background && browser.zoomFlight == nil
+    }
+
+    private func returnToOverview() {
+        guard canReturnFromDetail else { return }
+        state.cancelRangeSelection()
+        browser.closeDetail()
+        backTranslation = 0
+    }
+
+    private var cleanupBody: some View {
         NavigationStack {
             ZStack {
                 // Keep this exact ScrollView alive and at its original offset
                 // under the detail overlay, including comparison/gallery covers.
                 overview
-                    .opacity(browser.detailRoute == nil ? 1 : 0)
+                    .opacity(browser.detailRoute == nil || backTranslation > 0 ? 1 : 0)
                     .allowsHitTesting(browser.detailRoute == nil)
                     .accessibilityHidden(!isPageAccessible || browser.detailRoute != nil)
                 if let route = browser.detailRoute,
@@ -91,11 +119,21 @@ struct SimilarPhotoCleanupSheet: View {
                     SimilarPhotoGroupDetail(group: group, number: number,
                                             route: route, state: state, browser: browser, thumbnail: thumbnail)
                         .id(route.id)
+                        .offset(x: backTranslation)
                 }
                 SimilarPhotoZoomOverlay(flight: browser.zoomFlight, reduceMotion: reduceMotion,
                                         completion: browser.finishZoom)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
+            }
+            .clipped()
+            .background {
+                CleanupBackNavigation(routeID: browser.detailRoute?.id, enabled: canReturnFromDetail,
+                    canReturn: { canReturnFromDetail }, began: { state.cancelRangeSelection() },
+                    changed: { backTranslation = $0 }, cancelled: {
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { backTranslation = 0 }
+                    }, returned: returnToOverview)
+                    .frame(width: 0, height: 0).accessibilityHidden(true)
             }
             .background {
                 // Inside this page's NavigationStack; the native scope also
@@ -110,7 +148,7 @@ struct SimilarPhotoCleanupSheet: View {
             .toolbarBackground(IQStyle.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
-                if embedded && isPageAccessible {
+                if embedded && isPageAccessible && browser.detailRoute == nil {
                     ToolbarItem(placement: .topBarLeading) {
                         PrimaryLibraryButton(canRead: appState.canRead, action: openLibrary)
                     }
@@ -121,8 +159,7 @@ struct SimilarPhotoCleanupSheet: View {
                 if isPageAccessible && browser.detailRoute != nil {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("所有分组", systemImage: "chevron.left") {
-                            state.cancelRangeSelection()
-                            browser.closeDetail()
+                            returnToOverview()
                         }
                         .disabled(state.isDeleting)
                         .accessibilityIdentifier("similar-cleanup-all-groups")
@@ -202,6 +239,10 @@ struct SimilarPhotoCleanupSheet: View {
             if let route = browser.detailRoute, !ids.contains(route.groupID) { browser.closeDetail() }
         }
         .onChange(of: state.selectionSessionID) { _, session in browser.invalidate(sessionID: session) }
+        .onChange(of: browser.detailRoute?.id) { _, _ in
+            backTranslation = 0
+            state.cancelRangeSelection()
+        }
         .onChange(of: hasPresentedSurface, initial: true) { _, presented in
             onPresentedSurfaceChanged(presented)
         }
@@ -213,13 +254,22 @@ struct SimilarPhotoCleanupSheet: View {
 
     private var presentationInput: CleanupPresentationInput {
         CleanupPresentationInput(epoch: appState.photoLibraryEpoch, authorization: appState.authorization.rawValue,
-                                 ready: libraryReady, pageActive: isPageActive, phase: scenePhase)
+                                 ready: libraryReady, pageActive: isPageActive, phase: scenePhase,
+                                 syncPhase: photoSync.phase)
     }
 
     private func updateLifecycle(_ input: CleanupPresentationInput) {
         let old = previousInput
         previousInput = input
         let accessChanged = old.map { $0.epoch != input.epoch || $0.authorization != input.authorization } ?? false
+        // AppState does not forward child objectWillChange. Observe PhotoSync
+        // directly and set its deferral BEFORE any initial entry/ready event.
+        // If readiness is dropping too, hold admission until that new value is
+        // installed; releasing sync must not briefly reuse yesterday's ready.
+        if embedded {
+            state.setAutomaticRefreshDeferred(input.defersAutomaticRefresh || accessChanged
+                || !input.ready || !input.pageActive)
+        }
         if embedded, old?.pageActive == true, !input.pageActive {
             showsConfirmation = false
             state.cancelRangeSelection()
@@ -246,6 +296,7 @@ struct SimilarPhotoCleanupSheet: View {
             }
         }
         if input.phase == .active, old?.phase != .active { state.resume() }
+        if embedded { state.setAutomaticRefreshDeferred(input.defersAutomaticRefresh) }
         // Inactive (e.g. a PhotoKit confirmation) is not background and must not
         // cancel the live grouping/selection session.
     }
@@ -254,11 +305,6 @@ struct SimilarPhotoCleanupSheet: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
                 controls
-                if state.isRestoring {
-                    ProgressView("正在恢复分组…").tint(IQStyle.accent)
-                        .accessibilityIdentifier("similar-cleanup-restoring")
-                }
-                if state.isGrouping { groupingProgress }
                 if state.hasScanned { summary }
                 if scenePhase != .background {
                     ForEach(state.displayGroups) { group in
@@ -277,86 +323,92 @@ struct SimilarPhotoCleanupSheet: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SimilarCleanupThresholdControls(state: state)
-            if state.hasPendingThresholdChange, let threshold = state.resultThreshold {
-                Text("当前结果按 \(SimilarCleanupThresholdControls.value(threshold)) 分组")
+            SimilarCleanupThresholdControls(state: state, automaticallyCommits: embedded)
+            if state.isRestoring {
+                HStack {
+                    ProgressView("正在更新分组…").tint(IQStyle.accent)
+                        .accessibilityIdentifier("similar-cleanup-restoring")
+                    Spacer()
+                    cancelGroupingButton
+                }
+            } else if state.isGrouping {
+                groupingProgress
+            } else if let statusLine {
+                Text(statusLine)
                     .font(.footnote).foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("similar-cleanup-result-threshold")
+                    .accessibilityIdentifier("similar-cleanup-state")
                     .cleanupControlFrame(.pending)
             }
-            if state.needsRegroup {
-                Text("照片有变化，更新分组后再选片清理")
-                    .font(.subheadline).foregroundStyle(IQStyle.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("similar-cleanup-needs-regroup")
-            }
-            Button(state.hasPendingThresholdChange ? "更新结果"
-                   : hasRequestedGrouping || state.hasScanned || state.needsRegroup ? "重新分组" : "开始分组") {
-                guard canScan && state.canUpdateResults else { return }
-                hasRequestedGrouping = true
-                state.updateResults()
-            }
-            .font(.body.weight(.semibold))
-            .frame(minHeight: 44)
-            .buttonStyle(.bordered)
-            .disabled(!canScan || !state.canUpdateResults)
-            .accessibilityIdentifier("start-similar-grouping")
-            .cleanupControlFrame(.action)
-            if let readinessHint {
-                Text(readinessHint)
-                    .font(.footnote)
-                    .foregroundStyle(IQStyle.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            if !embedded {
+                Button(state.hasPendingThresholdChange ? "更新结果"
+                       : hasRequestedGrouping || state.hasScanned || state.needsRegroup ? "重新分组" : "开始分组") {
+                    guard canScan && state.canUpdateResults else { return }
+                    hasRequestedGrouping = true
+                    state.updateResults()
+                }
+                .font(.body.weight(.semibold))
+                .frame(minHeight: 44)
+                .buttonStyle(.bordered)
+                .disabled(!canScan || !state.canUpdateResults)
+                .accessibilityIdentifier("start-similar-grouping")
+                .cleanupControlFrame(.action)
+            } else if state.canRetryAutomaticRefresh {
+                Button(state.failureDiagnostic == nil ? "继续" : "重试") { state.retryAutomaticRefresh() }
+                    .frame(minHeight: 44).buttonStyle(.bordered)
+                    .disabled(!canScan || presentationInput.defersAutomaticRefresh)
+                    .accessibilityIdentifier("retry-similar-grouping")
             }
             if embedded, !appState.canRead {
                 Button("选择照片", action: openLibrary)
                     .frame(minHeight: 44).accessibilityIdentifier("cleanup-choose-photos")
             }
-            if let issue = state.persistenceIssue {
-                Text(issue).font(.footnote).foregroundStyle(IQStyle.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("similar-cleanup-persistence-issue")
-            }
         }
     }
 
-    private var readinessHint: String? {
-        if !appState.canRead { return "请先在“我的图库”中允许照片访问。" }
-        if !appState.modelsReady { return "搜索模型尚未就绪。" }
-        if !appState.summary.indexStatisticsKnown { return "索引统计待确认，请先刷新本机统计。" }
-        if appState.summary.indexedCount == 0 { return "照片同步完成后，即可使用图片索引分组。" }
-        if appState.isBusy { return "请等待当前任务完成后开始分组。" }
-        if state.hasScanned || state.isGrouping || state.isRestoring { return nil }
-        return embedded ? "首次进入就绪后自动分组，仅使用已有图片索引。" : "仅使用已有图片索引，不会自动更新。"
+    private var statusLine: String? {
+        // Pending, readiness and persistence are mutually exclusive here: never
+        // stack several instructions above the same result. Deletion warnings
+        // remain in their existing confirmation/result surfaces.
+        if !appState.canRead { return "请先允许照片访问" }
+        if !appState.modelsReady { return "暂未就绪" }
+        if !appState.summary.indexStatisticsKnown { return "照片信息待确认" }
+        if embedded && presentationInput.defersAutomaticRefresh { return "照片同步后自动更新" }
+        if appState.summary.indexedCount == 0 { return "等待照片同步" }
+        if embedded && state.canRetryAutomaticRefresh {
+            return state.failureDiagnostic == nil ? "分组已暂停" : "分组更新失败"
+        }
+        if appState.isBusy { return "等待当前任务完成" }
+        if state.hasPendingThresholdChange || state.needsRegroup { return "分组待更新" }
+        return state.persistenceIssue
     }
 
     private var groupingProgress: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if state.isValidating || (state.progress.total > 0 && state.progress.completed == state.progress.total) {
-                Text("分组计算已完成，正在核验照片访问…")
-                    .font(.subheadline).foregroundStyle(IQStyle.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("similar-cleanup-validating")
-            }
             // total==0 is not a completed scan while metadata is being read.
             ProgressView(value: state.progress.total > 0 ? state.progress.fraction : 0, total: 1)
                 .tint(IQStyle.accent)
                 .accessibilityLabel("分组进度")
             actionLayout {
-                Text("已处理\(state.progress.completed) / \(state.progress.total)张")
+                Text(state.isValidating ? "正在核验照片…" : "正在更新 \(state.progress.completed)/\(state.progress.total)")
                     .font(.subheadline)
                     .monospacedDigit()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Button("取消") {
-                    state.pause()
-                    // Re-enable an explicit future scan; this never starts one.
-                    if scenePhase == .active { state.resume() }
-                }
-                .frame(minHeight: 44)
-                .accessibilityIdentifier("cancel-similar-grouping")
+                cancelGroupingButton
             }
         }
+    }
+
+    private var cancelGroupingButton: some View {
+        Button("取消") {
+            if embedded { state.cancelAutomaticRefresh() }
+            else {
+                state.pause()
+                if scenePhase == .active { state.resume() }
+            }
+        }
+        .frame(minHeight: 44)
+        .accessibilityIdentifier("cancel-similar-grouping")
     }
 
     private var summary: some View {
@@ -371,11 +423,9 @@ struct SimilarPhotoCleanupSheet: View {
                     Text("部分照片尚未参与分组").accessibilityIdentifier("similar-cleanup-source-counts")
                 }
                 .font(.footnote).foregroundStyle(IQStyle.secondary)
-                Text("新照片或已变化的照片，同步后请更新分组。")
-                    .font(.footnote).foregroundStyle(IQStyle.secondary)
             }
             if state.groups.isEmpty {
-                Text("当前结果没有相似照片组。可展开上方调节，修改后点“更新结果”。")
+                Text("暂无相似照片，可展开调节相似度。")
                     .font(.subheadline)
                     .padding(.top, 4)
             }
@@ -509,7 +559,7 @@ struct SimilarPhotoCleanupSheet: View {
 /// Public layout preferences describe the real controls, not a second fitting
 /// copy. Native-host tests can measure the same text/slider frames.
 enum SimilarCleanupControlPart: Hashable {
-    case introduction, instruction, disclosure, labels, slider, value, action, pending
+    case introduction, instruction, disclosure, labels, slider, value, action, pending, warning
 }
 
 struct SimilarCleanupControlFrames: PreferenceKey {
@@ -534,6 +584,7 @@ private extension View {
 @MainActor
 struct SimilarCleanupThresholdControls: View {
     @ObservedObject var state: SimilarPhotoCleanupState
+    var automaticallyCommits = false
     @State private var expanded = false
 
     static func value(_ threshold: Float) -> String {
@@ -548,15 +599,12 @@ struct SimilarCleanupThresholdControls: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("找出相近的照片，方便挑选和清理。")
-                .font(.subheadline).fixedSize(horizontal: false, vertical: true)
-                .cleanupControlFrame(.introduction)
             HStack(alignment: .center, spacing: 8) {
-                Text("可手动调节组内照片相似度的严格程度。")
+                Text("相似度")
                     .font(.subheadline).fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .cleanupControlFrame(.instruction)
-                // Only this 44x44 target toggles disclosure; the explanation
+                // Only this 44x44 target toggles disclosure; the short label
                 // is ordinary text and does not steal taps/scrolling.
                 SimilarCleanupDisclosureButton(expanded: $expanded)
                     .frame(width: 44, height: 44)
@@ -571,11 +619,26 @@ struct SimilarCleanupThresholdControls: View {
                     }
                     .font(.caption).fixedSize(horizontal: false, vertical: true)
                     .cleanupControlFrame(.labels)
-                    Slider(value: thresholdBinding, in: SimilarPhotoGroupingPolicy.sliderTicks, step: 1)
+                    Slider(value: thresholdBinding, in: SimilarPhotoGroupingPolicy.sliderTicks, step: 1,
+                           onEditingChanged: { editing in
+                               if !editing && automaticallyCommits { state.commitDraftThreshold() }
+                           })
                         .disabled(!state.canChangeThreshold)
                         .accessibilityLabel("组内照片相似度，越高越严格")
                         .accessibilityValue(Self.value(state.draftThreshold))
                         .accessibilityIdentifier("similar-cleanup-threshold")
+                        .accessibilityAdjustableAction { direction in
+                            guard state.canChangeThreshold else { return }
+                            let tick = (Double(state.draftThreshold) * 100).rounded()
+                            let next: Double
+                            switch direction {
+                            case .increment: next = min(SimilarPhotoGroupingPolicy.sliderTicks.upperBound, tick + 1)
+                            case .decrement: next = max(SimilarPhotoGroupingPolicy.sliderTicks.lowerBound, tick - 1)
+                            @unknown default: return
+                            }
+                            state.setDraftThreshold(Float(next) / 100)
+                            if automaticallyCommits { state.commitDraftThreshold() }
+                        }
                         .cleanupControlFrame(.slider)
                     Text(Self.value(state.draftThreshold))
                         .font(.system(size: 11, weight: .regular)).monospacedDigit()
@@ -584,10 +647,11 @@ struct SimilarCleanupThresholdControls: View {
                         .accessibilityIdentifier("similar-cleanup-threshold-value")
                 }
             }
-            if state.draftThreshold < 0.90 {
+            if expanded && state.draftThreshold < 0.90 {
                 Text("范围较宽，可能包含仅场景相近的照片。")
                     .font(.footnote).fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("similar-cleanup-broad-threshold-note")
+                    .cleanupControlFrame(.warning)
             }
         }
         .foregroundStyle(IQStyle.secondary)
@@ -616,10 +680,18 @@ private struct SimilarCleanupDisclosureButton: UIViewRepresentable {
     }
 }
 
-private struct CleanupPresentationInput: Equatable {
+struct CleanupPresentationInput: Equatable {
     let epoch: UUID
     let authorization: Int
     let ready: Bool
     let pageActive: Bool
     let phase: ScenePhase
+    let syncPhase: PhotoSyncState.Phase
+
+    var defersAutomaticRefresh: Bool {
+        switch syncPhase {
+        case .checking, .updating, .cancelling: return true
+        default: return false
+        }
+    }
 }

@@ -439,6 +439,13 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         XCTAssertTrue(controller.rangePan.delegate === controller)
         XCTAssertEqual(controller.rangePan.minimumNumberOfTouches, 1)
         XCTAssertEqual(controller.rangePan.maximumNumberOfTouches, 1)
+        let edge = UIScreenEdgePanGestureRecognizer()
+        edge.edges = .left
+        edge.name = CleanupBackNavigationAnchor.gestureName
+        XCTAssertTrue(controller.gestureRecognizer(controller.rangePan, shouldRequireFailureOf: edge))
+        XCTAssertFalse(controller.gestureRecognizer(controller.rangePan, shouldRequireFailureOf: UIPanGestureRecognizer()))
+        let unrelatedEdge = UIScreenEdgePanGestureRecognizer()
+        XCTAssertFalse(controller.gestureRecognizer(controller.rangePan, shouldRequireFailureOf: unrelatedEdge))
         XCTAssertTrue(controller.beginInteraction(at: 3))
         controller.configure(h.configuration())
         XCTAssertEqual(h.begins, 1)

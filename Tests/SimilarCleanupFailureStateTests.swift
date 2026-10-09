@@ -266,14 +266,17 @@ final class SimilarCleanupFailureStateTests: XCTestCase {
         XCTAssertEqual(f.service.events, ["restore"])
     }
 
-    func testStaleCacheIsNormalManualRegroupStateWithoutErrorOrFallback() async {
+    func testStaleCacheAutomaticallyRecomputesWithoutFailureDiagnostic() async {
         let f = fixture(restore: { _ in .stale })
         await enter(f.state)
-        XCTAssertTrue(f.state.needsRegroup)
+        XCTAssertFalse(f.state.needsRegroup)
         assertNoFailure(f.state)
-        assertUnpublished(f.state)
+        XCTAssertTrue(f.state.hasScanned)
+        XCTAssertTrue(f.state.canSelect)
+        XCTAssertEqual(f.service.events, ["restore", "group"])
         await lifecycle(f.state)
-        XCTAssertEqual(f.service.events, ["restore"])
+        XCTAssertEqual(f.service.events, ["restore", "group", "restore", "group"])
+        assertNoFailure(f.state)
     }
 
     func testOptionalCacheWriteWarningKeepsCompletedResultWithoutFailureDiagnostic() async {

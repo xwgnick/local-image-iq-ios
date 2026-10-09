@@ -242,18 +242,26 @@ final class SimilarCleanupDraftTests: XCTestCase {
         XCTAssertEqual(legacy.service.trace.thresholds, [0.73])
     }
 
-    func testFirstAutomaticMissingCacheUsesCommittedPreferenceDespiteDraft() async throws {
+    func testFirstAutomaticEntryWaitsForDraftReleaseWithoutApplyingAnIntermediatePreference() async throws {
         let defaults = try preferences()
         defaults.set(80, forKey: SimilarCleanupPreferences.thresholdKey)
         let f = fixture(preferences: defaults)
         f.state.setDraftThreshold(0.73)
         f.state.enterPage(ready: true)
         await f.state.waitUntilIdle()
-        XCTAssertEqual(f.service.trace.events, ["restore", "group"])
-        XCTAssertEqual(f.service.trace.thresholds, [0.80, 0.80])
-        XCTAssertEqual(f.state.resultThreshold, 0.80)
-        XCTAssertEqual(f.state.draftThreshold, 0.73)
+        XCTAssertTrue(f.service.trace.events.isEmpty)
+        XCTAssertEqual(f.state.threshold, 0.80)
+        XCTAssertEqual(defaults.integer(forKey: SimilarCleanupPreferences.thresholdKey), 80)
+        XCTAssertNil(f.state.resultThreshold)
         XCTAssertFalse(f.state.canSelect)
+        f.state.commitDraftThreshold()
+        await f.state.waitUntilIdle()
+        XCTAssertEqual(f.service.trace.events, ["restore", "group"])
+        XCTAssertEqual(f.service.trace.thresholds, [0.73, 0.73])
+        XCTAssertEqual(f.state.resultThreshold, 0.73)
+        XCTAssertEqual(f.state.draftThreshold, 0.73)
+        XCTAssertEqual(defaults.integer(forKey: SimilarCleanupPreferences.thresholdKey), 73)
+        XCTAssertTrue(f.state.canSelect)
     }
 
     func testExternalThresholdKeepsLegacyImmediateInvalidationAndResetsDraft() async throws {
@@ -351,7 +359,7 @@ final class SimilarCleanupDraftTests: XCTestCase {
         XCTAssertEqual(f.service.trace.events, ["group", "group"])
     }
 
-    func testIndexEventKeepsBrowsingProjectionButClearsAuthorityWithoutAutoRegroup() async throws {
+    func testIndexEventKeepsBrowsingProjectionButClearsAuthorityUntilDeferredAutomaticRefresh() async throws {
         let access = IndexAccessCoordinator()
         let f = fixture(access: access)
         f.state.enterPage(ready: true)
@@ -364,6 +372,7 @@ final class SimilarCleanupDraftTests: XCTestCase {
         var projections = 0
         let subscription = f.state.$displayGroups.sink { _ in projections += 1 }
         defer { subscription.cancel() }
+        f.state.setAutomaticRefreshDeferred(true)
         let writer = try await access.acquireWrite()
         f.state.indexSourceChanged()
         writer.release()
@@ -377,8 +386,8 @@ final class SimilarCleanupDraftTests: XCTestCase {
         XCTAssertTrue(f.state.needsRegroup)
         XCTAssertTrue(f.state.hasScanned)
         XCTAssertFalse(f.state.canSelect)
-        XCTAssertTrue(f.state.canUpdateResults)
-        XCTAssertEqual(f.state.selectionSessionID, session)
+        XCTAssertFalse(f.state.canUpdateResults)
+        XCTAssertNil(f.state.selectionSessionID, "Browsing identity is not selection authority")
         XCTAssertEqual(f.state.resultThreshold, threshold)
         XCTAssertEqual(f.state.groups.map(\.id), ["old", "new"])
         XCTAssertEqual(f.state.displayGroups.map(\.id), ["new", "old"])
@@ -395,11 +404,12 @@ final class SimilarCleanupDraftTests: XCTestCase {
         XCTAssertEqual(projections, 1)
         XCTAssertEqual(f.service.trace.events, ["restore", "group"])
         XCTAssertTrue(f.deletion.calls.isEmpty)
-        f.state.updateResults()
+        f.state.setAutomaticRefreshDeferred(false)
         await f.state.waitUntilIdle()
         XCTAssertFalse(f.state.needsRegroup)
         XCTAssertTrue(f.state.canSelect)
         XCTAssertNotEqual(f.state.selectionSessionID, session)
+        XCTAssertEqual(f.service.trace.events, ["restore", "group", "restore", "group"])
     }
 
     func testIndexEventsBeforeFirstEntryDoNotConsumeAutomaticAttempt() async throws {

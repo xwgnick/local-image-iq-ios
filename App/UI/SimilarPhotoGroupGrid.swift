@@ -712,6 +712,12 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { false }
 
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        gestureRecognizer === rangePan && otherGestureRecognizer is UIScreenEdgePanGestureRecognizer
+            && otherGestureRecognizer.name == CleanupBackNavigationAnchor.gestureName
+    }
+
     @objc private func rangePanned(_ pan: UIPanGestureRecognizer) {
         let point = pan.location(in: collectionView)
         switch pan.state {

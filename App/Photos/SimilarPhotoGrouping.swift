@@ -100,49 +100,35 @@ enum SimilarPhotoGroupingPolicy {
 /// high threshold does not guarantee the same subject, event, or interchangeable
 /// photos. Nothing here chooses a keeper, deletes photos, or changes search ranks.
 enum SimilarPhotoGrouper {
-    private static let dimension = 768
+    private static let dimension = SimilarGroupingPreparedInput.dimension
 
     static func group(photos: [IndexedPhoto], threshold: Float,
                       progress: @escaping @Sendable (SimilarPhotoGroupingProgress) async -> Void = { _ in }) async throws -> [SimilarPhotoGroup] {
-        let groups = try await compute(photos: photos, threshold: threshold, progress: progress, checkAccess: {})
         try Task.checkCancellation()
-        return groups
+        try SimilarPhotoGroupingPolicy.validate(threshold: threshold)
+        let prepared = try SimilarGroupingPreparedInput(photos: photos)
+        let result = try await compute(prepared: prepared, threshold: threshold, progress: progress, checkAccess: {})
+        try Task.checkCancellation()
+        return result.groups
     }
 
     /// One row-major N x 768 copy, O(N) scratch, never an N x N score matrix.
     /// Worst-case similarity work is O(N²D); per-seed ordering additionally costs
-    /// O(N² log N) comparisons in the worst case. No device CPU-time claim, date
-    /// window, group-size cap, resource ceiling, or elapsed-time progress heuristic.
-    fileprivate static func compute(
-        photos: [IndexedPhoto], threshold: Float,
-        progress: @escaping @Sendable (SimilarPhotoGroupingProgress) async -> Void,
-        checkAccess: @escaping @Sendable () throws -> Void
-    ) async throws -> [SimilarPhotoGroup] {
+    /// O(N² log N) comparisons in the dense worst case. Seed-ineligible rows no
+    /// longer enter the sort; mmul ranking and exact complete-link tests are
+    /// unchanged. No approximation, device-time claim or incremental-score cache.
+    static func compute(
+        prepared: SimilarGroupingPreparedInput, threshold: Float,
+        progress: @escaping @Sendable (SimilarPhotoGroupingProgress) async -> Void = { _ in },
+        checkAccess: @escaping @Sendable () throws -> Void = {}
+    ) async throws -> SimilarGroupingComputation {
         try Task.checkCancellation()
         try SimilarPhotoGroupingPolicy.validate(threshold: threshold)
         try checkAccess()
-        let ordered = try photos.sorted {
-            try Task.checkCancellation()
-            return $0.id < $1.id
-        }
-        var matrix: [Float] = []
-        matrix.reserveCapacity(ordered.count * dimension)
-        var norms: [Double] = []
-        norms.reserveCapacity(ordered.count)
-        var previousID: String?
-        for photo in ordered {
-            try Task.checkCancellation()
-            guard !photo.id.isEmpty, photo.id != previousID,
-                  photo.modificationTime.isFinite, photo.creationTime?.isFinite != false else {
-                throw AppFailure.modelContract("Invalid or duplicate similarity candidate metadata.")
-            }
-            previousID = photo.id
-            try EmbeddingValidation.validateUnit(photo.imageEmbedding, dimension: dimension)
-            // Correct the existing unit-validation tolerance in scalar cosine
-            // arithmetic, without renormalizing or modifying cached vectors.
-            norms.append(photo.imageEmbedding.reduce(0.0) { $0 + Double($1) * Double($1) }.squareRoot())
-            matrix.append(contentsOf: photo.imageEmbedding)
-        }
+        let ordered = prepared.photos
+        let matrix = prepared.matrix
+        let norms = prepared.norms
+        var metrics = SimilarGroupingComputationMetrics()
         var state = SimilarPhotoGroupingProgress(total: ordered.count)
         try checkAccess()
         try Task.checkCancellation()
@@ -152,6 +138,9 @@ enum SimilarPhotoGrouper {
 
         var assigned = [Bool](repeating: false, count: ordered.count)
         var scores = [Float](repeating: 0, count: ordered.count)
+        var seedScores = [Float](repeating: 0, count: ordered.count)
+        var candidates: [Int] = []
+        candidates.reserveCapacity(ordered.count)
         var groups: [SimilarPhotoGroup] = []
         for seed in ordered.indices {
             try Task.checkCancellation()
@@ -167,16 +156,29 @@ enum SimilarPhotoGrouper {
                               vDSP_Length(ordered.count), 1, vDSP_Length(dimension))
                 }
             }
+            metrics.matrixMultiplyCount += 1
             try Task.checkCancellation()
-            var candidates: [Int] = []
-            for index in ordered.indices {
-                try Task.checkCancellation()
-                guard index != seed, !assigned[index] else { continue }
-                scores[index] = cosine(dot: scores[index], normProduct: norms[seed] * norms[index])
-                candidates.append(index)
+            candidates.removeAll(keepingCapacity: true)
+            try matrix.withUnsafeBufferPointer { buffer in
+                for index in ordered.indices {
+                    try Task.checkCancellation()
+                    guard index != seed, !assigned[index] else { continue }
+                    let dot = cblas_sdot(Int32(dimension), buffer.baseAddress! + seed * dimension, 1,
+                                         buffer.baseAddress! + index * dimension, 1)
+                    let similarity = cosine(dot: dot, normProduct: norms[seed] * norms[index])
+                    metrics.seedScoreCount += 1
+                    // mmul and sdot can round differently. ONLY the original
+                    // exact seed test can exclude a row, never its ranking score.
+                    guard similarity >= threshold else { continue }
+                    seedScores[index] = similarity
+                    scores[index] = cosine(dot: scores[index], normProduct: norms[seed] * norms[index])
+                    candidates.append(index)
+                }
             }
+            metrics.sortCandidateCount += candidates.count
             try candidates.sort {
                 try Task.checkCancellation()
+                metrics.sortComparisonCount += 1
                 return scores[$0] == scores[$1] ? ordered[$0].id < ordered[$1].id : scores[$0] > scores[$1]
             }
             assigned[seed] = true
@@ -185,15 +187,16 @@ enum SimilarPhotoGrouper {
             var minimum: Float = 1
             for candidate in candidates {
                 try Task.checkCancellation()
-                var candidateMinimum: Float = 1
+                var candidateMinimum = min(Float(1), seedScores[candidate])
                 let accepted = try matrix.withUnsafeBufferPointer { buffer -> Bool in
-                    for member in members {
+                    // The seed was checked once above, in the same operand
+                    // order. All remaining checks retain original member order.
+                    for member in members.dropFirst() {
                         try Task.checkCancellation()
                         let dot = cblas_sdot(Int32(dimension), buffer.baseAddress! + member * dimension, 1,
                                              buffer.baseAddress! + candidate * dimension, 1)
                         let similarity = cosine(dot: dot, normProduct: norms[member] * norms[candidate])
-                        // No epsilon or relaxed threshold. Verify even the seed
-                        // with sdot: matrix/vector reduction can round differently.
+                        metrics.memberScoreCount += 1
                         guard similarity >= threshold else { return false }
                         candidateMinimum = min(candidateMinimum, similarity)
                     }
@@ -225,7 +228,7 @@ enum SimilarPhotoGrouper {
         }
         try Task.checkCancellation()
         try checkAccess()
-        return groups
+        return SimilarGroupingComputation(groups: groups, metrics: metrics)
     }
 
     private static func cosine(dot: Float, normProduct: Double) -> Float {
@@ -246,15 +249,21 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
     /// Completed data only: no old Photos scope, live monitor or validation
     /// closures. Pausing UI need not discard valid work after a disk-write error.
     private var resident: (payload: SimilarGroupingCachePayload, persistenceIssue: String?)?
+    /// Complete inputs, not just returned group members. No live scopes, monitors
+    /// or closures survive here. Restore cannot reconstruct missing singletons.
+    private var preparedResident: (key: SimilarGroupingPreparedKey, input: SimilarGroupingPreparedInput)?
+    private let reportMetrics: (@Sendable (SimilarGroupingWorkMetrics) -> Void)?
 
     init(library: any PhotoLibraryIndexing, directory: URL? = nil,
          encoders: any PhotoEncoding = CoreMLEncoders(), cache: SimilarGroupingCache? = nil,
+         reportMetrics: (@Sendable (SimilarGroupingWorkMetrics) -> Void)? = nil,
          defaultLocation: @escaping @Sendable () throws -> SimilarGroupingLocation = { try SimilarGroupingLocation.system() }) {
         self.library = library
         self.directory = directory
         self.encoders = encoders
         self.suppliedCache = cache
         self.defaultLocation = defaultLocation
+        self.reportMetrics = reportMetrics
     }
 
     /// Cold reuse reads metadata and opaque SQLite image BLOBs twice for durable
@@ -292,6 +301,9 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
             phase = .cacheRead
+            let preparedKey = try SimilarGroupingPreparedKey(authorized: initial,
+                imagePayloadSignature: source.imagePayloadSignature, modelVersion: model, authorization: access.authorization)
+            if preparedResident?.key != preparedKey { preparedResident = nil }
             let key = try SimilarGroupingCacheKey(authorized: initial, imagePayloadSignature: source.imagePayloadSignature,
                                                  modelVersion: model, authorization: access.authorization, threshold: threshold)
             let saved: SimilarGroupingCacheRead
@@ -335,6 +347,7 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
                 return .restored(result)
             }
         } catch {
+            preparedResident = nil
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             throw SimilarCleanupDiagnostic.classify(error, phase: phase)
         }
@@ -343,6 +356,7 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
     func group(threshold: Float,
                progress: @escaping @Sendable (SimilarPhotoGroupingProgress) async -> Void) async throws -> SimilarPhotoGroupingResult {
         var phase: SimilarCleanupPhase = .photos
+        var metrics = SimilarGroupingWorkMetrics()
         do {
             try Task.checkCancellation()
             try SimilarPhotoGroupingPolicy.validate(threshold: threshold)
@@ -368,9 +382,15 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             try check(ticket, access: access, authority: authority)
             phase = .indexRead
             let source = try await reader.groupingInputSnapshot(modelVersion: cacheVersion, accessibleIDs: Set(initial.keys), authority: authority)
+            metrics.sourceSnapshotCount += 1
             let indexed = source.revisions
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
+            let preparedKey = try SimilarGroupingPreparedKey(authorized: initial,
+                imagePayloadSignature: source.imagePayloadSignature, modelVersion: cacheVersion, authorization: access.authorization)
+            if preparedResident?.key != preparedKey { preparedResident = nil }
+            // Capture immutable data before the next await (actor reentrancy).
+            let reusable = preparedResident?.input
             var eligible = Set<String>()
             for (id, revision) in initial {
                 try Task.checkCancellation()
@@ -380,8 +400,25 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             // Old models and inaccessible rows likewise cannot cause a vector error here.
             try check(ticket, access: access, authority: authority)
             phase = .indexRead
-            let records = try await reader.groupingImageRecords(modelVersion: cacheVersion, accessibleIDs: Set(initial.keys),
+            let records: [IndexedPhoto]
+            if let reusable {
+                // Do NOT remove the middle durable read on a hit. Hash all
+                // authorized active-model BLOBs again, without JSON decoding.
+                let middle = try await reader.groupingInputSnapshot(modelVersion: cacheVersion,
+                    accessibleIDs: Set(initial.keys), authority: authority)
+                metrics.sourceSnapshotCount += 1
+                phase = .sourceCheck
+                try check(ticket, access: access, authority: authority)
+                phase = .indexRead
+                guard middle == source else { throw Self.indexChanged() }
+                records = reusable.photos
+                metrics.preparedInputReuseCount = 1
+            } else {
+                records = try await reader.groupingImageRecords(modelVersion: cacheVersion, accessibleIDs: Set(initial.keys),
                             eligibleIDs: eligible, expectedSnapshot: source, authority: authority)
+                metrics.sourceSnapshotCount += 1
+                metrics.decodedRowCount = records.count
+            }
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
             phase = .indexRead
@@ -400,17 +437,29 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
             phase = .compute
-            let groups = try await SimilarPhotoGrouper.compute(photos: records, threshold: threshold,
-                progress: progress, checkAccess: {
-                    do {
-                        try access.validateEpoch()
-                        try authority.validate()
-                        try access.validateEpoch()
-                    } catch {
-                        if error is CancellationError || Task.isCancelled { throw CancellationError() }
-                        throw SimilarCleanupDiagnostic.classify(error, phase: .sourceCheck)
-                    }
-                })
+            let validateComputeAccess: @Sendable () throws -> Void = {
+                do {
+                    try access.validateEpoch()
+                    try authority.validate()
+                    try access.validateEpoch()
+                } catch {
+                    if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                    throw SimilarCleanupDiagnostic.classify(error, phase: .sourceCheck)
+                }
+            }
+            // Preserve the pre-preparation authority fence as well as the
+            // compute entry/progress fences, including on the cold path.
+            try validateComputeAccess()
+            let prepared: SimilarGroupingPreparedInput
+            if let reusable { prepared = reusable }
+            else {
+                prepared = try SimilarGroupingPreparedInput(photos: records)
+                metrics.preparationCount = 1
+            }
+            let computation = try await SimilarPhotoGrouper.compute(prepared: prepared, threshold: threshold,
+                progress: progress, checkAccess: validateComputeAccess)
+            let groups = computation.groups
+            metrics.computation = computation.metrics
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
             phase = .photos
@@ -419,6 +468,7 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             try check(ticket, access: access, authority: authority)
             phase = .indexRead
             let finalSource = try await reader.groupingInputSnapshot(modelVersion: cacheVersion, accessibleIDs: Set(initial.keys), authority: authority)
+            metrics.sourceSnapshotCount += 1
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
             phase = .indexRead
@@ -465,8 +515,13 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
                                   initial: initial, access: access, authority: authority, persistenceIssue: persistenceIssue)
             try check(ticket, access: access, authority: authority)
             resident = (payload, persistenceIssue)
+            // Install only after the final source/publication/save fences. A
+            // failed/superseded operation never installs partially prepared data.
+            preparedResident = (preparedKey, prepared)
+            reportMetrics?(metrics)
             return result
         } catch {
+            preparedResident = nil
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             throw SimilarCleanupDiagnostic.classify(error, phase: phase)
         }

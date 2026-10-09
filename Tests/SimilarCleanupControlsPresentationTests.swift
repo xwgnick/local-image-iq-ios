@@ -20,6 +20,8 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         XCTAssertEqual(f.cleanup.draftThreshold, 0.90)
         XCTAssertTrue(controlsDescendants(host.controller.view, UISlider.self).isEmpty)
         XCTAssertNil(host.controls[.slider])
+        XCTAssertNil(host.controls[.introduction], "The folded header has no purpose paragraph")
+        XCTAssertNil(host.controls[.warning])
         let arrow = try host.disclosure()
         XCTAssertEqual(arrow.accessibilityIdentifier, "similar-cleanup-threshold-disclosure")
         XCTAssertEqual(arrow.accessibilityValue, "已收起")
@@ -31,7 +33,7 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         let instructionPoint = CGPoint(x: instruction.midX, y: instruction.midY)
         let hit = host.window.hitTest(instructionPoint, with: nil)
         XCTAssertFalse(hit === arrow || hit?.isDescendant(of: arrow) == true,
-                       "The paragraph must not become part of the disclosure hit target")
+                       "The short label must not become part of the disclosure hit target")
         try host.attach(to: self, name: "UIReview-cleanup-v3-collapsed-090")
 
         arrow.sendActions(for: .touchUpInside)
@@ -51,6 +53,7 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         slider.setValue(Float(35) / 49, animated: false) // (85 - 50) / (99 - 50)
         slider.sendActions(for: .valueChanged)
         try await host.wait { f.cleanup.draftThreshold == 0.85 && host.controls[.pending] != nil }
+        XCTAssertNotNil(host.controls[.warning])
         XCTAssertEqual(f.cleanup.threshold, 0.90)
         XCTAssertEqual(f.cleanup.resultThreshold, 0.90)
         XCTAssertEqual(f.cleanup.selectionSessionID, session)
@@ -63,6 +66,7 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         arrow.sendActions(for: .touchUpInside)
         try await host.wait { host.controls[.slider] == nil && host.controls[.value] == nil }
         XCTAssertTrue(controlsDescendants(host.controller.view, UISlider.self).isEmpty)
+        XCTAssertNil(host.controls[.warning], "A loose value does not add warning text to the folded header")
         XCTAssertEqual(f.cleanup.draftThreshold, 0.85, "Collapsing does not discard the draft")
         XCTAssertEqual(f.grouping.thresholds, [0.90])
     }
@@ -78,15 +82,15 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         try host.disclosure().sendActions(for: .touchUpInside)
         try await host.wait { host.controls[.slider] != nil && host.controls[.value] != nil }
         try assertCenteredValue(host)
-        for (part, text) in [(SimilarCleanupControlPart.introduction, "找出相近的照片，方便挑选和清理。"),
-                             (.instruction, "可手动调节组内照片相似度的严格程度。")] {
+        XCTAssertNil(host.controls[.introduction])
+        for (part, text) in [(SimilarCleanupControlPart.instruction, "相似度")] {
             let frame = try XCTUnwrap(host.controls[part])
             let font = UIFont.preferredFont(forTextStyle: .subheadline,
                 compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge))
             let required = (text as NSString).boundingRect(with: CGSize(width: frame.width, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil)
             XCTAssertGreaterThanOrEqual(frame.height + host.pixel, required.height,
-                                       "Measure the real paragraph, not just ScrollView.isHidden")
+                                       "Measure the real header, not just ScrollView.isHidden")
             XCTAssertGreaterThanOrEqual(frame.minX, 0)
             XCTAssertLessThanOrEqual(frame.maxX, host.window.bounds.width + host.pixel)
         }
@@ -133,7 +137,74 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         XCTAssertEqual(f.cleanup.draftThreshold, 0.90)
     }
 
-    func testCompletedZeroGroupsStillShowsAppliedThresholdForPendingDraft() async throws {
+    func testEmbeddedSliderCommitsOnReleaseNotValuePreviewAndHasNoEverydayUpdateButton() async throws {
+        let f = try await controlsFixture(in: self)
+        let host = try ControlsNativeHost(content: AnyView(f.sheet(embedded: true)))
+        defer { host.close() }
+        try await host.wait { f.cleanup.hasScanned && host.controls[.disclosure] != nil }
+        XCTAssertNil(host.controls[.action])
+        XCTAssertNil(host.controls[.pending], "A ready completed page needs no startup hint")
+        try host.disclosure().sendActions(for: .touchUpInside)
+        try await host.wait { host.controls[.slider] != nil }
+        let slider = try XCTUnwrap(controlsDescendants(host.controller.view, UISlider.self).first)
+        slider.sendActions(for: .touchDown)
+        slider.setValue(Float(35) / 49, animated: false)
+        slider.sendActions(for: .valueChanged)
+        try await host.wait { f.cleanup.hasPendingThresholdChange }
+        XCTAssertEqual(f.grouping.thresholds, [0.90])
+        XCTAssertEqual(f.cleanup.resultThreshold, 0.90)
+        XCTAssertFalse(f.cleanup.canSelect)
+        XCTAssertNil(host.controls[.action])
+        slider.sendActions(for: .touchUpInside)
+        try await host.wait { f.cleanup.resultThreshold == 0.85 && !f.cleanup.isGrouping }
+        XCTAssertEqual(f.grouping.thresholds, [0.90, 0.85])
+        XCTAssertNil(host.controls[.pending])
+        XCTAssertNil(host.controls[.action])
+        XCTAssertTrue(f.cleanup.canSelect)
+        // Public UISlider event dispatch verifies wiring, not a physical drag.
+    }
+
+    func testInitialSyncDeferralAndChildOnlySettlementDriveEmbeddedLifecycle() async throws {
+        let sync = ControlsSyncGate()
+        let f = try await controlsFixture(in: self, sync: sync)
+        f.app.photoSync.updateAvailability(ready: true, networkAllowed: false)
+        XCTAssertEqual(f.app.photoSync.phase, .checking)
+        let host = try ControlsNativeHost(content: AnyView(f.sheet(embedded: true)))
+        defer { host.close() }
+        addTeardownBlock { @MainActor in
+            sync.release()
+            await f.app.photoSync.waitUntilIdle()
+        }
+        try await host.wait { f.cleanup.isPageVisible && sync.started }
+        XCTAssertTrue(f.grouping.thresholds.isEmpty, "Initial deferral precedes enterPage(ready: true)")
+        XCTAssertFalse(f.cleanup.isGrouping)
+        XCTAssertFalse(f.cleanup.isRestoring)
+        XCTAssertNotNil(host.controls[.pending])
+        XCTAssertNil(host.controls[.action])
+        // Deliberately isolate child publications: no AppState callback/summary
+        // update can accidentally cause this view to observe settlement.
+        f.app.photoSync.onCompleted = { _ in }
+        f.app.photoSync.onSettled = {}
+        f.app.photoSync.cancel()
+        try await host.wait { f.app.photoSync.phase == .cancelling }
+        XCTAssertTrue(f.grouping.thresholds.isEmpty)
+        sync.release()
+        try await host.wait { f.app.photoSync.phase == .cancelled && f.cleanup.hasScanned }
+        XCTAssertEqual(f.grouping.thresholds, [0.90])
+        XCTAssertNil(host.controls[.pending])
+        XCTAssertNil(host.controls[.action])
+    }
+
+    func testPresentationInputDefersOnlyUnsettledSyncPhases() {
+        for phase in [PhotoSyncState.Phase.idle, .checking, .updating, .cancelling,
+                      .cancelled, .completed, .needsAttention, .failed] {
+            let input = CleanupPresentationInput(epoch: UUID(), authorization: 3, ready: true,
+                pageActive: true, phase: .active, syncPhase: phase)
+            XCTAssertEqual(input.defersAutomaticRefresh, [.checking, .updating, .cancelling].contains(phase))
+        }
+    }
+
+    func testCompletedZeroGroupsShowsSinglePendingStateForStandaloneDraft() async throws {
         let f = try await controlsFixture(in: self, sizes: [])
         f.cleanup.scan()
         await f.cleanup.waitUntilIdle()
@@ -362,9 +433,9 @@ final class ControlsFixture {
                                            indexAccess: indexAccess)
     }
 
-    func sheet() -> some View {
+    func sheet(embedded: Bool = false) -> some View {
         SimilarPhotoCleanupSheet(state: cleanup, appState: app, browser: browser,
-                                 thumbnailContent: { _ in AnyView(Color.orange.opacity(0.6)) })
+                                 thumbnailContent: { _ in AnyView(Color.orange.opacity(0.6)) }, embedded: embedded)
     }
 }
 
@@ -451,5 +522,26 @@ private final class ControlsTranslator: QueryTranslating {
     }
     func prepare(_ language: QueryTranslationLanguage) async throws {
         XCTFail("Presentation must not download language packs"); throw QueryTranslationFailure.unsupported
+    }
+}
+
+@MainActor
+private final class ControlsSyncGate: PhotoSyncServicing {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    private(set) var started = false
+    func synchronize(networkAllowed: Bool,
+                     progress: @escaping @Sendable (PhotoSyncProgress) async -> Void,
+                     committed: @escaping @Sendable () async -> Void) async throws -> PhotoSyncResult {
+        started = true
+        if !released { await withCheckedContinuation { continuation = $0 } }
+        try Task.checkCancellation()
+        return PhotoSyncResult(summary: LibrarySummary(indexedCount: 37, modelVersion: "TEST-controls"),
+                               progress: PhotoSyncProgress())
+    }
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
     }
 }
