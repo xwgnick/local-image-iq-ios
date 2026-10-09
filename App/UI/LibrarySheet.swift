@@ -4,39 +4,77 @@ import UIKit
 
 @MainActor
 struct LibrarySheet: View {
+    enum Route: String, CaseIterable, Hashable {
+        case access, textIndex, maintenance
+
+        var title: String {
+            switch self {
+            case .access: return "照片访问"
+            case .textIndex: return "文本索引"
+            case .maintenance: return "索引维护"
+            }
+        }
+        var systemImage: String {
+            switch self {
+            case .access: return "photo.on.rectangle"
+            case .textIndex: return "text.viewfinder"
+            case .maintenance: return "slider.horizontal.3"
+            }
+        }
+        var accessibilityIdentifier: String {
+            switch self {
+            case .access: return "library-photo-access"
+            case .textIndex: return "library-text-index"
+            case .maintenance: return "library-maintenance"
+            }
+        }
+    }
+
     @ObservedObject var state: AppState
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
-    @State private var showLimitedPicker = false
-    @State private var detailsExpanded = false
-    @State private var placesExpanded = false
-    @State private var confirmRebuild = false
+    @State private var localPath: [Route] = []
+    private let navigationPath: Binding<[Route]>?
+
+    init(state: AppState, path: Binding<[Route]>? = nil) {
+        self.state = state
+        navigationPath = path
+    }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: navigationPath ?? $localPath) {
             Form {
-                if state.canRead {
-                    coverageSection
-                    accessSection
-                } else {
-                    accessSection
-                    coverageSection
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(storedCountText)
+                            .font(.title2.weight(.semibold))
+                            .monospacedDigit()
+                            .accessibilityIdentifier("stored-index-count")
+                        LibraryAutoSyncStatusView(state: state.photoSync, canRead: state.canRead,
+                                                  modelsReady: state.modelsReady)
+                    }
+                    .padding(.vertical, 8)
                 }
-                errorSection
-                cloudSection
-                PhotoTextIndexSection(state: state)
-                if state.debugToolsEnabled {
-                    detailsSection
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                Section {
+                    ForEach(Route.allCases, id: \.self) { route in
+                        NavigationLink(value: route) {
+                            Label(route.title, systemImage: route.systemImage)
+                                .frame(minHeight: 44)
+                        }
+                        .accessibilityIdentifier(route.accessibilityIdentifier)
+                    }
+                }
+                .listRowBackground(IQStyle.surface)
+            }
+            .managementPage("我的图库")
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .access: LibraryPhotoAccessView(state: state)
+                case .textIndex: LibraryTextIndexView(state: state)
+                case .maintenance: LibraryMaintenanceView(state: state)
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(IQStyle.background)
-            .foregroundStyle(IQStyle.text)
-            .tint(IQStyle.accent)
-            .navigationTitle("我的图库")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(IQStyle.background, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
@@ -45,23 +83,89 @@ struct LibrarySheet: View {
             }
         }
         .tint(IQStyle.accent)
-        .confirmationDialog("全部重建索引？", isPresented: $confirmRebuild, titleVisibility: .visible) {
-            Button("全部重建索引", role: .destructive) {
-                guard state.canIndex else { return }
-                state.rebuildIndex()
+    }
+
+    // Keep the existing read-only presentation contract for callers/tests.
+    var storedCountText: String { LibraryMaintenanceView(state: state).storedCountText }
+    var indexActionTitle: String { LibraryMaintenanceView(state: state).indexActionTitle }
+    var authorizedCountSnapshotText: String { LibraryMaintenanceView(state: state).authorizedCountSnapshotText }
+    var accessDescription: String { LibraryPhotoAccessView(state: state).accessDescription }
+    var coverageDescription: String { LibraryMaintenanceView(state: state).coverageDescription }
+    static let manualIndexExplanation = LibraryMaintenanceView.manualIndexExplanation
+}
+
+/// Shared native Form styling, without wrapping a pushed page in another stack.
+extension View {
+    func managementPage(_ title: String) -> some View {
+        scrollContentBackground(.hidden)
+            .background(IQStyle.background)
+            .foregroundStyle(IQStyle.text)
+            .tint(IQStyle.accent)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(IQStyle.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+    }
+}
+
+/// This child observes the actual automatic job, not just AppState publications.
+/// Rendering never starts, resumes or prepares work.
+@MainActor
+struct LibraryAutoSyncStatusView: View {
+    @ObservedObject var state: PhotoSyncState
+    var canRead: Bool
+    var modelsReady: Bool
+
+    var title: String {
+        switch state.phase {
+        case .idle:
+            if !canRead { return "等待照片访问权限" }
+            if !modelsReady { return "搜索暂不可用" }
+            return state.isEnabled ? "自动更新已开启" : "自动更新未启用"
+        case .checking: return "正在检查新照片"
+        case .updating:
+            if let total = state.progress.total {
+                return "同步最新照片 \(state.progress.completed)/\(total)"
             }
-            .disabled(!state.canIndex)
-            .accessibilityIdentifier("confirm-rebuild-index")
-            Button("取消", role: .cancel) { }
-        } message: {
-            Text("清除图片、地点及文字索引，再重新建立图片索引；文字索引需另行手动更新。不会修改或删除原照片，重建期间未完成索引的照片不可搜索。")
+            return "正在同步最新照片"
+        case .cancelling: return "正在停止同步…"
+        case .cancelled: return "自动同步已取消"
+        case .completed: return "照片已同步"
+        case .needsAttention:
+            return state.progress.failed > 0 || state.progress.needsNetwork > 0
+                ? "部分照片待同步" : "自动同步待处理"
+        case .failed: return "自动同步未完成"
         }
-        .onChange(of: state.debugToolsEnabled) { _, enabled in
-            if !enabled {
-                detailsExpanded = false
-                placesExpanded = false
-            }
-        }
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.subheadline)
+            .foregroundStyle(IQStyle.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("library-auto-sync-status")
+    }
+}
+
+@MainActor
+struct LibraryTextIndexView: View {
+    @ObservedObject var state: AppState
+
+    var body: some View {
+        Form { PhotoTextIndexSection(state: state) }
+            .managementPage("文本索引")
+    }
+}
+
+@MainActor
+struct LibraryPhotoAccessView: View {
+    @ObservedObject var state: AppState
+    @Environment(\.openURL) private var openURL
+    @State private var showLimitedPicker = false
+
+    var body: some View {
+        Form { accessSection }
+        .managementPage("照片访问")
         .sheet(isPresented: $showLimitedPicker, onDismiss: {
             // Notify the state of a permission change, without starting an index update.
             state.libraryChanged()
@@ -91,32 +195,103 @@ struct LibrarySheet: View {
                 if state.authorization == .limited {
                     Button("管理已选照片", systemImage: "photo.stack") { showLimitedPicker = true }
                         .frame(minHeight: 44)
+                        .accessibilityIdentifier("manage-limited-photos")
                 }
                 Button(state.canRead ? "前往系统设置管理权限" : "打开系统设置", systemImage: "arrow.up.right.square") {
                     if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                 }
                 .frame(minHeight: 44)
+                .accessibilityIdentifier("photo-access-settings")
             }
         }
         .listRowBackground(IQStyle.surface)
     }
 
+    private var accessTitle: String {
+        switch state.authorization {
+        case .authorized: return "可访问全部照片"
+        case .limited: return "仅访问已选照片"
+        case .denied: return "照片访问已关闭"
+        case .restricted: return "照片访问受限"
+        default: return "选择要搜索的照片"
+        }
+    }
+
+    var accessDescription: String {
+        switch state.authorization {
+        case .authorized: return "可访问系统照片图库，应用在前台就绪时自动更新图片索引。"
+        case .limited: return "只访问你选中的照片；可在这里调整选择。"
+        case .denied: return "请在系统设置中允许访问所选照片或全部照片。"
+        case .restricted: return "此设备的限制不允许访问照片，请检查系统设置。"
+        default: return "可选择部分照片或整个图库，原照片仍保留在系统照片中。"
+        }
+    }
+}
+
+@MainActor
+struct LibraryMaintenanceView: View {
+    @ObservedObject var state: AppState
+    @State private var detailsExpanded = false
+    @State private var placesExpanded = false
+    @State private var confirmRebuild = false
+    @State private var confirmClear = false
+
+    var body: some View {
+        Form {
+            LibraryAutoSyncControls(state: state.photoSync, canRead: state.canRead,
+                                    modelsReady: state.modelsReady, debugToolsEnabled: state.debugToolsEnabled)
+            coverageSection
+            errorSection
+            Section {
+                Button("刷新索引统计", systemImage: "arrow.clockwise") { state.refresh() }
+                    .disabled(state.isBusy)
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("refresh-library")
+                Button(role: .destructive) { confirmClear = true } label: {
+                    Label("清除索引", systemImage: "trash").frame(minHeight: 44)
+                }
+                .disabled(state.isBusy)
+                .accessibilityIdentifier("clear-index")
+            } footer: {
+                Text("刷新只读取本机统计，不扫描照片。清除仅删除图片、地点及文字索引，不删除原照片。")
+            }
+            .listRowBackground(IQStyle.surface)
+            if state.debugToolsEnabled { detailsSection }
+        }
+        .managementPage("索引维护")
+        .confirmationDialog("全部重建索引？", isPresented: $confirmRebuild, titleVisibility: .visible) {
+            Button("全部重建索引", role: .destructive) {
+                guard state.canIndex else { return }
+                state.rebuildIndex()
+            }
+            .disabled(!state.canIndex)
+            .accessibilityIdentifier("confirm-rebuild-index")
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text("清除图片、地点及文字索引，再重新建立图片索引；文字索引需另行手动更新。不会修改或删除原照片，重建期间未完成索引的照片不可搜索。")
+        }
+        .confirmationDialog("清除本地索引？", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("清除索引", role: .destructive) {
+                guard !state.isBusy else { return }
+                state.clearIndex()
+            }
+            .disabled(state.isBusy)
+            .accessibilityIdentifier("confirm-clear-index")
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text("只删除本机图片、地点及文字索引，不删除原照片。图片索引和可选文字索引需分别手动更新。")
+        }
+        .onChange(of: state.debugToolsEnabled) { _, enabled in
+            if !enabled {
+                detailsExpanded = false
+                placesExpanded = false
+            }
+        }
+    }
+
     private var coverageSection: some View {
         Section {
             if state.canRead {
-                VStack(spacing: 12) {
-                    Image(systemName: "photo.on.rectangle.angled")
-                        .font(.system(size: 28, weight: .medium))
-                        .foregroundStyle(IQStyle.accent)
-                        .padding(18)
-                        .background(IQStyle.accentSoft, in: RoundedRectangle(cornerRadius: 20))
-                        .accessibilityHidden(true)
-                    Text(state.activity == .indexing ? "正在更新索引" : "照片索引")
-                        .font(.title2.weight(.semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-
                 if state.activity == .refreshing || state.activity == .clearing {
                     ProgressView(state.activity == .clearing ? "正在清除本地索引…" : "正在刷新索引统计…")
                 } else if state.activity == .indexing {
@@ -297,7 +472,7 @@ struct LibrarySheet: View {
                         .foregroundStyle(IQStyle.warning)
                     Text(state.canRead
                         ? "可刷新索引统计后手动重试，原照片未改变。"
-                        : "请先检查上方照片权限，再刷新索引统计。")
+                        : "请返回「照片访问」检查权限，再刷新索引统计。")
                         .font(.subheadline)
                         .foregroundStyle(IQStyle.secondary)
                 }
@@ -308,19 +483,6 @@ struct LibrarySheet: View {
             }
             .listRowBackground(IQStyle.surface)
         }
-    }
-
-    private var cloudSection: some View {
-        Section {
-            Toggle("需要时使用 iCloud", isOn: $state.allowICloudDownload)
-                .disabled(state.isBusy)
-                .accessibilityIdentifier("icloud-download-opt-in")
-        } header: {
-            Text("iCloud")
-        } footer: {
-            Text("优先使用手机已有的预览。关闭时，建立或更新索引不会下载图像；开启后，仅在本地预览不可用时，允许系统照片通过无线网络或移动数据下载。下载量由系统决定，应用不请求原图。开关不会自动更新索引。")
-        }
-        .listRowBackground(IQStyle.surface)
     }
 
     private var detailsSection: some View {
@@ -374,16 +536,6 @@ struct LibrarySheet: View {
         .padding(.vertical, 4)
     }
 
-    private var accessTitle: String {
-        switch state.authorization {
-        case .authorized: return "可访问全部照片"
-        case .limited: return "仅访问已选照片"
-        case .denied: return "照片访问已关闭"
-        case .restricted: return "照片访问受限"
-        default: return "选择要搜索的照片"
-        }
-    }
-
     // Pure presentation values also exercised by model-free contract tests.
     var storedCountText: String {
         state.summary.indexStatisticsKnown ? "已索引 \(state.summary.indexedCount.formatted()) 张" : "索引统计待刷新"
@@ -395,19 +547,7 @@ struct LibrarySheet: View {
         state.summary.authorizedCountKnown ? "\(state.summary.authorizedCount.formatted()) 张" : "未扫描"
     }
 
-    static let manualIndexExplanation = "新增照片在更新索引后才能搜索；编辑过的照片在更新前仍按旧内容匹配。搜索会检查访问权限并排除已删除或不可访问的照片。更新或重建时请保持应用在前台；已完成的记录会保留。"
-
-    var accessDescription: String {
-        switch state.authorization {
-        case .authorized:
-            return "允许访问系统照片图库；新增或编辑照片后，请手动更新索引。"
-        case .limited:
-            return "仅能访问你选中的照片；调整选择后，请手动更新索引。"
-        case .denied: return "请在系统设置中允许访问所选照片或全部照片。"
-        case .restricted: return "此设备的限制不允许访问照片，请检查系统设置。"
-        default: return "可选择部分照片或整个图库，原照片仍保留在系统照片中。"
-        }
-    }
+    static let manualIndexExplanation = "图片索引在应用前台就绪时自动更新，也可在这里手动更新。手动更新会等待自动同步停止，不是重新开启自动同步。文字索引仍需单独手动建立。搜索会排除已删除或不可访问的照片；本机保存的索引数不代表当前可搜索数量。请保持应用在前台，已完成的记录会保留。"
 
     var coverageDescription: String {
         if !state.canRead { return "请先选择照片，授权后可手动建立索引与搜索。" }
@@ -415,7 +555,7 @@ struct LibrarySheet: View {
         if state.activity == .refreshing { return "正在读取本机保存的索引统计，不扫描照片。" }
         if !state.modelsReady { return "暂时无法更新索引或搜索。" }
         if !state.summary.indexStatisticsKnown { return "清除或重建后统计待确认，请刷新本机统计；不会扫描照片。" }
-        if state.summary.indexedCount == 0 { return "点「建立索引」后才能按照片内容搜索；索引由你手动更新。" }
+        if state.summary.indexedCount == 0 { return "图片完成索引后才能搜索，也可在这里手动建立。" }
         return "点「更新索引」处理新增或编辑过的照片，未变化的索引会复用。"
     }
 
@@ -427,5 +567,54 @@ struct LibrarySheet: View {
             return error
         }
         return nil
+    }
+}
+
+@MainActor
+struct LibraryAutoSyncControls: View {
+    @ObservedObject var state: PhotoSyncState
+    var canRead: Bool
+    var modelsReady: Bool
+    var debugToolsEnabled: Bool
+
+    var body: some View {
+        Section("自动更新") {
+            LibraryAutoSyncStatusView(state: state, canRead: canRead, modelsReady: modelsReady)
+            if state.phase != .idle {
+                Text("已新增 \(state.progress.encoded) 张 · 已移除 \(state.progress.removed) 条失效索引")
+                    .font(.footnote).monospacedDigit()
+                    .foregroundStyle(IQStyle.secondary)
+                if state.progress.needsNetwork > 0 {
+                    LabeledContent("本地预览不可用", value: "\(state.progress.needsNetwork) 张")
+                }
+                if state.progress.failed > 0 {
+                    LabeledContent("尚未完成", value: "\(state.progress.failed) 张")
+                }
+            }
+            if state.canCancel || state.phase == .cancelling {
+                Button("取消自动同步") { state.cancel() }
+                    .disabled(!state.canCancel)
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("cancel-photo-sync")
+            } else if state.canRestart {
+                Button("重新同步") { state.restart() }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("restart-photo-sync")
+            }
+            if state.phase == .cancelling {
+                Text("正在等待当前处理停止，已完成的索引会保留。")
+                    .font(.footnote).foregroundStyle(IQStyle.secondary)
+            } else if state.phase == .cancelled {
+                Text("已完成的索引会保留；取消后需明确点击「重新同步」，不会因返回页面而重启。")
+                    .font(.footnote).foregroundStyle(IQStyle.secondary)
+            }
+            if let message = state.failureMessage {
+                Text(message).font(.footnote).foregroundStyle(IQStyle.secondary)
+            }
+            if debugToolsEnabled, let diagnostic = state.failureDiagnostic {
+                Text(diagnostic.identifier).font(.caption).textSelection(.enabled)
+            }
+        }
+        .listRowBackground(IQStyle.surface)
     }
 }

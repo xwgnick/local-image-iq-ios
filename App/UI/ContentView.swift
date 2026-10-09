@@ -16,11 +16,15 @@ struct ContentView: View {
     @State private var showLibrary = false
     @State private var showSettings = false
     @State private var cleanupSurfacePresented = false
+    @State private var photoTextSurfacePresented = false
+    @State private var syncSurfacePresented = false
+    @State private var displayedTranslation: String?
+    @State private var searchHeaderHeight: CGFloat = 0
     @State private var keyboardVisible = false
     @State private var photoWriteInFlight = false
-    @State private var compactGrid = false
     @State private var visiblePageBoundary: ResultPageBoundaryValue?
     @FocusState private var isSearchFocused: Bool
+    private let photoTextPresentation: SearchPhotoTextPresentation?
     private var showingResults: Bool { state.completedQuery != nil || state.activity == .searching }
     private var isSearchPageActive: Bool { navigation.page == .search }
     // Presentation gates page AX and stateless footer controls, never logical
@@ -29,15 +33,18 @@ struct ContentView: View {
         showLibrary || showSettings || showFilters || showAlbumAction
             || photoActions.share != nil || photoActions.sharingPresented
             || state.selection != nil || photoActions.message != nil
-            || cleanupSurfacePresented
+            || cleanupSurfacePresented || photoTextSurfacePresented || syncSurfacePresented
+            || displayedTranslation != nil
     }
     private var isSearchPageAccessible: Bool { isSearchPageActive && !hasPresentedSurface }
 
     init(state: AppState, photoActionService: (any PhotoLibraryActions)? = nil,
          similarCleanupState: SimilarPhotoCleanupState? = nil,
          navigation: PrimaryNavigationPresentation? = nil,
-         cleanupPreferences: UserDefaults? = .standard) {
+         cleanupPreferences: UserDefaults? = .standard,
+         photoTextPresentation: SearchPhotoTextPresentation? = nil) {
         self.state = state
+        self.photoTextPresentation = photoTextPresentation
         _navigation = StateObject(wrappedValue: navigation ?? PrimaryNavigationPresentation())
         _photoActions = StateObject(wrappedValue: ResultPhotoActionsState(
             service: photoActionService ?? SystemPhotoLibraryActions(library: state.library)))
@@ -72,7 +79,8 @@ struct ContentView: View {
                 // Always mount the observing child. AppState does not forward
                 // photoSync publications, including completion auto-hide.
                 PhotoSyncToast(state: state.photoSync,
-                               isPresented: !hasPresentedSurface && !keyboardVisible)
+                               isPresented: !hasPresentedSurface && !keyboardVisible,
+                               onPresentedSurfaceChanged: { syncSurfacePresented = $0 })
                     .rootBottomFrame(.syncToast)
                 PrimaryNavigationBar(page: navigation.page, switchingDisabled: switchingDisabled,
                                      accessibilityActive: !hasPresentedSurface) { page in
@@ -135,6 +143,10 @@ struct ContentView: View {
                                              set: { if !$0 { photoActions.dismissMessage() } })) {
             Button("好") { photoActions.dismissMessage() }
         } message: { Text(photoActions.message ?? "") }
+        .alert("本次搜索的译文", isPresented: Binding(get: { displayedTranslation != nil },
+                                             set: { if !$0 { displayedTranslation = nil } })) {
+            Button("完成") { displayedTranslation = nil }
+        } message: { Text(displayedTranslation ?? "") }
         .onReceive(photoActions.$isBusy) { busy in
             // Observe every publication, including a write that completes
             // before SwiftUI renders the intermediate busy frame.
@@ -171,16 +183,33 @@ struct ContentView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        if !showingResults { introduction }
-                        searchField
-                        filterControl
-                        translationSummary
-                        if !showingResults && !isSearchFocused { suggestions }
-                        searchContent
+                        VStack(alignment: .leading, spacing: 18) {
+                            if !showingResults { introduction }
+                            searchField
+                            if !showingResults && !isSearchFocused { suggestions }
+                            filterControl
+                            translationSummary
+                            searchContent
+                        }
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear.preference(key: SearchHeaderHeight.self, value: geometry.size.height)
+                            }
+                        }
+                        if !showingResults && !isSearchFocused && state.errorMessage == nil {
+                            Image("HomeSearchHero")
+                                .resizable().scaledToFit().frame(width: 160, height: 160)
+                                .minimalSearchFrame(.hero)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: max(160, viewport.size.height - searchHeaderHeight - 18 - 36))
+                                .minimalSearchFrame(.heroArea)
+                                .accessibilityHidden(true)
+                        }
                         if state.hasMoreResults, let session = state.resultSessionID {
                             ResultPageBoundary(sessionID: session, visibleCount: state.results.count)
                         }
                     }
+                    .onPreferenceChange(SearchHeaderHeight.self) { searchHeaderHeight = $0 }
                     .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 24)
                     .frame(maxWidth: 800).frame(maxWidth: .infinity)
                     .background {
@@ -223,7 +252,7 @@ struct ContentView: View {
             }
             .background(IQStyle.background)
             .foregroundStyle(IQStyle.text)
-            .navigationTitle(showingResults ? "照片搜索" : "")
+            .navigationTitle("照片搜索")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(IQStyle.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
@@ -254,11 +283,17 @@ struct ContentView: View {
     }
 
     private var filterControl: some View {
-        SearchPhotoTextTools(state: state, filtersDisabled: photoActions.isBusy) {
+        SearchPhotoTextTools(state: state, filtersDisabled: photoActions.isBusy,
+                             presentation: photoTextPresentation,
+                             onPresentedSurfaceChanged: {
+                                 photoTextSurfacePresented = $0
+                                 if $0 { isSearchFocused = false }
+                             }) {
             isSearchFocused = false
             photoActions.loadAlbums()
             showFilters = true
         }
+        .minimalSearchFrame(.tools)
     }
 
     private var switchingDisabled: Bool { similarCleanup.isDeleting || (photoWriteInFlight && photoActions.isBusy) }
@@ -343,42 +378,65 @@ struct ContentView: View {
     @ViewBuilder private var translationSummary: some View {
         if state.similarPhotoID == nil, let resolution = state.completedSearchQuery {
             if resolution.translated {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("已用英文搜索：\(resolution.effective)")
-                        .font(.caption).foregroundStyle(IQStyle.secondary).textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("effective-search-query")
-                    Button("使用原文") { isSearchFocused = false; state.search(useOriginal: true) }
-                        .frame(minHeight: 44).disabled(!state.canSearch)
-                        .accessibilityIdentifier("search-original")
+                HStack {
+                    Spacer(minLength: 0)
+                    Menu {
+                        Button("显示译文") { displayedTranslation = resolution.effective }
+                            .accessibilityIdentifier("effective-search-query")
+                        Button("使用原文") { reexecuteSearch(original: resolution.original, useOriginal: true) }
+                            .disabled(!state.canSearch).accessibilityIdentifier("search-original")
+                    } label: {
+                        Label("本次搜索", systemImage: "ellipsis").labelStyle(.iconOnly)
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("本次搜索").accessibilityIdentifier("current-search-options")
                 }
-                .tint(IQStyle.accent)
+                .tint(IQStyle.accent).minimalSearchFrame(.translation)
             } else if let notice = resolution.notice {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(notice).font(.caption).foregroundStyle(IQStyle.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Text("原文搜索").font(.caption).foregroundStyle(IQStyle.secondary)
+                        .lineLimit(1).accessibilityLabel("原文搜索。\(notice)")
                         .accessibilityIdentifier("translation-fallback-notice")
+                    Spacer(minLength: 0)
                     Button("中文搜索设置") { isSearchFocused = false; showSettings = true }
-                        .frame(minHeight: 44)
+                        .font(.caption).lineLimit(1).frame(minHeight: 44)
+                        .accessibilityIdentifier("open-chinese-search-settings")
                 }
+                .minimalSearchFrame(.translation)
             } else if state.chineseSearchEnabled, ChineseQueryRouter.sourceLanguage(for: resolution.original) != nil {
                 HStack {
-                    Text("本次使用原文").font(.caption).foregroundStyle(IQStyle.secondary)
-                    Button("使用英文翻译") { submitSearch() }.disabled(!state.canSearch).frame(minHeight: 44)
-                        .accessibilityIdentifier("search-translated")
+                    Text("原文搜索").font(.caption).foregroundStyle(IQStyle.secondary).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Menu {
+                        Button("使用英文翻译") { reexecuteSearch(original: resolution.original, useOriginal: false) }
+                            .disabled(!state.canSearch).accessibilityIdentifier("search-translated")
+                    } label: {
+                        Label("本次搜索", systemImage: "ellipsis").labelStyle(.iconOnly)
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("本次搜索").accessibilityIdentifier("current-search-options")
                 }
+                .minimalSearchFrame(.translation)
             }
         }
     }
 
     private var introduction: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("照片搜索")
+            Text("想找哪一张？")
                 .font(.system(.largeTitle, design: .rounded, weight: .bold))
                 .foregroundStyle(IQStyle.text)
-            Text("用一句话，找到你记得的照片。")
+                .accessibilityIdentifier("search-home-heading").minimalSearchFrame(.heading)
+            Text(homeSubtitle)
                 .font(.subheadline).foregroundStyle(IQStyle.secondary)
+                .accessibilityIdentifier("search-home-subtitle").minimalSearchFrame(.subtitle)
         }.padding(.vertical, 8)
+    }
+
+    var homeSubtitle: String {
+        guard state.canRead else { return "选择照片，开始在本机搜索" }
+        guard state.summary.indexStatisticsKnown else { return "索引统计待刷新" }
+        return "已索引 \(state.summary.indexedCount.formatted()) 张照片"
     }
 
     private var libraryStatus: some View {
@@ -413,11 +471,11 @@ struct ContentView: View {
             Image(systemName: "magnifyingglass").foregroundStyle(IQStyle.secondary).accessibilityHidden(true)
             TextField("描述你记得的画面", text: $state.query)
                 .focused($isSearchFocused).submitLabel(.search).onSubmit(submitSearch)
-                .font(.body).autocorrectionDisabled()
+                .font(.body).autocorrectionDisabled().frame(minHeight: 44)
                 .accessibilityLabel("描述想找的照片").accessibilityIdentifier("photo-query")
             if !state.query.isEmpty {
                 Button { state.query = "" } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(IQStyle.secondary).frame(minWidth: 32, minHeight: 44)
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(IQStyle.secondary).frame(minWidth: 44, minHeight: 44)
                 }.accessibilityLabel("清空搜索").accessibilityIdentifier("clear-query")
             }
             Button(action: submitSearch) {
@@ -431,30 +489,14 @@ struct ContentView: View {
         .background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 17))
         .overlay(RoundedRectangle(cornerRadius: 17).stroke(isSearchFocused ? IQStyle.accent : IQStyle.line, lineWidth: 1))
         .id("search-anchor")
+        .minimalSearchFrame(.field)
     }
 
     private var suggestions: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("试试这样描述").font(.caption).foregroundStyle(IQStyle.secondary)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    suggestion("海边的日落", symbol: "sun.max")
-                    suggestion("云雾里的山", symbol: "mountain.2")
-                }
-            }
-        }
-    }
-
-    private func suggestion(_ text: String, symbol: String) -> some View {
-        Button {
-            state.query = text
+        SearchQueryChips(suggestions: state.searchSuggestions) { query in
+            state.query = query
             if state.canSearch { submitSearch() } else { isSearchFocused = true }
-        } label: {
-            Label(text, systemImage: symbol).font(.caption.weight(.medium))
-                .padding(.horizontal, 13).frame(minHeight: 44)
-                .background(IQStyle.surface, in: Capsule())
-                .overlay(Capsule().stroke(IQStyle.line, lineWidth: 1))
-            }.buttonStyle(.plain).foregroundStyle(IQStyle.text)
+        }
     }
 
     @ViewBuilder private var searchContent: some View {
@@ -470,28 +512,16 @@ struct ContentView: View {
             Button("查看图库") { showLibrary = true }.buttonStyle(.bordered).frame(minHeight: 44)
         } else if !state.results.isEmpty {
             resultsHeadingLayout {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("已显示 \(state.results.count) 张候选照片").font(.headline)
-                    Text(state.textSearchUsed ? "已结合照片文字" : "最相近的在前")
-                        .font(.caption).foregroundStyle(IQStyle.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                HStack {
+                Text("结果").font(.headline).frame(maxWidth: .infinity, alignment: .leading)
                 Button(state.isSelectingResults ? "完成" : "选择") {
                     isSearchFocused = false
                     state.setSelectingResults(!state.isSelectingResults)
                 }
                 .disabled(photoActions.isBusy)
-                .frame(minHeight: 44)
+                .frame(minWidth: 44, minHeight: 44)
                 .accessibilityIdentifier("select-search-results")
-                Button { compactGrid.toggle() } label: {
-                    Image(systemName: compactGrid ? "rectangle.grid.1x2" : "square.grid.3x3")
-                        .frame(width: 44, height: 44).background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 13))
-                }.accessibilityLabel(compactGrid ? "显示较大照片" : "显示紧凑网格")
-                    .accessibilityIdentifier("toggle-grid-layout")
-                }
-            }.accessibilityIdentifier("results-heading")
-            PhotoResultsGrid(hits: state.results, compact: compactGrid, onSelect: { id in
+            }.accessibilityIdentifier("results-heading").minimalSearchFrame(.resultsHeading)
+            PhotoResultsGrid(hits: state.results, compact: true, onSelect: { id in
                 isSearchFocused = false
                 if state.isSelectingResults { state.toggleResultSelection(id) }
                 else { state.selection = AppState.Selection(id: id) }
@@ -507,13 +537,7 @@ struct ContentView: View {
             emptyCard(symbol: "magnifyingglass", title: "暂时没有可显示的照片",
                       detail: "换一种描述，或检查照片权限并手动更新索引。")
         } else {
-            if state.canRead && state.summary.indexedCount > 0 && !isSearchFocused {
-                emptyCard(symbol: "photo.on.rectangle.angled", title: "不必从头翻起",
-                          detail: "颜色、场景，或一个小细节。")
-            } else if !state.canRead || state.summary.indexedCount == 0 {
-                Text("先选择照片并手动建立索引。搜索在本机进行，不会上传照片或查询到应用服务器。")
-                    .font(.subheadline).foregroundStyle(IQStyle.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            if !state.canRead || (state.summary.indexStatisticsKnown && state.summary.indexedCount == 0) {
                 Button(state.canRead ? "建立索引" : "选择可搜索的照片") { isSearchFocused = false; showLibrary = true }
                     .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 50)
                     .background(IQStyle.accent, in: RoundedRectangle(cornerRadius: 16))
@@ -538,7 +562,13 @@ struct ContentView: View {
         }.frame(maxWidth: .infinity).padding(.horizontal, 20).padding(.vertical, 32)
     }
 
-    private func submitSearch() { isSearchFocused = false; state.search() }
+    private func submitSearch() { isSearchFocused = false; state.submitSearchQuery() }
+
+    private func reexecuteSearch(original: String, useOriginal: Bool) {
+        isSearchFocused = false
+        state.query = original
+        state.search(useOriginal: useOriginal)
+    }
 
     private func requestVisiblePage(_ boundary: ResultPageBoundaryValue?, viewportHeight: CGFloat) {
           guard navigation.page == .search,
@@ -549,8 +579,8 @@ struct ContentView: View {
 
 /// Passive native bounds, read on demand after layout. Unlike a merged SwiftUI
 /// preference, these cannot retain a frame from the preceding toast/tab state.
-/// The toast probe includes its existing horizontal and bottom padding; its
-/// top edge is exactly the card's top edge (there is no top padding).
+/// The toast probe measures the stable reservation, including while its capsule
+/// is hidden. Card visibility and the reservation's geometry are independent.
 enum RootBottomLayoutPart: Hashable {
     case selectionToolbar, shareAction, favoriteAction, albumAction, syncToast, navigation
 }

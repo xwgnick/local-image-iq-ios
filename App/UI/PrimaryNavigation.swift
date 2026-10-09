@@ -207,7 +207,7 @@ struct PrimaryNavigationBar: View {
                 }
             }
         }
-        .padding(.horizontal, 20).padding(.vertical, 10)
+        .padding(.horizontal, 20)
         .background(IQStyle.background)
         .overlay(alignment: .top) { Rectangle().fill(IQStyle.line).frame(height: 1) }
         .accessibilityHidden(!accessibilityActive)
@@ -215,13 +215,18 @@ struct PrimaryNavigationBar: View {
 
     private func tabLabel(_ item: PrimaryPage) -> some View {
         Label(item.title, systemImage: item.symbol)
+            .labelStyle(.titleAndIcon)
             .font(.subheadline.weight(.semibold))
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, minHeight: 52)
+            // Fixed-height navigation chrome must not paint oversized glyphs
+            // into the reserved sync band. Full tab names remain available to AX.
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .lineLimit(1).truncationMode(.tail)
+            .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
             .padding(.horizontal, 8)
             .foregroundStyle(page == item ? IQStyle.accent : IQStyle.secondary)
             .background(page == item ? IQStyle.accentSoft : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 16))
+                        in: RoundedRectangle(cornerRadius: 12))
+            .accessibilityLabel(item.title)
             .contentShape(Rectangle())
     }
 }

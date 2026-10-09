@@ -442,40 +442,36 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
         try Task.checkCancellation()
     }
 
+    /// Compatibility signature: targetSize no longer starts a maximum-size or
+    /// viewport request. Viewer defaults to local HQ224 regardless of opt-in.
     func displayImage(id: String, targetSize: CGSize, networkAllowed: Bool = false) async throws -> UIImage {
+        try await viewerImage(id: id, networkAllowed: networkAllowed).result.image
+    }
+
+    func viewerImage(id: String, networkAllowed: Bool = false) async throws -> PhotoViewerImage {
         try Task.checkCancellation()
-        guard let asset = asset(id: id) else { throw AppFailure.photo("This photo is no longer accessible.") }
-        let options = PHImageRequestOptions()
-        options.isNetworkAccessAllowed = networkAllowed
-        options.isSynchronous = false
-        // Offline results should show a cached reduced preview rather than wait
-        // for unavailable high-quality pixels. fastFormat completes once.
-        options.deliveryMode = networkAllowed ? .highQualityFormat : .fastFormat
-        options.resizeMode = .fast
-        let gate = PhotoRequestGate<UIImage> { [manager] in manager.cancelImageRequest($0) }
-        return try await withTaskCancellationHandler(operation: {
-            try await withCheckedThrowingContinuation { continuation in
-                gate.install(continuation)
-                if Task.isCancelled { gate.cancel(); return }
-                let request = manager.requestImage(for: asset, targetSize: targetSize, contentMode: .aspectFit, options: options) { image, info in
-                    if PhotoImageRequestInfo.isCancellation(info) { gate.finish(.failure(CancellationError())); return }
-                    if let error = info?[PHImageErrorKey] as? Error {
-                        if !networkAllowed, image == nil, PhotoImageRequestInfo.requiresNetwork(error) {
-                            gate.finish(.failure(AppFailure.cloudOnly)); return
-                        }
-                        if image == nil || !PhotoImageRequestInfo.requiresNetwork(error) {
-                            gate.finish(.failure(error)); return
-                        }
-                    }
-                    if networkAllowed, Self.flag(PHImageResultIsDegradedKey, info) { return }
-                    if let image { gate.finish(.success(image)) }
-                    else if Self.flag(PHImageResultIsInCloudKey, info), !networkAllowed {
-                        gate.finish(.failure(AppFailure.cloudOnly))
-                    } else { gate.finish(.failure(AppFailure.photo("No preview is available."))) }
-                }
-                gate.setRequestID(request)
-            }
-        }, onCancel: { gate.cancel() })
+        let authorization = Self.authorization
+        guard authorization == .authorized || authorization == .limited else { throw AppFailure.permission }
+        let generation = changeGeneration
+        guard let selectedAsset = asset(id: id) else { throw AppFailure.photo("This photo is no longer accessible.") }
+        let snapshot = PhotoViewerSnapshot(revision: PhotoRevision(asset: selectedAsset),
+                                           authorization: authorization, generation: generation)
+        let result = try await PhotoViewerImageLoader.load(
+            pixelWidth: selectedAsset.pixelWidth, pixelHeight: selectedAsset.pixelHeight,
+            networkAllowed: networkAllowed,
+            request: { [manager] size, mode, options, callback in
+                manager.requestImage(for: selectedAsset, targetSize: size, contentMode: mode,
+                                     options: options, resultHandler: callback)
+            }, cancel: { [manager] in manager.cancelImageRequest($0) }, validate: { [self] in
+                try validateViewerSnapshot(snapshot, id: id)
+            })
+        try validateViewerSnapshot(snapshot, id: id)
+        return PhotoViewerImage(snapshot: snapshot, result: result)
+    }
+
+    func validateViewerSnapshot(_ snapshot: PhotoViewerSnapshot, id: String) throws {
+        try snapshot.validate(id: id, authorization: { Self.authorization },
+                              generation: { self.changeGeneration }, currentRevision: currentRevision(id:))
     }
 
     private static func flag(_ key: String, _ info: [AnyHashable: Any]?) -> Bool {

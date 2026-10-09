@@ -2,114 +2,98 @@ import SwiftUI
 
 @MainActor
 struct SettingsSheet: View {
+    enum Route: String, CaseIterable, Hashable {
+        case translation, privacy, advanced
+
+        var title: String {
+            switch self {
+            case .translation: return "搜索增强"
+            case .privacy: return "隐私与关于"
+            case .advanced: return "高级"
+            }
+        }
+        var accessibilityIdentifier: String { "settings-\(rawValue)" }
+    }
+
     @ObservedObject var state: AppState
     @Environment(\.dismiss) private var dismiss
-    @State private var confirmClear = false
-    @State private var advancedExpanded = false
-    @State private var diagnosticsExpanded = false
+    @State private var localPath: [Route] = []
+    private let navigationPath: Binding<[Route]>?
 
-    init(state: AppState, cleanup: SimilarPhotoCleanupState? = nil) {
+    init(state: AppState, cleanup: SimilarPhotoCleanupState? = nil, path: Binding<[Route]>? = nil) {
         self.state = state
+        navigationPath = path
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: navigationPath ?? $localPath) {
             Form {
-                searchSection
-                translationSection
-                PhotoTextIndexSection(state: state)
-                maintenanceSection
-                if state.debugToolsEnabled {
-                    diagnosticsSection
+                Section {
+                    NavigationLink(value: Route.translation) {
+                        LabeledContent("搜索增强", value: state.chineseSearchEnabled ? "自动" : "关闭")
+                            .frame(minHeight: 44)
+                    }
+                    .accessibilityIdentifier(Route.translation.accessibilityIdentifier)
+                    Toggle("允许下载 iCloud 照片", isOn: $state.allowICloudDownload)
+                        .disabled(state.isBusy)
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("icloud-download-opt-in")
+                    NavigationLink(value: Route.privacy) {
+                        Text(Route.privacy.title).frame(minHeight: 44)
+                    }
+                    .accessibilityIdentifier(Route.privacy.accessibilityIdentifier)
+                    NavigationLink(value: Route.advanced) {
+                        Text(Route.advanced.title).frame(minHeight: 44)
+                    }
+                    .accessibilityIdentifier(Route.advanced.accessibilityIdentifier)
                 }
-                privacySection
-                debugToolsSection
+                .listRowBackground(IQStyle.surface)
             }
-            .scrollContentBackground(.hidden)
-            .background(IQStyle.background)
-            .foregroundStyle(IQStyle.text)
-            .tint(IQStyle.accent)
-            .navigationTitle("设置")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(IQStyle.background, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .managementPage("设置")
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .translation: QueryTranslationSettingsView(state: state)
+                case .privacy: PrivacySettingsView(state: state)
+                case .advanced: AdvancedSettingsView(state: state)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
                         .accessibilityIdentifier("close-settings")
                 }
             }
-            .confirmationDialog("清除本地索引？", isPresented: $confirmClear, titleVisibility: .visible) {
-                Button("清除索引", role: .destructive) { state.clearIndex() }
-                    .disabled(state.isBusy)
-                Button("取消", role: .cancel) { }
-            } message: {
-                Text("只删除本机图片、地点及文字索引，不删除原照片。图片索引和可选文字索引需分别手动更新。")
-            }
         }
         .tint(IQStyle.accent)
+    }
+}
+
+/// All diagnostic controls remain behind the existing session-only opt-in.
+@MainActor
+struct AdvancedSettingsView: View {
+    @ObservedObject var state: AppState
+    @State private var advancedExpanded = false
+    @State private var diagnosticsExpanded = false
+
+    var body: some View {
+        Form {
+            debugToolsSection
+            if state.debugToolsEnabled {
+                searchSection
+                diagnosticsSection
+            }
+        }
+        .managementPage("高级")
         .onChange(of: state.debugToolsEnabled) { _, enabled in
             if !enabled {
                 advancedExpanded = false
                 diagnosticsExpanded = false
             }
         }
-        .background {
-            if let service = state.appleTranslationService {
-                AppleQueryTranslationHost(service: service, purpose: .preparation)
-            }
-        }
-        .task(id: state.translationLanguage) { await state.checkTranslationAvailability() }
-        .onDisappear { state.dismissTranslationPreparation() }
-    }
-
-    private var translationSection: some View {
-        Section {
-            Toggle("中文搜索增强", isOn: $state.chineseSearchEnabled)
-                .accessibilityIdentifier("chinese-search-enabled")
-            Picker("离线语言包", selection: $state.translationLanguage) {
-                ForEach(QueryTranslationLanguage.allCases) { language in
-                    Text(language.title).tag(language)
-                }
-            }
-            .disabled(state.activity == .preparingTranslation)
-            .accessibilityIdentifier("translation-language")
-            Text(state.translationSupported ? state.translationAvailability.message : "需要 iOS 18+ 真机；仍可原文搜索")
-                .font(.footnote).foregroundStyle(IQStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("translation-availability")
-            if state.activity == .preparingTranslation {
-                ProgressView("正在准备离线语言包…")
-                Button("取消准备") { state.dismissTranslationPreparation() }.frame(minHeight: 44)
-            } else {
-                Button(state.translationAvailability == .installed ? "检查离线语言包" : "下载离线语言包") {
-                    state.prepareTranslation()
-                }
-                .disabled(state.isBusy || !state.translationSupported)
-                .frame(minHeight: 44)
-                .accessibilityIdentifier("prepare-translation")
-            }
-            if let issue = state.translationPreparationIssue {
-                Text(issue).font(.footnote).foregroundStyle(IQStyle.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        } header: {
-            Text("中文搜索")
-        } footer: {
-            Text("中文或中英混合搜索在本机译成英文，纯英文不变；结果可切回原文。已知缺包时用原文搜索，不自动请求下载。准备语言包需联网、可用空间和系统确认，与照片 iCloud 开关无关；若检查后语言包被移除，系统仍可能提示下载。")
-        }
-        .listRowBackground(IQStyle.surface)
     }
 
     private var searchSection: some View {
         Section {
-            Picker("每批显示", selection: $state.resultLimit) {
-                Text("3张").tag(3).accessibilityIdentifier("result-limit-3")
-                Text("12张").tag(12).accessibilityIdentifier("result-limit-12")
-            }
-            .pickerStyle(.menu)
-            .accessibilityIdentifier("result-limit")
-
             if state.debugToolsEnabled {
                 DisclosureGroup(isExpanded: $advancedExpanded) {
                     VStack(alignment: .leading, spacing: 12) {
@@ -168,39 +152,6 @@ struct SettingsSheet: View {
             }
         } header: {
             Text("搜索")
-        } footer: {
-            Text("默认每批显示12张，滑到列表底部继续显示下一批。修改后清空当前结果，下次搜索时生效。")
-        }
-        .listRowBackground(IQStyle.surface)
-    }
-
-    private var maintenanceSection: some View {
-        Section {
-            Button("刷新索引统计", systemImage: "arrow.clockwise") { state.refresh() }
-                .disabled(state.isBusy)
-                .frame(minHeight: 44)
-                .accessibilityIdentifier("refresh-library")
-            Button(role: .destructive) { confirmClear = true } label: {
-                Label("清除索引", systemImage: "trash")
-                    .frame(minHeight: 44)
-            }
-            .disabled(state.isBusy)
-            .accessibilityIdentifier("clear-index")
-            if state.activity == .refreshing || state.activity == .clearing {
-                ProgressView(state.activity == .clearing ? "正在清除本地索引…" : "正在刷新索引统计…")
-            }
-            if let error = state.errorMessage {
-                Text(state.summary.modelIssue != nil || error.hasPrefix("Models unavailable:") || error.hasPrefix("Model contract mismatch:")
-                     ? "搜索暂不可用。仍可在「我的图库」管理照片权限，或刷新后重试。"
-                     : "上次操作未完成。请在「我的图库」检查照片权限，再刷新重试。原照片未改变。")
-                    .font(.footnote)
-                    .foregroundStyle(IQStyle.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        } header: {
-            Text("图库维护")
-        } footer: {
-            Text("刷新只读取本机保存的索引统计，不扫描照片或更新索引。请在「我的图库」手动更新或全部重建索引。清除索引不会删除原照片。")
         }
         .listRowBackground(IQStyle.surface)
     }
@@ -232,25 +183,6 @@ struct SettingsSheet: View {
                 // Keep the group ID off its children, including the timing link.
                 Text("诊断信息").accessibilityIdentifier("debug-diagnostics")
             }
-        }
-        .listRowBackground(IQStyle.surface)
-    }
-
-    private var privacySection: some View {
-        Section("关于与隐私") {
-            Text("可选文字搜索使用系统 Vision 在本机识别；识别文字与索引保存在受保护的本机目录，不参与备份、不上传。清除索引会同时删除文字记录；关闭开关只停止参与搜索。")
-                .font(.subheadline).foregroundStyle(IQStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("搜索在本机运行，不向应用服务器上传照片或搜索内容。收藏和相册操作仅由你主动发起；相似照片清理仅删除你勾选并再次确认的系统照片，不自动删除或修改原图像素。删除可能由系统 iCloud 照片同步到其他设备，与预览下载开关无关。批量分享临时准备去除位置等元数据的 JPEG，结束后清理。索引不存原图或定位坐标，不参与备份；只有你开启 iCloud 访问后，应用的预览请求才允许下载缺失资源。")
-                .font(.subheadline)
-                .foregroundStyle(IQStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 4)
-            Text("Apple 翻译系统可能收集使用与性能指标，但不包含原文或译文。")
-                .font(.subheadline)
-                .foregroundStyle(IQStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 4)
         }
         .listRowBackground(IQStyle.surface)
     }

@@ -115,6 +115,12 @@ final class AppState: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var actionHint: String?
     @Published var query = "" { didSet { if oldValue != query { searchSettingsChanged() } } }
+    @Published private(set) var recentSearchQueries: [String] = []
+    @Published private(set) var searchHistoryIssue: String?
+    private let queryHistoryStore: (any QueryHistoryStoring)?
+    var searchSuggestions: [SearchQuerySuggestion] {
+        RecentSearchQueries.suggestions(for: recentSearchQueries)
+    }
     @Published var locationWeight: Double = 0.6 { didSet { if oldValue != locationWeight { searchSettingsChanged() } } }
     /// Page size, not a global Top-K cutoff. Existing preference changes still invalidate a search.
     @Published var resultLimit = 12 { didSet { if oldValue != resultLimit { searchSettingsChanged() } } }
@@ -159,8 +165,12 @@ final class AppState: ObservableObject {
              try await Task.sleep(for: .seconds(seconds))
          }, textSearchPreferences: UserDefaults? = nil,
          syncService: (any PhotoSyncServicing)? = nil,
-         indexAccess: IndexAccessCoordinator? = nil) {
+         indexAccess: IndexAccessCoordinator? = nil,
+         queryHistoryStore: (any QueryHistoryStoring)? = nil) {
         self.library = library
+        // Default/test instances are memory-only. Only the production app root
+        // opts into query persistence; ordinary preferences never hold queries.
+        self.queryHistoryStore = queryHistoryStore
         // One paired encoder owns the primary image model, text model and
         // tokenizer. The two independent workers never own simultaneous index
         // pools: manual jobs first suspend and drain the automatic worker.
@@ -218,6 +228,10 @@ final class AppState: ObservableObject {
         }
         library.observe { [weak self] in
             Task { @MainActor [weak self] in self?.libraryChanged() }
+        }
+        if let queryHistoryStore {
+            do { recentSearchQueries = RecentSearchQueries.normalized(try queryHistoryStore.load()) }
+            catch { searchHistoryIssue = "无法读取本机搜索记录。请解锁设备后重新打开应用。" }
         }
     }
 
@@ -473,6 +487,39 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// User submission only. Record before execution so a failed/cancelled
+    /// search still counts, but drafts and disabled submissions never do.
+    func submitSearchQuery() {
+        guard canSearch else { return }
+        recentSearchQueries = RecentSearchQueries.recording(query, in: recentSearchQueries)
+        persistSearchHistory()
+        search()
+    }
+
+    /// Independent of Photos deletion and image/OCR index maintenance. Clearing
+    /// does not cancel a search or modify its query, results or selection.
+    func clearSearchHistory() {
+        recentSearchQueries = []
+        do {
+            try queryHistoryStore?.save([])
+            searchHistoryIssue = nil
+        } catch {
+            searchHistoryIssue = "未能清除已保存的搜索记录。请解锁设备后重试；重新打开应用时旧记录可能仍会出现。"
+        }
+    }
+
+    private func persistSearchHistory() {
+        do {
+            try queryHistoryStore?.save(recentSearchQueries)
+            searchHistoryIssue = nil
+        } catch {
+            // Never stringify a persistence error: it may embed private text or
+            // paths. In-memory history and the actual search remain usable.
+            searchHistoryIssue = "搜索记录暂未保存到本机。请解锁设备后重试；本次搜索不受影响。"
+        }
+    }
+
+    /// Execution-only API for original/translated reruns; never records history.
     func search(useOriginal: Bool = false) {
         guard canSearch else { return }
         let text = query, weight = Float(locationWeight)

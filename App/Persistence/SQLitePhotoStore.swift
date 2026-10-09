@@ -215,6 +215,61 @@ actor SQLitePhotoStore {
         return SimilarGroupingInputSnapshot(revisions: revisions, imagePayloadSignature: Data(hash.finalize()))
     }
 
+    /// Optional deletion evidence from the SAME SELECT as the existing aggregate
+    /// identity. Keep its exact framing/order; the legacy readers and cache key
+    /// format are intentionally unchanged. Hash ALL authorized active-model
+    /// BLOBs, not only eligible rows or members of completed groups.
+    func groupingDeletionSnapshot(modelVersion: String, accessibleIDs: Set<String>,
+                                  authority: SimilarGroupingSourceAuthority? = nil) throws -> SimilarGroupingDeletionSnapshot {
+        guard readOnly else { throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexUnavailable) }
+        defer { connection = nil }
+        try Task.checkCancellation()
+        try authority?.validate()
+        var hash = SHA256()
+        SimilarGroupingDigest.frame(Data("grouping-image-input-v1".utf8), into: &hash)
+        SimilarGroupingDigest.frame(Data(modelVersion.utf8), into: &hash)
+        var revisions: [String: PhotoRevision] = [:]
+        var rows: [String: Data] = [:]
+        if try Self.groupingFileExists(directory.appendingPathComponent("index.sqlite3")) {
+            let db = try database(cleanupDiagnostics: true)
+            let exactIDs = Set(accessibleIDs.map { Data($0.utf8) })
+            try db.statement("SELECT id, revision, creation_time, model_version, image_embedding FROM photos WHERE model_version = ? ORDER BY id COLLATE BINARY") { statement in
+                try db.bind(modelVersion, at: 1, to: statement)
+                while try db.next(statement) {
+                    try Task.checkCancellation()
+                    let id = try db.groupingString(statement, at: 0)
+                    guard exactIDs.contains(Data(id.utf8)) else { continue }
+                    let model = try db.groupingString(statement, at: 3)
+                    guard Data(model.utf8) == Data(modelVersion.utf8) else { continue }
+                    let revision = PhotoRevision(id: id, modificationTime: sqlite3_column_double(statement, 1),
+                        creationTime: sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2))
+                    try SimilarGroupingDigest.validate(revision)
+                    guard revisions[id] == nil else {
+                        throw SimilarCleanupDiagnostic(phase: .indexRead, code: .indexDuplicateIdentity)
+                    }
+                    revisions[id] = revision
+                    let bytes: Data
+                    if sqlite3_column_bytes(statement, 4) == 0 { bytes = Data() }
+                    else { bytes = try db.blob(statement, at: 4) }
+                    SimilarGroupingDigest.revision(revision, into: &hash)
+                    SimilarGroupingDigest.frame(Data(model.utf8), into: &hash)
+                    SimilarGroupingDigest.frame(bytes, into: &hash)
+                    var row = SHA256()
+                    SimilarGroupingDigest.frame(Data("grouping-image-row-v1".utf8), into: &row)
+                    SimilarGroupingDigest.revision(revision, into: &row)
+                    SimilarGroupingDigest.frame(Data(model.utf8), into: &row)
+                    SimilarGroupingDigest.frame(bytes, into: &row)
+                    rows[id] = Data(row.finalize())
+                }
+            }
+        }
+        SimilarGroupingDigest.frame(SimilarGroupingDigest.bits(UInt64(revisions.count)), into: &hash)
+        try Task.checkCancellation()
+        try authority?.validate()
+        return SimilarGroupingDeletionSnapshot(source: SimilarGroupingInputSnapshot(revisions: revisions,
+            imagePayloadSignature: Data(hash.finalize())), rowDigests: rows)
+    }
+
     /// Manual grouping's image-only reader: no place JOIN/JSON, even if an
     /// irrelevant location BLOB is malformed. Restore never calls this method.
     func groupingImageRecords(modelVersion: String, accessibleIDs: Set<String>, eligibleIDs: Set<String>,

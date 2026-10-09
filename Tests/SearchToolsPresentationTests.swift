@@ -20,6 +20,7 @@ final class SearchToolsPresentationTests: XCTestCase {
     func testRealResultsNormalAndSelectionDarkSnapshotsAreRenderOnly() async throws {
         let c = try await readyContext()
         let session = try XCTUnwrap(c.state.resultSessionID)
+        prepareAllPages(c, session: session)
         let hosted = try await mount(ContentView(state: c.state, photoActionService: c.actions,
                              cleanupPreferences: nil), size: phone)
         defer { hosted.close() }
@@ -31,7 +32,7 @@ final class SearchToolsPresentationTests: XCTestCase {
         XCTAssertFalse(c.state.isSelectingResults)
         XCTAssertTrue(c.state.selectedResultIDs.isEmpty)
         XCTAssertNil(c.state.selection)
-        assertReadOnly(c, session: session)
+        assertReadOnly(c, session: session, visibleCount: 37)
 
         // Prepare state, not a simulated tap or a direct call to a view closure.
         c.state.setSelectingResults(true)
@@ -48,7 +49,7 @@ final class SearchToolsPresentationTests: XCTestCase {
         // not proof of the individual toolbar controls' semantics or absence.
         XCTAssertNotEqual(normalPixels, try pixels(selecting, in: bounds),
                           "Preparing selection must visibly change the real ContentView")
-        assertReadOnly(c, session: session)
+        assertReadOnly(c, session: session, visibleCount: 37)
 
         c.state.setSelectingResults(false)
         try await settle(hosted)
@@ -58,7 +59,7 @@ final class SearchToolsPresentationTests: XCTestCase {
         XCTAssertFalse(c.state.isSelectingResults)
         XCTAssertTrue(c.state.selectedResultIDs.isEmpty)
         XCTAssertNil(c.state.selection)
-        assertReadOnly(c, session: session)
+        assertReadOnly(c, session: session, visibleCount: 37)
     }
 
     func testGridPreparedSelectionChangesOnlyBadgePixelsWithoutCallingOnSelect() async throws {
@@ -67,9 +68,12 @@ final class SearchToolsPresentationTests: XCTestCase {
         c.state.setSelectingResults(true)
         var callbacks: [String] = []
         let layout = SearchToolsReviewGridLayout()
+        // Five columns fit twelve hits in the full phone. Use a real short
+        // viewport for this offscreen-selection check, not the old two-column
+        // layout or a false assertion that rank 12 must be offscreen on a phone.
         let hosted = try await mount(SearchToolsReviewGrid(state: c.state, layout: layout,
                                                           onSelect: { callbacks.append($0) }),
-                                     size: phone, watermark: false)
+                         size: CGSize(width: phone.width, height: 150), watermark: false)
         defer { hosted.close() }
         let beforeFrames = try visibleTileFrames(layout, in: hosted, selectedIDs: [])
         let beforeMeasurements = layout.frames
@@ -124,9 +128,10 @@ final class SearchToolsPresentationTests: XCTestCase {
     func testMaximumTypeKeepsNativeResultsScrollableWithoutHorizontalContentOverflow() async throws {
         let c = try await readyContext()
         let session = try XCTUnwrap(c.state.resultSessionID)
+        prepareAllPages(c, session: session)
         c.state.setSelectingResults(true)
         c.state.selectVisibleResults()
-        let selectedIDs = Set(c.worker.hits.prefix(12).map(\.id))
+        let selectedIDs = Set(c.worker.hits.map(\.id))
         XCTAssertEqual(c.state.selectedResultIDs, selectedIDs)
         let size = CGSize(width: 320, height: 852)
         let hosted = try await mount(ContentView(state: c.state, photoActionService: c.actions, cleanupPreferences: nil),
@@ -158,7 +163,7 @@ final class SearchToolsPresentationTests: XCTestCase {
         XCTAssertGreaterThan(visibleViewport.height, 0)
         let before = try capture(hosted, scale: hosted.window.screen.scale)
         attach(before, name: "UIReview-search-tools-selection-accessibility-dark", expectedSize: size)
-        assertReadOnly(c, session: session)
+        assertReadOnly(c, session: session, visibleCount: 37)
 
         // Exercise UIKit scrolling, not a gesture or a fabricated result view.
         // Stay away from the page boundary so this remains a render-only test.
@@ -195,7 +200,7 @@ final class SearchToolsPresentationTests: XCTestCase {
         XCTAssertTrue(c.state.isSelectingResults)
         XCTAssertEqual(c.state.selectedResultIDs, selectedIDs)
         XCTAssertNil(c.state.selection)
-        assertReadOnly(c, session: session)
+        assertReadOnly(c, session: session, visibleCount: 37)
     }
 
     // MARK: Real AppState, synthetic services, unauthorized real thumbnail path
@@ -244,12 +249,26 @@ final class SearchToolsPresentationTests: XCTestCase {
         return c
     }
 
-    private func assertReadOnly(_ c: SearchToolsReviewContext, session: UUID,
+    private func prepareAllPages(_ c: SearchToolsReviewContext, session: UUID) {
+        // With five columns the first page can expose its pagination boundary
+        // immediately. Deliberately prepare the full synthetic ranking BEFORE
+        // the immutable render-only baseline; never accept arbitrary counts.
+        // Exercise the real internal 12 + 12 + 12 + 1 contract, without a picker,
+        // another query, model execution, or a change to the supplied hit order.
+        assertReadOnly(c, session: session)
+        for count in [24, 36, 37] {
+            c.state.loadMoreResults(sessionID: session, after: c.state.results.count)
+            assertReadOnly(c, session: session, visibleCount: count)
+        }
+    }
+
+    private func assertReadOnly(_ c: SearchToolsReviewContext, session: UUID, visibleCount: Int = 12,
                                 file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertEqual(c.state.results.map(\.id), c.worker.hits.prefix(12).map(\.id), file: file, line: line)
-        XCTAssertEqual(c.state.results.map(\.score), c.worker.hits.prefix(12).map(\.score), file: file, line: line)
+        XCTAssertEqual(c.state.resultLimit, 12, "Batch size remains internal and unchanged", file: file, line: line)
+        XCTAssertEqual(c.state.results.map(\.id), c.worker.hits.prefix(visibleCount).map(\.id), file: file, line: line)
+        XCTAssertEqual(c.state.results.map(\.score), c.worker.hits.prefix(visibleCount).map(\.score), file: file, line: line)
         XCTAssertEqual(c.state.totalResultCount, 37, file: file, line: line)
-        XCTAssertTrue(c.state.hasMoreResults, file: file, line: line)
+        XCTAssertEqual(c.state.hasMoreResults, visibleCount < 37, file: file, line: line)
         XCTAssertEqual(c.state.resultSessionID, session, file: file, line: line)
         XCTAssertEqual(c.state.completedQuery, SearchToolsReviewWorker.query, file: file, line: line)
         XCTAssertEqual(c.state.completedSearchQuery?.effective, SearchToolsReviewWorker.query, file: file, line: line)
@@ -432,7 +451,7 @@ private struct SearchToolsReviewGrid: View {
         // the native capture (asserted above), without guessing safe-area offsets.
         GeometryReader { _ in
             ScrollView {
-                PhotoResultsGrid(hits: state.results, compact: false, onSelect: onSelect,
+                PhotoResultsGrid(hits: state.results, onSelect: onSelect,
                                  selectionMode: state.isSelectingResults, selectedIDs: selectedIDs) { photo in
                     Color(red: 0.12, green: 0.18, blue: 0.24) // Plain test pixels, never a photo/image request.
                         .background(measure(.photo(photo.id), selectedIDs: selectedIDs))

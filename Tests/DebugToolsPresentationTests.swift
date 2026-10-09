@@ -38,12 +38,14 @@ final class DebugToolsPresentationTests: XCTestCase {
     func testSettingsUserModeAllFormRowsLayOutAndBottomRendersNonblankSnapshot() async throws {
         let c = try await context()
         try await withHost(SettingsSheet(state: c.state)) { view in
+            try await self.waitForPage("设置", depth: 1, in: view)
             XCTAssertFalse(c.state.debugToolsEnabled)
-            _ = try await self.inspectFormRows(in: view)
-            XCTAssertEqual(c.state.translationAvailability, .installed)
-            XCTAssertEqual(c.translator.availabilityCalls, [.simplified])
-            // The production switch is at the bottom; do not stitch other rows
-            // into this viewport or claim the row inventory identifies a switch.
+            try await self.assertFormRows([4], in: view)
+            XCTAssertEqual(c.state.translationAvailability, .unchecked)
+            XCTAssertTrue(c.translator.availabilityCalls.isEmpty,
+                          "Opening the primary page must not check language packs")
+            // Capture the real four-row primary page. The debug switch is now
+            // inside Advanced; do not relabel this attachment as its screenshot.
             let frame = try await self.formEdgeFrame(in: view, bottom: true)
             self.capture(frame, named: "settings-default")
         }
@@ -53,8 +55,9 @@ final class DebugToolsPresentationTests: XCTestCase {
     func testLibraryUserModeAllFormRowsLayOutAndTopRendersNonblankSnapshot() async throws {
         let c = try await context()
         try await withHost(LibrarySheet(state: c.state)) { view in
+            try await self.waitForPage("我的图库", depth: 1, in: view)
             XCTAssertFalse(c.state.debugToolsEnabled)
-            _ = try await self.inspectFormRows(in: view)
+            try await self.assertFormRows([1, 3], in: view)
             let frame = try await self.formEdgeFrame(in: view, bottom: false)
             self.capture(frame, named: "library-default")
         }
@@ -86,21 +89,88 @@ final class DebugToolsPresentationTests: XCTestCase {
 
     func testSettingsSameHostModeRoundTripChangesPixelsAndRestoresFormRowsWithoutWork() async throws {
         let c = try await context()
-        try await withHost(SettingsSheet(state: c.state)) { view in
+        // Non-default state must survive hiding tools. Setting the production
+        // property here is fixture preparation, not a claim of a UIKit tap.
+        c.state.locationWeight = 0.25
+        await c.state.waitUntilIdle()
+        c.baseline = DebugPresentationSnapshot(c.state)
+        let paths = DebugPresentationPaths()
+        try await withHost(DebugSettingsRoot(state: c.state, paths: paths)) { view in
+            try await self.waitForPage("设置", depth: 1, in: view)
+            let navigation = try XCTUnwrap(self.navigationControllers(in: view).first)
+            try await self.assertFormRows([4], in: view)
+            XCTAssertTrue(c.translator.availabilityCalls.isEmpty)
+            paths.settings = [.advanced]
+            try await self.waitForPage("高级", depth: 2, in: view)
+            XCTAssertTrue(self.navigationControllers(in: view).first === navigation)
             try await self.formRoundTrip(c, in: view)
+            XCTAssertEqual(c.state.locationWeight, 0.25)
+            XCTAssertEqual(c.state.resultLimit, 12)
+            XCTAssertTrue(c.translator.availabilityCalls.isEmpty,
+                          "Advanced is not a language-pack entry")
+            paths.settings = []
+            try await self.waitForPage("设置", depth: 1, in: view)
+            try await self.assertFormRows([4], in: view)
+
+            // Preserve the old pack-availability coverage, now at the explicit
+            // production route. Navigation itself must never prepare/translate.
+            let checked = self.expectation(description: "Explicit translation page checked the fake pack")
+            c.translator.checked = checked
+            paths.settings = [.translation]
+            try await self.waitForPage("搜索增强", depth: 2, in: view)
+            await self.fulfillment(of: [checked], timeout: 5)
+            try await self.assertFormRows([4], in: view)
             XCTAssertEqual(c.translator.availabilityCalls, [.simplified],
-                           "Debug changes must not restart the language-pack task")
+                           "Only explicit translation entry checks the fake pack")
             XCTAssertEqual(c.state.translationAvailability, .installed)
+            paths.settings = []
+            try await self.waitForPage("设置", depth: 1, in: view)
+            paths.settings = [.advanced]
+            try await self.waitForPage("高级", depth: 2, in: view)
+            try await self.assertFormRows([1], in: view)
+            XCTAssertFalse(c.state.debugToolsEnabled)
+            XCTAssertEqual(c.state.locationWeight, 0.25)
+            XCTAssertEqual(c.translator.availabilityCalls, [.simplified])
+            paths.settings = []
+            try await self.waitForPage("设置", depth: 1, in: view)
+            try await self.assertFormRows([4], in: view)
+            XCTAssertTrue(self.navigationControllers(in: view).first === navigation)
+            self.assertUnchanged(c, since: c.baseline)
         }
     }
 
     func testLibrarySameHostModeRoundTripChangesPixelsAndRestoresFormRowsWithoutWork() async throws {
         let c = try await context()
-        try await withHost(LibrarySheet(state: c.state)) { view in
+        let paths = DebugPresentationPaths()
+        try await withHost(DebugLibraryRoot(state: c.state, paths: paths)) { view in
+            try await self.waitForPage("我的图库", depth: 1, in: view)
+            let navigation = try XCTUnwrap(self.navigationControllers(in: view).first)
+            try await self.assertFormRows([1, 3], in: view)
+            paths.library = [.maintenance]
+            try await self.waitForPage("索引维护", depth: 2, in: view)
+            XCTAssertTrue(self.navigationControllers(in: view).first === navigation)
             try await self.formRoundTrip(c, in: view)
-            // No scan or disclosure interaction: no claim about expanded
-            // place counters, indexing-info contents or semantic AX visibility.
+            paths.library = []
+            try await self.waitForPage("我的图库", depth: 1, in: view)
+            try await self.assertFormRows([1, 3], in: view)
+            for route in [LibrarySheet.Route.access, .textIndex] {
+                paths.library = [route]
+                try await self.waitForPage(route.title, depth: 2, in: view)
+                _ = try await self.inspectFormRows(in: view)
+                XCTAssertFalse(c.state.debugToolsEnabled)
+                XCTAssertFalse(c.state.textSearchEnabled)
+                XCTAssertFalse(c.state.canIndex)
+                XCTAssertFalse(c.state.canIndexText)
+                self.assertUnchanged(c, since: c.baseline)
+                paths.library = []
+                try await self.waitForPage("我的图库", depth: 1, in: view)
+                try await self.assertFormRows([1, 3], in: view)
+            }
+            // No scan or disclosure activation: expanded diagnostic semantics
+            // remain covered by the real XCUI navigation suite, not row counts.
+            XCTAssertTrue(self.navigationControllers(in: view).first === navigation)
             XCTAssertTrue(c.translator.availabilityCalls.isEmpty)
+            self.assertUnchanged(c, since: c.baseline)
         }
     }
 
@@ -160,6 +230,10 @@ final class DebugToolsPresentationTests: XCTestCase {
         XCTAssertNil(c.state.photoCheckIssue, file: file, line: line)
         XCTAssertNil(c.state.errorMessage, file: file, line: line)
         XCTAssertNil(c.state.activity, file: file, line: line)
+        XCTAssertEqual(c.state.resultLimit, 12, file: file, line: line)
+        XCTAssertEqual(PhotoLibraryClient.authorization, c.photoPermission, file: file, line: line)
+        XCTAssertFalse(PhotoLibraryClient.canRead, file: file, line: line)
+        XCTAssertEqual(c.state.photoSync.phase, .idle, file: file, line: line)
     }
 
     // MARK: Public UIKit Form layout and actual rendered pixels (not AX)
@@ -168,8 +242,51 @@ final class DebugToolsPresentationTests: XCTestCase {
         [view] + view.subviews.flatMap { descendants($0) }
     }
 
+    private func navigationControllers(in view: UIView) -> [UINavigationController] {
+        // Public responder/child-controller APIs, never private SwiftUI class
+        // names or an assumed Text -> button ancestry.
+        var responder: UIResponder? = view
+        while let current = responder {
+            if let controller = current as? UIViewController {
+                func descendants(_ parent: UIViewController) -> [UIViewController] {
+                    [parent] + parent.children.flatMap { descendants($0) }
+                }
+                return descendants(controller).compactMap { $0 as? UINavigationController }
+            }
+            responder = current.next
+        }
+        return []
+    }
+
+    private func waitForPage(_ title: String, depth: Int, in view: UIView) async throws {
+        let inspect: @MainActor () -> Bool = {
+            view.layoutIfNeeded()
+            guard let navigation = self.navigationControllers(in: view).first else { return false }
+            return navigation.viewControllers.count == depth && navigation.navigationBar.topItem?.title == title
+                && navigation.topViewController?.view.window === view.window
+        }
+        let predicate = NSPredicate { _, _ in
+            if Thread.isMainThread { return MainActor.assumeIsolated { inspect() } }
+            return DispatchQueue.main.sync { inspect() }
+        }
+        let reached = XCTNSPredicateExpectation(predicate: predicate, object: nil)
+        guard await XCTWaiter.fulfillment(of: [reached], timeout: 5) == .completed else {
+            XCTFail("Production navigation did not reach \(title) at depth \(depth)")
+            throw DebugPresentationFailure.navigation
+        }
+        await settle(view)
+        let navigation = try XCTUnwrap(navigationControllers(in: view).first)
+        XCTAssertEqual(navigation.viewControllers.count, depth)
+        XCTAssertEqual(navigation.navigationBar.topItem?.title, title)
+        XCTAssertTrue(navigation.topViewController?.view.window === view.window)
+        XCTAssertNil(navigation.presentedViewController, "Subpages push in the existing sheet stack")
+    }
+
     private func form(in view: UIView) throws -> UICollectionView {
-        try XCTUnwrap(descendants(view).compactMap { $0 as? UICollectionView }.first,
+        let navigation = try XCTUnwrap(navigationControllers(in: view).first)
+        let top = try XCTUnwrap(navigation.topViewController)
+        XCTAssertTrue(top.view.window === view.window)
+        return try XCTUnwrap(descendants(top.view).compactMap { $0 as? UICollectionView }.first,
                       "Expected the production iOS 18 Form collection, not a replacement settings UI")
     }
 
@@ -181,6 +298,12 @@ final class DebugToolsPresentationTests: XCTestCase {
 
     private func formRowCounts(_ collection: UICollectionView) -> [Int] {
         (0..<collection.numberOfSections).map { collection.numberOfItems(inSection: $0) }
+    }
+
+    private func assertFormRows(_ expected: [Int], in view: UIView,
+                                file: StaticString = #filePath, line: UInt = #line) async throws {
+        let rows = try await inspectFormRows(in: view)
+        XCTAssertEqual(rows, expected, file: file, line: line)
     }
 
     /// Inventory every live collapsed row, including normal rows initially below
@@ -331,6 +454,7 @@ final class DebugToolsPresentationTests: XCTestCase {
             .environment(\.layoutDirection, .leftToRight)
             .environment(\.dynamicTypeSize, .large)
             .environment(\.scenePhase, .active)
+            .transaction { $0.animation = nil; $0.disablesAnimations = true }
         let host = DebugPresentationHostingController(rootView: root)
         let laidOut = expectation(description: "Native phone viewport mounted")
         host.onLayout = { [weak host] in
@@ -450,6 +574,26 @@ private struct DebugPresentationFrame {
 }
 
 @MainActor
+private final class DebugPresentationPaths: ObservableObject {
+    @Published var settings: [SettingsSheet.Route] = []
+    @Published var library: [LibrarySheet.Route] = []
+}
+
+@MainActor
+private struct DebugSettingsRoot: View {
+    let state: AppState
+    @ObservedObject var paths: DebugPresentationPaths
+    var body: some View { SettingsSheet(state: state, path: $paths.settings) }
+}
+
+@MainActor
+private struct DebugLibraryRoot: View {
+    let state: AppState
+    @ObservedObject var paths: DebugPresentationPaths
+    var body: some View { LibrarySheet(state: state, path: $paths.library) }
+}
+
+@MainActor
 private final class DebugPresentationHostingController<Content: View>: UIHostingController<Content> {
     var onLayout: (() -> Void)?
     override func viewDidLayoutSubviews() {
@@ -498,6 +642,7 @@ private struct DebugPresentationSnapshot: Equatable {
 private final class DebugPresentationContext {
     let worker = DebugPresentationWorker()
     let translator = DebugPresentationTranslator()
+    let photoPermission = PhotoLibraryClient.authorization
     let state: AppState
     var baseline: DebugPresentationSnapshot
 
@@ -510,7 +655,7 @@ private final class DebugPresentationContext {
 }
 
 private enum DebugPresentationFailure: Error {
-    case unexpectedWork, unsupportedSimulator, readablePhotoLibrary, invalidPixelBuffer
+    case unexpectedWork, unsupportedSimulator, readablePhotoLibrary, invalidPixelBuffer, navigation
 }
 
 @MainActor
@@ -549,8 +694,11 @@ private final class DebugPresentationTranslator: QueryTranslating {
     private(set) var availabilityCalls: [QueryTranslationLanguage] = []
     private(set) var translationCalls: [String] = []
     private(set) var prepareCalls: [QueryTranslationLanguage] = []
+    var checked: XCTestExpectation?
     func availability(for language: QueryTranslationLanguage) async -> QueryTranslationAvailability {
         availabilityCalls.append(language)
+        checked?.fulfill()
+        checked = nil
         return .installed
     }
     func translate(_ text: String, from language: QueryTranslationLanguage) async throws -> String {

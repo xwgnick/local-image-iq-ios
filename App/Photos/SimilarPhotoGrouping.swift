@@ -29,6 +29,8 @@ struct SimilarPhotoGroupingResult: Sendable {
     let validateAccess: @Sendable () throws -> Void
     let validatePhotos: @Sendable ([String]) throws -> Void
     let validatePublicationEpoch: @Sendable () throws -> Void
+    /// Data provenance only; never a substitute for live selection validators.
+    let deletionBaselineID: UUID?
     /// Valid fresh groups can still be used when optional persistence fails.
     /// Nil means no persistence failure was reported, not an unconditional claim
     /// that a synthetic/legacy result was written to disk.
@@ -39,7 +41,7 @@ struct SimilarPhotoGroupingResult: Sendable {
          validateAccess: @escaping @Sendable () throws -> Void = {},
          validatePhotos: @escaping @Sendable ([String]) throws -> Void = { _ in },
          validatePublicationEpoch: @escaping @Sendable () throws -> Void = {},
-         persistenceIssue: String? = nil) {
+         persistenceIssue: String? = nil, deletionBaselineID: UUID? = nil) {
         self.groups = groups
         self.candidateCount = candidateCount
         self.staleCount = staleCount
@@ -48,6 +50,7 @@ struct SimilarPhotoGroupingResult: Sendable {
         self.validateAccess = validateAccess
         self.validatePhotos = validatePhotos
         self.validatePublicationEpoch = validatePublicationEpoch
+        self.deletionBaselineID = deletionBaselineID
         self.persistenceIssue = persistenceIssue
     }
 
@@ -65,20 +68,31 @@ enum SimilarPhotoGroupingRestore: Sendable {
     case missing
     case restored(SimilarPhotoGroupingResult)
     case stale
+    /// Success callback arrived, but fresh enumeration still contains requested
+    /// deletions. Wait for a real source event or explicit user retry, not a loop.
+    case awaitingDeletion
 }
 
 protocol SimilarPhotoGrouping: Sendable {
     func restore(threshold: Float) async throws -> SimilarPhotoGroupingRestore
+    func confirmedDeletion(revisions: [PhotoRevision]) async
+    func confirmedDeletion(revisions: [PhotoRevision], baselineID: UUID?) async
     func group(threshold: Float,
                progress: @escaping @Sendable (SimilarPhotoGroupingProgress) async -> Void) async throws -> SimilarPhotoGroupingResult
 }
 
 extension SimilarPhotoGrouping {
     func restore(threshold: Float) async throws -> SimilarPhotoGroupingRestore { .missing }
+    func confirmedDeletion(revisions: [PhotoRevision]) async { }
+    /// Old injected services can observe the notification without knowing about
+    /// provenance. Production only accepts the result-bound overload below.
+    func confirmedDeletion(revisions: [PhotoRevision], baselineID: UUID?) async {
+        await confirmedDeletion(revisions: revisions)
+    }
 }
 
 enum SimilarPhotoGroupingPolicy {
-    static let defaultThreshold: Float = 0.90
+    static let defaultThreshold: Float = 0.95
     static let algorithmVersion = "greedy-disjoint-pairwise-cosine-v1"
     static let thresholdRange: ClosedRange<Float> = 0.50...0.99
     /// Exact integer ticks; shared by the slider and its boundary tests.
@@ -252,6 +266,10 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
     /// Complete inputs, not just returned group members. No live scopes, monitors
     /// or closures survive here. Restore cannot reconstruct missing singletons.
     private var preparedResident: (key: SimilarGroupingPreparedKey, input: SimilarGroupingPreparedInput)?
+    /// Completed immutable evidence survives UI invalidation and cancelled reads.
+    /// It contains no Photos access scope, source monitor or validator closure.
+    private var deletionBaseline: SimilarGroupingDeletionBaseline?
+    private var confirmedDeletions: [String: PhotoRevision] = [:]
     private let reportMetrics: (@Sendable (SimilarGroupingWorkMetrics) -> Void)?
 
     init(library: any PhotoLibraryIndexing, directory: URL? = nil,
@@ -266,9 +284,30 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
         self.reportMetrics = reportMetrics
     }
 
+    /// Called ONLY after a successful Photos callback. Revisions alone cannot
+    /// identify the captured result, so the unbound legacy overload stays a noop.
+    /// No I/O/await occurs here: registration cannot fail halfway or retain a live
+    /// old validator. A mismatched capture grants nothing; normal restore is safe.
+    func confirmedDeletion(revisions: [PhotoRevision], baselineID: UUID?) async {
+        guard let baseline = deletionBaseline, baselineID == baseline.id, !revisions.isEmpty else { return }
+        let members = Set(baseline.groups.flatMap { $0.photos.map(\.id) })
+        var requested: [String: PhotoRevision] = [:]
+        for revision in revisions {
+            guard members.contains(revision.id), requested[revision.id] == nil,
+                  let expected = baseline.authorized[revision.id],
+                  SimilarGroupingDigest.sameRevision(expected, revision) else { return }
+            requested[revision.id] = revision
+        }
+        // Supersede an externally queued read as well as the controller's normal
+        // mutation gate. Its later completion may not overwrite this evidence.
+        operationID = UUID()
+        confirmedDeletions.merge(requested) { old, _ in old }
+    }
+
     /// Cold reuse reads metadata and opaque SQLite image BLOBs twice for durable
     /// identity. It never decodes source JSON, computes similarities, prepares a
-    /// model, requests pixels, indexes, performs OCR, repairs or writes a cache.
+    /// model, requests pixels, indexes or performs OCR. Confirmed pure deletion
+    /// additionally maintains prior subgroups and saves under the fresh v1 key.
     func restore(threshold: Float) async throws -> SimilarPhotoGroupingRestore {
         // Invocation-local: this actor can reenter while resource/SQLite reads await.
         var phase: SimilarCleanupPhase = .photos
@@ -297,7 +336,8 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
             phase = .indexRead
-            let source = try await reader.groupingInputSnapshot(modelVersion: model, accessibleIDs: Set(initial.keys), authority: authority)
+            let evidence = try await reader.groupingDeletionSnapshot(modelVersion: model, accessibleIDs: Set(initial.keys), authority: authority)
+            let source = evidence.source
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
             phase = .cacheRead
@@ -306,6 +346,11 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             if preparedResident?.key != preparedKey { preparedResident = nil }
             let key = try SimilarGroupingCacheKey(authorized: initial, imagePayloadSignature: source.imagePayloadSignature,
                                                  modelVersion: model, authorization: access.authorization, threshold: threshold)
+            if let maintained = try await restoreConfirmedDeletion(key: key, initial: initial, evidence: evidence,
+                reader: reader, cache: cache, model: model, threshold: threshold, ticket: ticket,
+                access: access, authority: authority) {
+                return maintained
+            }
             let saved: SimilarGroupingCacheRead
             let persistenceIssue: String?
             if let resident, resident.payload.key == key {
@@ -334,16 +379,20 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             case .stale: return .stale
             case .restored(let value):
                 phase = .sourceCheck
+                let baselineID = UUID()
                 let result = try makeResult(groups: value.groups, candidateCount: value.candidateCount,
                                             staleCount: value.staleCount, unindexedCount: value.unindexedCount,
                                             threshold: value.threshold, initial: initial, access: access,
-                                            authority: authority, persistenceIssue: persistenceIssue)
+                                            authority: authority, persistenceIssue: persistenceIssue, deletionBaselineID: baselineID)
                 phase = .cacheRead
                 let payload = try SimilarGroupingCachePayload(groups: value.groups, candidateCount: value.candidateCount,
                     staleCount: value.staleCount, unindexedCount: value.unindexedCount, key: key)
                 phase = .sourceCheck
                 try check(ticket, access: access, authority: authority)
                 resident = (payload, persistenceIssue)
+                deletionBaseline = SimilarGroupingDeletionBaseline(id: baselineID, key: key, authorized: initial,
+                    rowDigests: evidence.rowDigests, groups: value.groups)
+                confirmedDeletions = [:]
                 return .restored(result)
             }
         } catch {
@@ -355,6 +404,10 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
 
     func group(threshold: Float,
                progress: @escaping @Sendable (SimilarPhotoGroupingProgress) async -> Void) async throws -> SimilarPhotoGroupingResult {
+        // Explicit/full discovery never silently chooses deletion maintenance.
+        // Do not discard the prior COMPLETED baseline on entry: a cancelled or
+        // superseded read cannot erase a successful mutation's pending evidence.
+        // A successful full completion below replaces it atomically instead.
         var phase: SimilarCleanupPhase = .photos
         var metrics = SimilarGroupingWorkMetrics()
         do {
@@ -381,7 +434,8 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
             phase = .indexRead
-            let source = try await reader.groupingInputSnapshot(modelVersion: cacheVersion, accessibleIDs: Set(initial.keys), authority: authority)
+            let evidence = try await reader.groupingDeletionSnapshot(modelVersion: cacheVersion, accessibleIDs: Set(initial.keys), authority: authority)
+            let source = evidence.source
             metrics.sourceSnapshotCount += 1
             let indexed = source.revisions
             phase = .sourceCheck
@@ -510,18 +564,121 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             }
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)
+            let baselineID = UUID()
             let result = try makeResult(groups: groups, candidateCount: eligible.count, staleCount: indexed.count - eligible.count,
                                   unindexedCount: initial.count - indexed.count, threshold: threshold,
-                                  initial: initial, access: access, authority: authority, persistenceIssue: persistenceIssue)
+                                  initial: initial, access: access, authority: authority, persistenceIssue: persistenceIssue,
+                                  deletionBaselineID: baselineID)
             try check(ticket, access: access, authority: authority)
             resident = (payload, persistenceIssue)
             // Install only after the final source/publication/save fences. A
             // failed/superseded operation never installs partially prepared data.
             preparedResident = (preparedKey, prepared)
+            deletionBaseline = SimilarGroupingDeletionBaseline(id: baselineID, key: key, authorized: initial,
+                rowDigests: evidence.rowDigests, groups: groups)
+            confirmedDeletions = [:]
             reportMetrics?(metrics)
             return result
         } catch {
             preparedResident = nil
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            throw SimilarCleanupDiagnostic.classify(error, phase: phase)
+        }
+    }
+
+    /// Full durable verification, but arithmetic only inside changed retained
+    /// groups. Sync may already have pruned the deleted SQL rows; old source
+    /// monitors are deliberately neither reused nor consulted here.
+    private func restoreConfirmedDeletion(key: SimilarGroupingCacheKey, initial: [String: PhotoRevision],
+        evidence: SimilarGroupingDeletionSnapshot, reader: SQLitePhotoStore, cache: SimilarGroupingCache,
+        model: String, threshold: Float, ticket: UUID, access: SimilarGroupingAccess,
+        authority: SimilarGroupingSourceAuthority) async throws -> SimilarPhotoGroupingRestore? {
+        guard !confirmedDeletions.isEmpty, let baseline = deletionBaseline else { return nil }
+        var phase: SimilarCleanupPhase = .sourceCheck
+        do {
+            let match = try baseline.match(key: key, authorized: initial,
+                rowDigests: evidence.rowDigests, confirmed: confirmedDeletions)
+            if case .invalid = match {
+                deletionBaseline = nil
+                confirmedDeletions = [:]
+                return nil
+            }
+            phase = .photos
+            try access.requireSnapshot(initial)
+            phase = .sourceCheck
+            try check(ticket, access: access, authority: authority)
+            phase = .indexRead
+            let middle = try await reader.groupingInputSnapshot(modelVersion: model,
+                accessibleIDs: Set(initial.keys), authority: authority)
+            phase = .sourceCheck
+            try check(ticket, access: access, authority: authority)
+            phase = .indexRead
+            guard middle == evidence.source else { throw Self.indexChanged() }
+            guard case .removed(let removed) = match else { return .awaitingDeletion }
+            let validate: @Sendable () throws -> Void = {
+                do {
+                    try access.validateEpoch()
+                    try authority.validate()
+                    try access.validateEpoch()
+                } catch {
+                    if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                    throw SimilarCleanupDiagnostic.classify(error, phase: .sourceCheck)
+                }
+            }
+            phase = .compute
+            let computation = try SimilarGroupingDeletionMaintenance.maintain(groups: baseline.groups,
+                removing: removed, threshold: threshold, checkAccess: validate)
+            phase = .photos
+            try access.requireSnapshot(initial)
+            phase = .sourceCheck
+            try check(ticket, access: access, authority: authority)
+            phase = .indexRead
+            let final = try await reader.groupingInputSnapshot(modelVersion: model,
+                accessibleIDs: Set(initial.keys), authority: authority)
+            phase = .sourceCheck
+            try check(ticket, access: access, authority: authority)
+            phase = .indexRead
+            guard final == evidence.source else { throw Self.indexChanged() }
+            var candidates = 0
+            for (id, revision) in initial {
+                try Task.checkCancellation()
+                if let stored = final.revisions[id], SimilarGroupingDigest.sameRevision(stored, revision) { candidates += 1 }
+            }
+            let stale = final.revisions.count - candidates
+            let unindexed = initial.count - final.revisions.count
+            phase = .cacheWrite
+            let payload = try SimilarGroupingCachePayload(groups: computation.groups, candidateCount: candidates,
+                staleCount: stale, unindexedCount: unindexed, key: key)
+            _ = try payload.validated(authorized: initial, indexed: final.revisions)
+            var persistenceIssue: String?
+            do {
+                try cache.save(groups: computation.groups, candidateCount: candidates, staleCount: stale,
+                    unindexedCount: unindexed, key: key, authorized: initial, indexed: final.revisions, validate: validate)
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                if let diagnostic = error as? SimilarCleanupDiagnostic, diagnostic.code != .cacheUnwritable { throw diagnostic }
+                phase = .sourceCheck
+                try check(ticket, access: access, authority: authority)
+                persistenceIssue = "SG-CACHE-WRITE\n本次分组可正常使用，但未能保存；下次打开可能需要重新分组。"
+            }
+            phase = .sourceCheck
+            try check(ticket, access: access, authority: authority)
+            let baselineID = UUID()
+            let result = try makeResult(groups: computation.groups, candidateCount: candidates,
+                staleCount: stale, unindexedCount: unindexed, threshold: threshold, initial: initial,
+                access: access, authority: authority, persistenceIssue: persistenceIssue, deletionBaselineID: baselineID)
+            try check(ticket, access: access, authority: authority)
+            resident = (payload, persistenceIssue)
+            deletionBaseline = SimilarGroupingDeletionBaseline(id: baselineID, key: key, authorized: initial,
+                rowDigests: evidence.rowDigests, groups: computation.groups)
+            confirmedDeletions = [:]
+            preparedResident = nil
+            var metrics = SimilarGroupingWorkMetrics()
+            metrics.sourceSnapshotCount = 3
+            metrics.computation = computation.metrics
+            reportMetrics?(metrics)
+            return .restored(result)
+        } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             throw SimilarCleanupDiagnostic.classify(error, phase: phase)
         }
@@ -544,7 +701,7 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
     private func makeResult(groups: [SimilarPhotoGroup], candidateCount: Int, staleCount: Int,
                             unindexedCount: Int, threshold: Float, initial: [String: PhotoRevision],
                             access: SimilarGroupingAccess, authority: SimilarGroupingSourceAuthority,
-                            persistenceIssue: String? = nil) throws -> SimilarPhotoGroupingResult {
+                            persistenceIssue: String? = nil, deletionBaselineID: UUID? = nil) throws -> SimilarPhotoGroupingResult {
         var returned: [String: PhotoRevision] = [:]
         for group in groups {
             for photo in group.photos {
@@ -615,7 +772,7 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
                               try validateLive()
                           }, validatePhotos: validatePhotos,
                           validatePublicationEpoch: validateLive,
-                          persistenceIssue: persistenceIssue)
+                          persistenceIssue: persistenceIssue, deletionBaselineID: deletionBaselineID)
     }
 }
 

@@ -137,7 +137,7 @@ final class CleanupBackNavigationTests: XCTestCase {
         XCTAssertTrue(try host.overviewScroll() === overview)
         XCTAssertEqual(overview.contentOffset, offset)
         XCTAssertEqual(f.cleanup.selectionSessionID, session)
-        XCTAssertEqual(f.grouping.thresholds, [0.90])
+        XCTAssertEqual(f.grouping.thresholds, [0.95])
         XCTAssertNil(f.cleanup.pendingDeletion)
         XCTAssertFalse(anchor.beginInteraction(), "Root edge swipes must not navigate to Search")
         let gesture = anchor.edgePan
@@ -182,7 +182,7 @@ final class CleanupBackNavigationTests: XCTestCase {
         }
         XCTAssertEqual(f.browser.detailRoute, route)
         XCTAssertTrue(f.cleanup.selectedIDs.isEmpty)
-        XCTAssertEqual(f.grouping.thresholds, [0.90])
+        XCTAssertEqual(f.grouping.thresholds, [0.95])
     }
 
     func testActualDeletingStateRejectsEdgeReturnUntilSyntheticDeletionDrains() async throws {

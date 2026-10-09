@@ -19,34 +19,42 @@ final class PresentationTests: XCTestCase {
         let hits = PresentationFixtures.hits(count: 3)
         XCTAssertTrue(hits.allSatisfy { $0.photo.imageEmbedding.count == 768 })
         for hit in hits { try EmbeddingValidation.validateUnit(hit.photo.imageEmbedding) }
+        XCTAssertTrue(PhotoResultsGrid(hits: hits, onSelect: { _ in }) { _ in Color.clear }.compact,
+                      "The default production grid must use the five-column layout")
         for appearance in [UIUserInterfaceStyle.light, .dark] {
             let layout = PresentationGridLayout()
-            try await snapshot(PresentationGridReview(hits: hits, compact: false, layout: layout),
+            try await snapshot(PresentationGridReview(hits: hits, compact: true, layout: layout),
                                id: "gold-grid-\(appearance == .dark ? "dark" : "light")",
                                size: phone, appearance: appearance)
             // Measure the actual production grid's supplied thumbnail bounds,
             // not an inferred AX tree or a reconstructed layout. This also
-            // checks the hit order: the first two share row one, third starts row two.
-            try assertUniformGrid(hits, layout: layout, columns: 2, aspectRatio: 4.0 / 5.0, spacing: 6)
+            // checks worker order: three hits occupy the first three of five columns.
+            try assertUniformGrid(hits, layout: layout, columns: 5, aspectRatio: 1, spacing: 3)
         }
     }
 
     func testTwelveResultGridSnapshots() async throws {
         let hits = PresentationFixtures.hits(count: 12)
-        // A phone-height viewport cannot show all six rows. Capture both ends
-        // of the actual scroll view instead of shrinking photos to fit twelve.
-        try await snapshot(PresentationGridReview(hits: hits, compact: false),
+        // Twelve now occupy three square rows. Retain both historical attachment
+        // names/anchors; do not invent an offscreen sixth row or shrink the grid.
+        let top = PresentationGridLayout()
+        let bottom = PresentationGridLayout()
+        try await snapshot(PresentationGridReview(hits: hits, compact: true, layout: top),
                            id: "grid-12-top", size: phone, appearance: .light)
-        try await snapshot(PresentationGridReview(hits: hits, compact: false, anchor: .bottom),
+        try await snapshot(PresentationGridReview(hits: hits, compact: true, anchor: .bottom, layout: bottom),
                            id: "grid-12-bottom", size: phone, appearance: .light)
+        try assertUniformGrid(hits, layout: top, columns: 5, aspectRatio: 1, spacing: 3)
+        try assertUniformGrid(hits, layout: bottom, columns: 5, aspectRatio: 1, spacing: 3)
     }
 
+    // Historical test selector/attachment retained; V5 now uses five columns.
     func testCompactThreeColumnSnapshot() async throws {
         let hits = PresentationFixtures.hits(count: 12)
         let layout = PresentationGridLayout()
         try await snapshot(PresentationGridReview(hits: hits, compact: true, layout: layout),
                            id: "compact-3-columns", size: compactPhone, appearance: .light)
-        try assertUniformGrid(hits, layout: layout, columns: 3, aspectRatio: 1, spacing: 4)
+        // Keep the existing review artifact name; its content is now approved V5.
+        try assertUniformGrid(hits, layout: layout, columns: 5, aspectRatio: 1, spacing: 3)
     }
 
     func testEmptyHomeSnapshot() async throws {
@@ -137,7 +145,8 @@ final class PresentationTests: XCTestCase {
     func testGoldSettingsLightAndDarkSnapshots() async throws {
         let state = await readyState(queryTranslator: PresentationTranslationStub())
         // Exercise the real bound preferences in memory, then capture both ON.
-        // The production disclosures remain collapsed; no Apple service is created.
+        // The primary stays four rows even when debug is ON; nested disclosure
+        // reachability is checked by DebugTools/Navigation tests. No Apple service.
         state.chineseSearchEnabled = false
         state.debugToolsEnabled = false
         XCTAssertFalse(state.chineseSearchEnabled)
@@ -232,7 +241,7 @@ final class PresentationTests: XCTestCase {
             XCTAssertEqual(library.storedCountText, home.libraryTitle)
             XCTAssertEqual(library.indexActionTitle, "更新索引")
             XCTAssertEqual(library.coverageDescription, "点「更新索引」处理新增或编辑过的照片，未变化的索引会复用。")
-            XCTAssertEqual(library.accessDescription, "允许访问系统照片图库；新增或编辑照片后，请手动更新索引。")
+            XCTAssertEqual(library.accessDescription, "可访问系统照片图库，应用在前台就绪时自动更新图片索引。")
             XCTAssertEqual(library.authorizedCountSnapshotText,
                            entry.known ? "\(entry.authorized.formatted()) 张" : "未扫描")
             XCTAssertNil(state.activity)
@@ -251,7 +260,7 @@ final class PresentationTests: XCTestCase {
             XCTAssertEqual(home.librarySubtitle, "本机保存的索引 · 手动更新")
             XCTAssertEqual(library.storedCountText, "已索引 0 张")
             XCTAssertEqual(library.indexActionTitle, "建立索引")
-            XCTAssertEqual(library.coverageDescription, "点「建立索引」后才能按照片内容搜索；索引由你手动更新。")
+            XCTAssertEqual(library.coverageDescription, "图片完成索引后才能搜索，也可在这里手动建立。")
             XCTAssertEqual(library.authorizedCountSnapshotText, known ? "0 张" : "未扫描")
             XCTAssertTrue(state.canIndex)
         }
@@ -267,7 +276,7 @@ final class PresentationTests: XCTestCase {
             await state.waitUntilIdle()
             XCTAssertFalse(state.summary.authorizedCountKnown, "Old synthetic fixtures remain unscanned by default")
             let library = LibrarySheet(state: state)
-            XCTAssertEqual(library.accessDescription, "仅能访问你选中的照片；调整选择后，请手动更新索引。")
+            XCTAssertEqual(library.accessDescription, "只访问你选中的照片；可在这里调整选择。")
             XCTAssertEqual(library.authorizedCountSnapshotText, "未扫描")
             XCTAssertEqual(library.indexActionTitle, "更新索引")
             XCTAssertEqual(ContentView(state: state).libraryTitle, "已索引 12 张")
@@ -276,10 +285,12 @@ final class PresentationTests: XCTestCase {
 
     func testManualIndexExplanationCoversNewEditedDeletedAndInaccessiblePhotos() {
         let explanation = LibrarySheet.manualIndexExplanation
-        XCTAssertTrue(explanation.contains("新增照片在更新索引后才能搜索"))
-        XCTAssertTrue(explanation.contains("编辑过的照片在更新前仍按旧内容匹配"))
-        XCTAssertTrue(explanation.contains("搜索会检查访问权限并排除已删除或不可访问的照片"))
-        XCTAssertTrue(explanation.contains("更新或重建时请保持应用在前台"))
+        XCTAssertTrue(explanation.contains("图片索引在应用前台就绪时自动更新"))
+        XCTAssertTrue(explanation.contains("手动更新会等待自动同步停止，不是重新开启自动同步"))
+        XCTAssertTrue(explanation.contains("文字索引仍需单独手动建立"))
+        XCTAssertTrue(explanation.contains("搜索会排除已删除或不可访问的照片"))
+        XCTAssertTrue(explanation.contains("本机保存的索引数不代表当前可搜索数量"))
+        XCTAssertTrue(explanation.contains("请保持应用在前台，已完成的记录会保留"))
     }
 
     func testSearchPublishesCompletedQueryAndPreservesWorkerOrderAndScores() async {
@@ -384,6 +395,8 @@ final class PresentationTests: XCTestCase {
         @MainActor func change(_ state: AppState) {
             switch self {
             case .resultCount:
+                // Internal pagination invalidation only. There is deliberately
+                // no Settings picker allowing a user to select three anymore.
                 XCTAssertEqual(state.resultLimit, 12)
                 state.resultLimit = 3
             case .locationWeight: state.locationWeight = 0.25
@@ -574,7 +587,7 @@ private struct PresentationGridReview: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("TEST FIXTURE · DRAWN SCENES").font(.caption.weight(.bold)).foregroundStyle(IQStyle.accent)
-                Text("\(hits.count) 张候选照片 · \(compact ? "紧凑网格" : "较大照片")").font(.title3.weight(.semibold))
+                Text("\(hits.count) 张候选照片 · \(compact ? "五列网格" : "较大照片")").font(.title3.weight(.semibold))
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)

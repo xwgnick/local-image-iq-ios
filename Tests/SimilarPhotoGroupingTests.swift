@@ -93,7 +93,7 @@ final class SimilarPhotoGroupingTests: XCTestCase {
     }
 
     func testPolicyInclusiveEndpointsFiniteValuesAndProgressFraction() throws {
-        XCTAssertEqual(SimilarPhotoGroupingPolicy.defaultThreshold, 0.90)
+        XCTAssertEqual(SimilarPhotoGroupingPolicy.defaultThreshold, 0.95)
         XCTAssertEqual(SimilarPhotoGroupingPolicy.thresholdRange, Float(0.50)...Float(0.99))
         let valid: [Float] = [0.50, 0.75, 0.90, 0.96, 0.99]
         for value in valid { XCTAssertNoThrow(try SimilarPhotoGroupingPolicy.validate(threshold: value)) }
@@ -123,10 +123,10 @@ final class SimilarPhotoGroupingTests: XCTestCase {
             XCTAssertEqual((Double(threshold) * 100).rounded(), tick)
         }
         let defaultTick = (Double(SimilarPhotoGroupingPolicy.defaultThreshold) * 100).rounded()
-        XCTAssertEqual(defaultTick, 90)
+        XCTAssertEqual(defaultTick, 95)
         XCTAssertEqual(Float(defaultTick) / 100, SimilarPhotoGroupingPolicy.defaultThreshold)
         let position = (defaultTick - ticks.lowerBound) / (ticks.upperBound - ticks.lowerBound)
-        XCTAssertEqual(position, 40.0 / 49.0, accuracy: 0.000000000001)
+        XCTAssertEqual(position, 45.0 / 49.0, accuracy: 0.000000000001)
     }
 
     func testCosinePointEightIsAbsentAtPointNineAndPresentAtPointSevenFive() async throws {

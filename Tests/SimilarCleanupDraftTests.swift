@@ -12,7 +12,7 @@ final class SimilarCleanupDraftTests: XCTestCase {
     func testInitialDraftUsesPolicyDefaultWithoutWorkOrPreferenceWrite() async throws {
         let defaults = try preferences()
         let f = fixture(preferences: defaults)
-        XCTAssertEqual(f.state.threshold, 0.90)
+        XCTAssertEqual(f.state.threshold, 0.95)
         XCTAssertEqual(f.state.draftThreshold, SimilarPhotoGroupingPolicy.defaultThreshold)
         XCTAssertNil(f.state.resultThreshold)
         XCTAssertFalse(f.state.hasPendingThresholdChange)

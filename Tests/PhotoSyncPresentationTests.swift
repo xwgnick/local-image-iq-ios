@@ -5,11 +5,155 @@ import Combine
 import ImageIQCore
 @testable import LocalImageIQ
 
-/// Four native presentation tests. Counters come through PhotoSyncServicing,
+/// Native presentation tests. Counters come through PhotoSyncServicing,
 /// never private-set assignment or AppState.start(). Gates always drain in
 /// teardown. Captures are actual UIKit UIImages, not generated screen artwork.
 @MainActor
 final class PhotoSyncPresentationTests: XCTestCase {
+    func testV5ExactCompactLabelAndRealRingPixelsChangeWithoutMovingViewportOrTextBaseline() async throws {
+        let run = PresentationSyncRun(initial: PhotoSyncProgress(phase: .updating, total: 38,
+            completed: 12, encoded: 10, failed: 1, needsNetwork: 1))
+        let (state, service) = makeSync([run])
+        let host = try ControlsNativeHost(content: AnyView(SyncCardFixture(state: state)))
+        defer { host.close() }
+        state.updateAvailability(ready: true, networkAllowed: false)
+        try await reached(run.entered)
+        try await host.wait { host.sync[.progress] != nil }
+        XCTAssertEqual(PhotoSyncToast(state: state).compactTitle, "同步最新照片12/38")
+        XCTAssertEqual(PhotoSyncToast(state: state).fraction, Double(12) / 38)
+        try assertCardGeometry(host, cancel: true)
+        let card = try XCTUnwrap(host.sync[.card])
+        let text = try XCTUnwrap(host.sync[.text])
+        let reservation = try XCTUnwrap(host.sync[.reservation])
+        XCTAssertEqual(card.width, 224, accuracy: host.pixel)
+        XCTAssertEqual(card.height, 44, accuracy: host.pixel)
+        XCTAssertEqual(reservation.height, 52, accuracy: host.pixel)
+        let scroll = try host.overviewScroll()
+        let usable = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: host.window)
+        let initialRing = try ringPixels(host)
+        try host.attach(to: self, name: "UIReview-sync-capsule-v1")
+
+        await service.report(PhotoSyncProgress(phase: .updating, total: 38,
+            completed: 19, encoded: 17, failed: 1, needsNetwork: 1))
+        try await host.settle()
+        XCTAssertEqual(PhotoSyncToast(state: state).compactTitle, "同步最新照片19/38")
+        XCTAssertEqual(PhotoSyncToast(state: state).fraction, 0.5)
+        XCTAssertEqual(host.sync[.card], card)
+        XCTAssertEqual(host.sync[.text], text, "Monospaced counts must not move or animate the text baseline")
+        XCTAssertEqual(host.sync[.reservation], reservation)
+        XCTAssertEqual(scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: host.window), usable)
+        XCTAssertNotEqual(try ringPixels(host), initialRing,
+                          "Native pixels cropped to the ring, not changed counter text or a fake bar")
+        let calls = await service.calls
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testCoveredCapsuleKeepsBlankReservationWithoutControlsAndDoesNotCancelOrRetryFailure() async throws {
+        let run = PresentationSyncRun(initial: PhotoSyncProgress(phase: .updating, total: 38, completed: 12),
+                                      outcome: .failure)
+        let (state, service) = makeSync([run])
+        let visibility = SyncVisibilityControl()
+        let host = try ControlsNativeHost(content: AnyView(SyncVisibilityFixture(state: state, visibility: visibility)))
+        defer { host.close() }
+        state.updateAvailability(ready: true, networkAllowed: false)
+        try await reached(run.entered)
+        try await host.wait { host.sync[.card] != nil }
+        let reservation = try XCTUnwrap(host.sync[.reservation])
+        let tab = try XCTUnwrap(host.tabs[.search])
+        visibility.isPresented = false
+        try await host.wait { host.sync[.card] == nil }
+        XCTAssertEqual(host.sync[.reservation], reservation)
+        XCTAssertEqual(host.tabs[.search], tab)
+        XCTAssertNil(host.sync[.mainAction])
+        XCTAssertNil(host.sync[.action])
+        XCTAssertNil(host.sync[.text])
+        XCTAssertNil(host.sync[.progress])
+        XCTAssertTrue(state.canCancel)
+        XCTAssertEqual(state.phase, .updating, "Covering the capsule is not cancelling the task")
+        run.release.open()
+        await state.waitUntilIdle()
+        try await host.settle()
+        XCTAssertEqual(state.phase, .failed, "A real covered failure is not disguised as user cancellation")
+        XCTAssertNil(host.sync[.card])
+        visibility.isPresented = true
+        try await host.wait { host.sync[.card] != nil }
+        try assertCardGeometry(host, cancel: false)
+        XCTAssertEqual(host.sync[.reservation], reservation)
+        XCTAssertTrue(state.canRestart)
+        let calls = await service.calls
+        XCTAssertEqual(calls, 1, "Showing details/capsule never automatically retries a failure")
+    }
+
+    func testDetailMountAndDismissDoNotStopWorkAndCancellationStillWaitsForDrain() async throws {
+        let run = PresentationSyncRun(initial: PhotoSyncProgress(phase: .updating, total: 38, completed: 12, encoded: 12))
+        let (state, service) = makeSync([run])
+        state.updateAvailability(ready: true, networkAllowed: false)
+        try await reached(run.entered)
+        let host = try ControlsNativeHost(content: AnyView(PhotoSyncDetailSheet(state: state)))
+        defer { host.close() }
+        try await host.wait { !controlsDescendants(host.controller.view, UIScrollView.self).isEmpty }
+        host.close() // Actual native detail view unmount, not a worker pause.
+        await service.report(PhotoSyncProgress(phase: .updating, total: 38, completed: 13, encoded: 13))
+        XCTAssertEqual(state.phase, .updating)
+        XCTAssertEqual(state.progress.completed, 13)
+        XCTAssertTrue(state.canCancel)
+        state.cancel()
+        XCTAssertEqual(state.phase, .cancelling)
+        XCTAssertFalse(state.canCancel)
+        XCTAssertFalse(state.canRestart)
+        await service.report(PhotoSyncProgress(phase: .updating, total: 38, completed: 14, encoded: 14))
+        XCTAssertEqual(state.phase, .cancelling, "A late actual commit cannot report that draining has finished")
+        XCTAssertEqual(state.progress.encoded, 14)
+        run.release.open()
+        await state.waitUntilIdle()
+        XCTAssertEqual(state.phase, .cancelled)
+        XCTAssertTrue(state.canRestart)
+        XCTAssertEqual(state.progress.encoded, 14)
+        let calls = await service.calls
+        XCTAssertEqual(calls, 1)
+        // This tests mounted detail lifecycle + real service drain. Actual
+        // SwiftUI button taps/sheet gestures remain separate XCUI coverage.
+    }
+
+    func testFullSafeFailureDiagnosticRemainsReachableInScrollableMaximumTypeDetail() async throws {
+        let diagnostic = PhotoSyncDiagnostic(stage: .encoding, code: .invalidPhotoMetadata,
+                                              metadataField: .modificationTime)
+        let progress = PhotoSyncProgress(phase: .updating, total: 38, completed: 12,
+                                         encoded: 10, removed: 3, failed: 1, needsNetwork: 1)
+        let run = PresentationSyncRun(initial: progress, outcome: .diagnostic(diagnostic))
+        let (state, service) = makeSync([run])
+        state.updateAvailability(ready: true, networkAllowed: false)
+        try await reached(run.entered)
+        run.release.open()
+        await state.waitUntilIdle()
+        XCTAssertEqual(state.phase, .failed)
+        XCTAssertEqual(state.progress, progress)
+        XCTAssertEqual(state.failureDiagnostic, diagnostic)
+        XCTAssertEqual(PhotoSyncToast(state: state).detail, diagnostic.message)
+        XCTAssertEqual(PhotoSyncDetailSheet(state: state).summary, diagnostic.message)
+        XCTAssertTrue(PhotoSyncToast(state: state).detail.contains("SS-ENCODING-PHOTO-METADATA-MTIME"))
+        let host = try ControlsNativeHost(content: AnyView(PhotoSyncDetailSheet(state: state)),
+            size: CGSize(width: 320, height: 568), dynamicType: .accessibility5)
+        defer { host.close() }
+        try await host.wait { !controlsDescendants(host.controller.view, UIScrollView.self).isEmpty }
+        _ = try host.capture() // Realize native text before measuring scroll content.
+        let scroll = try host.overviewScroll()
+        let usableHeight = scroll.bounds.height - scroll.adjustedContentInset.top - scroll.adjustedContentInset.bottom
+        XCTAssertGreaterThan(scroll.contentSize.height, usableHeight)
+        try host.attach(to: self, name: "UIReview-sync-capsule-v1-full-diagnostic-detail-top")
+        let before = scroll.contentOffset
+        scroll.setContentOffset(CGPoint(x: before.x,
+            y: scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom), animated: false)
+        try await host.settle()
+        XCTAssertGreaterThan(scroll.contentOffset.y, before.y)
+        XCTAssertEqual(scroll.contentOffset.y + scroll.bounds.height - scroll.adjustedContentInset.bottom,
+                       scroll.contentSize.height, accuracy: host.pixel)
+        try host.attach(to: self, name: "UIReview-sync-capsule-v1-full-diagnostic-detail-bottom")
+        XCTAssertTrue(state.canRestart)
+        let calls = await service.calls
+        XCTAssertEqual(calls, 1)
+    }
+
     func testSmallWorkingAndCancelledCardObservesSubstateAndReservesBottomSpace() async throws {
         let run = PresentationSyncRun(initial: PhotoSyncProgress(phase: .updating, total: 8,
             completed: 2, encoded: 2, removed: 3))
@@ -18,18 +162,28 @@ final class PhotoSyncPresentationTests: XCTestCase {
                                          size: CGSize(width: 320, height: 568))
         defer { host.close() }
         try await host.wait { !host.tabs.isEmpty }
-        XCTAssertTrue(host.sync.isEmpty, "The non-observing parent mounts an initially idle child")
+        XCTAssertNil(host.sync[.card], "The non-observing parent mounts an initially idle child")
+        let idleReservation = try XCTUnwrap(host.sync[.reservation])
+        XCTAssertEqual(idleReservation.height, 52, accuracy: host.pixel)
+        XCTAssertNil(host.sync[.mainAction])
+        XCTAssertNil(host.sync[.action])
+        let idleTab = try XCTUnwrap(host.tabs[.search])
+        let scroll = try host.overviewScroll()
+        let idleUsable = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: host.window)
         state.updateAvailability(ready: true, networkAllowed: false)
         try await reached(run.entered)
         try await host.wait { host.sync[.progress] != nil }
         XCTAssertEqual(PhotoSyncToast(state: state).fraction, 0.25)
-        XCTAssertEqual(try XCTUnwrap(host.sync[.fill]).width,
-                   try XCTUnwrap(host.sync[.progress]).width * 0.25, accuracy: host.pixel)
         XCTAssertEqual(PhotoSyncToast(state: state).title, "正在同步照片")
+        XCTAssertEqual(PhotoSyncToast(state: state).compactTitle, "同步最新照片2/8")
         XCTAssertEqual(state.progress.removed, 3)
         try assertCardGeometry(host, cancel: true)
-        let scroll = try host.overviewScroll()
+        XCTAssertEqual(try XCTUnwrap(host.sync[.card]).width, 224, accuracy: host.pixel)
+        XCTAssertEqual(try XCTUnwrap(host.sync[.card]).height, 44, accuracy: host.pixel)
+        XCTAssertEqual(host.sync[.reservation], idleReservation)
+        XCTAssertEqual(host.tabs[.search], idleTab)
         let usable = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: host.window)
+        XCTAssertEqual(usable, idleUsable, "Starting sync must not change the photo viewport")
         XCTAssertLessThanOrEqual(usable.maxY, try XCTUnwrap(host.sync[.card]).minY + host.pixel)
         let start = scroll.contentOffset
         scroll.setContentOffset(CGPoint(x: start.x,
@@ -39,7 +193,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertEqual(scroll.contentOffset.x, start.x, accuracy: host.pixel)
         XCTAssertEqual(scroll.contentOffset.y + scroll.bounds.height - scroll.adjustedContentInset.bottom,
                        scroll.contentSize.height, accuracy: host.pixel)
-        try host.attach(to: self, name: "UIReview-photo-sync-v2-working-small")
+        try host.attach(to: self, name: "UIReview-sync-capsule-v1-working-small")
 
         state.cancel()
         try await host.wait { host.sync[.progress] == nil }
@@ -56,7 +210,9 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertNil(host.sync[.progress])
         XCTAssertTrue(state.canRestart)
         try assertCardGeometry(host, cancel: false)
-        try host.attach(to: self, name: "UIReview-photo-sync-v2-cancelled-small")
+        XCTAssertEqual(host.sync[.reservation], idleReservation)
+        XCTAssertEqual(host.tabs[.search], idleTab)
+        try host.attach(to: self, name: "UIReview-sync-capsule-v1-cancelled-small")
     }
 
     func testUnknownTotalsMaximumTypeAndExplicitRestartUseOnlyBackendProgress() async throws {
@@ -66,12 +222,17 @@ final class PhotoSyncPresentationTests: XCTestCase {
         let host = try ControlsNativeHost(content: AnyView(SyncCardFixture(state: state)),
             size: CGSize(width: 320, height: 852), dynamicType: .accessibility5)
         defer { host.close() }
+        try await host.wait { host.sync[.reservation] != nil }
+        let idleReservation = try XCTUnwrap(host.sync[.reservation])
         state.updateAvailability(ready: true, networkAllowed: false)
         try await reached(first.entered)
         try await host.wait { host.sync[.card] != nil }
         XCTAssertEqual(PhotoSyncToast(state: state).title, "正在检查照片")
         XCTAssertNil(host.sync[.progress])
         try assertCardGeometry(host, cancel: true)
+        XCTAssertEqual(host.sync[.reservation], idleReservation)
+        XCTAssertGreaterThan(try XCTUnwrap(host.sync[.card]).height, 44)
+        XCTAssertEqual(try XCTUnwrap(host.sync[.card]).width, 312, accuracy: host.pixel)
         await service.report(PhotoSyncProgress(phase: .updating, total: nil, completed: 0))
         try await host.settle()
         XCTAssertNil(PhotoSyncToast(state: state).fraction)
@@ -79,8 +240,13 @@ final class PhotoSyncPresentationTests: XCTestCase {
         await service.report(PhotoSyncProgress(phase: .updating, total: 8, completed: 3, encoded: 3))
         try await host.wait { host.sync[.progress] != nil }
         XCTAssertEqual(PhotoSyncToast(state: state).fraction, 0.375)
-        XCTAssertEqual(try XCTUnwrap(host.sync[.fill]).width,
-                   try XCTUnwrap(host.sync[.progress]).width * 0.375, accuracy: host.pixel)
+        try assertCardGeometry(host, cancel: true)
+        XCTAssertEqual(host.sync[.reservation], idleReservation)
+        await service.report(PhotoSyncProgress(phase: .updating, total: 38, completed: 12, encoded: 12))
+        try await host.settle()
+        XCTAssertEqual(PhotoSyncToast(state: state).compactTitle, "同步最新照片12/38")
+        try assertCardGeometry(host, cancel: true)
+        XCTAssertEqual(host.sync[.reservation], idleReservation)
         state.cancel()
         first.release.open()
         await state.waitUntilIdle()
@@ -101,6 +267,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertEqual(state.progress.total, 4)
         XCTAssertEqual(state.progress.completed, 0)
         XCTAssertEqual(PhotoSyncToast(state: state).fraction, 0)
+        XCTAssertEqual(host.sync[.reservation], idleReservation)
     }
 
     func testCompletedAutoHideAndPartialOrFailedStatesNeverShowFakeFullProgress() async throws {
@@ -114,6 +281,9 @@ final class PhotoSyncPresentationTests: XCTestCase {
             let (state, _) = makeSync([run], delay: delay, delayEntered: delayEntered)
             let host = try ControlsNativeHost(content: AnyView(SyncCardFixture(state: state)))
             defer { host.close() }
+            try await host.wait { host.sync[.reservation] != nil }
+            let idleReservation = try XCTUnwrap(host.sync[.reservation])
+            let idleTab = try XCTUnwrap(host.tabs[.search])
             state.updateAvailability(ready: true, networkAllowed: false)
             try await reached(run.entered)
             run.release.open()
@@ -122,18 +292,27 @@ final class PhotoSyncPresentationTests: XCTestCase {
             XCTAssertEqual(state.phase, expected)
             XCTAssertNil(PhotoSyncToast(state: state).fraction)
             XCTAssertNil(host.sync[.progress])
+            XCTAssertEqual(host.sync[.reservation], idleReservation)
+            XCTAssertEqual(host.tabs[.search], idleTab)
+            XCTAssertNotNil(host.sync[.mainAction], "Completion and failure still open real details")
             if expected == .completed {
                 XCTAssertEqual(PhotoSyncToast(state: state).title, "照片已同步")
+                XCTAssertEqual(PhotoSyncDetailSheet(state: state).summary, "本次已写入8张照片索引，移除2条失效索引。")
                 XCTAssertNil(host.sync[.action])
                 try await reached(delayEntered)
                 delay.open()
                 try await host.wait { !state.visible && host.sync[.card] == nil }
+                XCTAssertEqual(host.sync[.reservation], idleReservation)
+                XCTAssertEqual(host.tabs[.search], idleTab)
+                XCTAssertNil(host.sync[.mainAction])
             } else {
-                XCTAssertNotNil(host.sync[.action])
+                XCTAssertNil(host.sync[.action], "Retry is explicit inside details, not a capsule tap")
                 XCTAssertTrue(state.canRestart)
                 XCTAssertTrue(state.visible)
                 if expected == .needsAttention {
                     XCTAssertEqual(PhotoSyncToast(state: state).title, "部分照片需要联网")
+                    XCTAssertEqual(PhotoSyncDetailSheet(state: state).summary,
+                                   "本次已写入6张照片索引，1张需联网，1张处理失败。可手动重新同步。")
                 } else {
                     XCTAssertEqual(PhotoSyncToast(state: state).title, "照片同步未完成")
                 }
@@ -180,6 +359,11 @@ final class PhotoSyncPresentationTests: XCTestCase {
         try await host.wait { host.hasRootBottomFrame(.selectionToolbar) }
         let beforeToast = try host.rootSelectionToolbarFrame()
         let beforePreference = host.sync[.selectionToolbar]
+        let idleReservation = try host.rootBottomFrame(.syncToast)
+        XCTAssertEqual(idleReservation.height, 52, accuracy: host.pixel)
+        XCTAssertNil(host.sync[.card])
+        XCTAssertNil(host.sync[.mainAction])
+        try host.attachRootSyncWindow(to: self, name: "UIReview-sync-capsule-v1-empty-reserved-root")
         // Explicit fake-sync opt-in; refresh alone does not simulate a successful
         // real cold launch or grant the actual Photos client access.
         f.app.photoSync.updateAvailability(ready: true, networkAllowed: false)
@@ -207,11 +391,13 @@ final class PhotoSyncPresentationTests: XCTestCase {
         Settled window=\(host.window.bounds); native toolbar=\(toolbar)
         Native toast envelope=\(card); native navigation=\(navigation); native search usable=\(usable)
         SwiftUI preferences (not used for root non-overlap): \(host.sync)
-        Toast envelope includes side/bottom padding, but its minY is the actual card minY.
+        Toast envelope is the stable 52pt reservation; the 44pt capsule is inset 4pt vertically.
         """)
-        measurements.name = "Geometry-photo-sync-v2-production-root-selection"
+        measurements.name = "Geometry-sync-capsule-v1-production-root-selection"
         measurements.lifetime = .keepAlways
         add(measurements)
+        XCTAssertEqual(card, idleReservation)
+        XCTAssertEqual(toolbar, beforeToast, "Working sync must not move the selection toolbar or photos")
         XCTAssertLessThanOrEqual(toolbar.maxY, card.minY + host.pixel,
                                  "The actual selection toolbar must finish above the actual sync card")
         XCTAssertLessThanOrEqual(usable.maxY, toolbar.minY + host.pixel)
@@ -299,8 +485,11 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertNil(f.cleanup.pendingDeletion)
         try await host.wait {
             host.controller.presentedViewController != nil && host.sync[.card] == nil
-                && !host.hasRootBottomFrame(.syncToast)
+                && host.hasRootBottomFrame(.syncToast)
         }
+        XCTAssertEqual(try host.rootBottomFrame(.syncToast).height, 52, accuracy: host.pixel)
+        XCTAssertNil(host.sync[.mainAction])
+        XCTAssertNil(host.sync[.action])
         let anchors = controlsDescendants(host.controller.view, PrimaryPageAccessibilityAnchorView.self)
         XCTAssertTrue(anchors.contains { $0.owningNavigationController?.view.accessibilityElementsHidden == true })
         XCTAssertFalse(host.window.accessibilityElementsHidden)
@@ -332,7 +521,10 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(returnedToolbar.maxY, try host.rootBottomFrame(.syncToast).minY + host.pixel)
         try host.assertRootActionRegionsRouteOutsideScroll(in: returnedToolbar, excluding: searchScroll)
         NotificationCenter.default.post(name: UIResponder.keyboardWillShowNotification, object: nil)
-        try await host.wait { host.sync[.card] == nil && !host.hasRootBottomFrame(.syncToast) }
+        try await host.wait { host.sync[.card] == nil && host.hasRootBottomFrame(.syncToast) }
+        XCTAssertEqual(try host.rootBottomFrame(.syncToast).height, 52, accuracy: host.pixel)
+        XCTAssertNil(host.sync[.mainAction])
+        XCTAssertNil(host.sync[.action])
         XCTAssertFalse(host.tabs.isEmpty, "Only hide the card, not the existing keyboard/navigation layout")
         XCTAssertTrue(host.hasRootBottomFrame(.selectionToolbar))
         XCTAssertTrue(host.hasRootBottomFrame(.navigation))
@@ -348,6 +540,20 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertEqual(calls, 1)
         // Public notification + native scope evidence, not a real keyboard tap
         // or proof of strict XCUI accessibility identifier absence.
+    }
+
+    private func ringPixels(_ host: ControlsNativeHost) throws -> Data {
+        let globalFrame = try XCTUnwrap(host.sync[.progress])
+        let localFrame = host.controller.view.convert(globalFrame, from: host.window)
+        let image = try host.capture()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = host.window.screen.scale
+        format.opaque = true
+        format.preferredRange = .standard
+        let cropped = UIGraphicsImageRenderer(size: localFrame.size, format: format).image { _ in
+            image.draw(at: CGPoint(x: -localFrame.minX, y: -localFrame.minY))
+        }
+        return try XCTUnwrap(cropped.cgImage?.dataProvider?.data) as Data
     }
 
     private func makeSync(_ runs: [PresentationSyncRun], delay: PresentationSyncGate = PresentationSyncGate(),
@@ -375,26 +581,42 @@ final class PhotoSyncPresentationTests: XCTestCase {
     private func assertCardGeometry(_ host: ControlsNativeHost, cancel: Bool) throws {
         let card = try XCTUnwrap(host.sync[.card])
         let text = try XCTUnwrap(host.sync[.text])
-        let action = try XCTUnwrap(host.sync[.action])
+        let main = try XCTUnwrap(host.sync[.mainAction])
+        let reservation = try XCTUnwrap(host.sync[.reservation])
         let tab = try XCTUnwrap(host.tabs[.search])
         XCTAssertGreaterThanOrEqual(card.minX, 0)
         XCTAssertLessThanOrEqual(card.maxX, host.window.bounds.width + host.pixel)
         XCTAssertGreaterThanOrEqual(card.minY, 0)
-        XCTAssertLessThanOrEqual(card.maxY + 11, tab.minY + host.pixel)
+        XCTAssertEqual(reservation.height, card.height + 8, accuracy: host.pixel)
+        XCTAssertEqual(card.minY, reservation.minY + 4, accuracy: host.pixel)
+        XCTAssertLessThanOrEqual(reservation.maxY, tab.minY + host.pixel)
         XCTAssertGreaterThan(text.width, 0)
-        XCTAssertLessThanOrEqual(text.maxX, action.minX)
+        XCTAssertGreaterThanOrEqual(text.minY + host.pixel, card.minY)
+        XCTAssertLessThanOrEqual(text.maxX, main.maxX + host.pixel)
         XCTAssertLessThanOrEqual(text.maxY, card.maxY + host.pixel)
-        XCTAssertLessThanOrEqual(action.maxX, card.maxX + host.pixel)
-        XCTAssertGreaterThanOrEqual(action.height, 44)
-        XCTAssertGreaterThanOrEqual(action.width, 44)
+        XCTAssertGreaterThanOrEqual(main.width, 44)
+        XCTAssertGreaterThanOrEqual(main.height, 44)
         if cancel {
+            let action = try XCTUnwrap(host.sync[.action])
+            XCTAssertLessThanOrEqual(main.maxX, action.minX + host.pixel)
+            XCTAssertLessThanOrEqual(action.maxX, card.maxX + host.pixel)
+            XCTAssertGreaterThanOrEqual(action.minY + host.pixel, card.minY)
+            XCTAssertLessThanOrEqual(action.maxY, card.maxY + host.pixel)
             XCTAssertEqual(action.width, 44, accuracy: host.pixel)
             XCTAssertEqual(action.height, 44, accuracy: host.pixel)
+        } else {
+            XCTAssertNil(host.sync[.action], "Stopped/failure main action opens details, never an automatic retry")
         }
         if let progress = host.sync[.progress] {
-            XCTAssertEqual(progress.height, 3, accuracy: host.pixel)
-            XCTAssertGreaterThanOrEqual(progress.minY + host.pixel, text.maxY)
-            XCTAssertLessThanOrEqual(progress.maxX, card.maxX + host.pixel)
+            XCTAssertEqual(progress.height, 14, accuracy: host.pixel)
+            XCTAssertEqual(progress.width, 14, accuracy: host.pixel)
+            XCTAssertLessThanOrEqual(progress.maxX, text.minX + host.pixel)
+            XCTAssertEqual(progress.midY, card.midY, accuracy: host.pixel)
+            let arc = try XCTUnwrap(host.sync[.fill])
+            XCTAssertEqual(arc.width, 12, accuracy: host.pixel)
+            XCTAssertEqual(arc.height, 12, accuracy: host.pixel)
+            XCTAssertEqual(arc.midX, progress.midX, accuracy: host.pixel)
+            XCTAssertEqual(arc.midY, progress.midY, accuracy: host.pixel)
         }
     }
 }
@@ -461,7 +683,8 @@ private extension ControlsNativeHost {
         }
     }
 
-    func attachRootSyncWindow(to test: XCTestCase) throws {
+    func attachRootSyncWindow(to test: XCTestCase,
+                              name: String = "UIReview-sync-capsule-v1-production-root-selection-working") throws {
         layout()
         let format = UIGraphicsImageRendererFormat()
         format.scale = window.screen.scale
@@ -474,17 +697,18 @@ private extension ControlsNativeHost {
         }
         guard drawn else { XCTFail("Root UIWindow capture failed"); throw ControlsPresentationFailure.drawing }
         let attachment = XCTAttachment(image: image)
-        attachment.name = "UIReview-photo-sync-v2-production-root-selection-working"
+        attachment.name = name
         attachment.lifetime = .keepAlways
         test.add(attachment)
     }
 }
 
 /// Deliberately NOT @ObservedObject. Only the real PhotoSyncToast subscribes;
-/// its changing layout must reach the outer safe-area inset on its own.
+/// its publications update the capsule without changing the reserved viewport.
 @MainActor
 private struct SyncCardFixture: View {
     let state: PhotoSyncState
+    var isPresented = true
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -497,15 +721,27 @@ private struct SyncCardFixture: View {
         .background(IQStyle.background).foregroundStyle(IQStyle.text)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                PhotoSyncToast(state: state)
+                PhotoSyncToast(state: state, isPresented: isPresented)
                 PrimaryNavigationBar(page: .search, switchingDisabled: false) { _ in }
             }
         }
     }
 }
 
+@MainActor
+private final class SyncVisibilityControl: ObservableObject {
+    @Published var isPresented = true
+}
+
+@MainActor
+private struct SyncVisibilityFixture: View {
+    let state: PhotoSyncState
+    @ObservedObject var visibility: SyncVisibilityControl
+    var body: some View { SyncCardFixture(state: state, isPresented: visibility.isPresented) }
+}
+
 private final class PresentationSyncRun: @unchecked Sendable {
-    enum Outcome: Sendable { case success(PhotoSyncProgress), failure }
+    enum Outcome: Sendable { case success(PhotoSyncProgress), failure, diagnostic(PhotoSyncDiagnostic) }
     let initial: PhotoSyncProgress
     let outcome: Outcome
     let entered = XCTestExpectation(description: "Fake sync reported progress and is held")
@@ -541,6 +777,7 @@ private actor PresentationSyncService: PhotoSyncServicing {
         case .success(let value):
             return PhotoSyncResult(summary: LibrarySummary(indexedCount: value.encoded, modelVersion: "TEST-controls"), progress: value)
         case .failure: throw ControlsPresentationFailure.unexpectedWork
+        case .diagnostic(let diagnostic): throw diagnostic
         }
     }
     func report(_ value: PhotoSyncProgress) async { await progressCallback?(value) }

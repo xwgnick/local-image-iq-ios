@@ -15,8 +15,8 @@ struct PhotoResultsGrid<Thumbnail: View>: View {
     var selectedIDs: Set<String> = []
     @ViewBuilder let thumbnail: (IndexedPhoto) -> Thumbnail
 
-        init(hits: [SearchHit], compact: Bool, onSelect: @escaping (String) -> Void,
-            selectionMode: Bool = false, selectedIDs: Set<String> = [],
+    init(hits: [SearchHit], compact: Bool = true, onSelect: @escaping (String) -> Void,
+         selectionMode: Bool = false, selectedIDs: Set<String> = [],
          @ViewBuilder thumbnail: @escaping (IndexedPhoto) -> Thumbnail) {
         self.hits = hits
         self.compact = compact
@@ -26,10 +26,10 @@ struct PhotoResultsGrid<Thumbnail: View>: View {
         self.thumbnail = thumbnail
     }
 
-    private var spacing: CGFloat { compact ? 4 : 6 }
+    private var spacing: CGFloat { compact ? 3 : 6 }
 
     var body: some View {
-        LazyVGrid(columns: columns(count: compact ? 3 : 2), spacing: spacing) {
+        LazyVGrid(columns: columns(count: compact ? 5 : 2), spacing: spacing) {
             ForEach(Array(hits.enumerated()), id: \.element.id) { offset, hit in
                 tile(hit, rank: offset + 1, aspectRatio: compact ? 1 : 4.0 / 5.0)
             }
@@ -61,10 +61,12 @@ struct PhotoResultsGrid<Thumbnail: View>: View {
                 .overlay(alignment: .topTrailing) {
                     if selectionMode {
                         Image(systemName: selectedIDs.contains(hit.id) ? "checkmark.circle.fill" : "circle")
-                            .font(.title2.weight(.semibold))
+                            .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(selectedIDs.contains(hit.id) ? IQStyle.accent : .white)
                             .background(.black.opacity(0.6), in: Circle())
-                            .padding(8)
+                            .frame(width: 44, height: 44)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
                     }
                 }
                 .contentShape(shape)
@@ -103,13 +105,14 @@ struct PhotoResultsViewer: View {
 }
 
 /// Also backs the single-photo compatibility wrapper without manufacturing an
-/// IndexedPhoto. Only the selected page owns a full-size display-image request.
+/// IndexedPhoto. Only the selected page owns an HQ224 display-image request.
 @MainActor
 struct PhotoGalleryViewer: View {
     let ids: [String]
     let library: PhotoLibraryClient
     let networkAllowed: Bool
     let state: AppState?
+    private let imageSource: PhotoViewerImageSource
 
     private struct Request: Hashable {
         let id: String
@@ -119,7 +122,7 @@ struct PhotoGalleryViewer: View {
 
     private struct LoadedPhoto {
         let request: Request
-        let image: UIImage
+        let photo: PhotoViewerImage
     }
 
     private struct FailedPhoto {
@@ -129,7 +132,7 @@ struct PhotoGalleryViewer: View {
 
     private struct ShareItem: Identifiable {
         let id = UUID()
-        let photoID: String
+        let snapshot: PhotoViewerSnapshot
         let image: UIImage
     }
 
@@ -147,6 +150,8 @@ struct PhotoGalleryViewer: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedID: String
     @State private var attempt = 0
+    @State private var imageTask: Task<Void, Never>?
+    @State private var loadToken = UUID()
     @State private var loadedPhoto: LoadedPhoto?
     @State private var failedPhoto: FailedPhoto?
     @State private var shareItem: ShareItem?
@@ -155,11 +160,12 @@ struct PhotoGalleryViewer: View {
     @State private var previewComparisonSelection: PreviewComparisonSelection?
 
     init(ids: [String], initialID: String, library: PhotoLibraryClient,
-         networkAllowed: Bool, state: AppState? = nil) {
+         networkAllowed: Bool, state: AppState? = nil, imageSource: PhotoViewerImageSource? = nil) {
         self.ids = ids
         self.library = library
         self.networkAllowed = networkAllowed
         self.state = state
+        self.imageSource = imageSource ?? PhotoViewerImageSource(library: library)
         _selectedID = State(initialValue: ids.contains(initialID) ? initialID : (ids.first ?? ""))
     }
 
@@ -182,7 +188,7 @@ struct PhotoGalleryViewer: View {
     // starts or the previous PhotoKit callback observes its cancellation.
     private var currentImage: UIImage? {
         guard ids.contains(selectedID), let loadedPhoto, loadedPhoto.request == request else { return nil }
-        return loadedPhoto.image
+        return loadedPhoto.photo.result.image
     }
 
     var body: some View {
@@ -207,7 +213,7 @@ struct PhotoGalleryViewer: View {
         .preferredColorScheme(.dark)
         .tint(IQStyle.accent)
         .statusBarHidden()
-        .task(id: request) { await load(request) }
+        .task(id: request) { await startLoad(request) }
         .onReceive(state?.$debugToolsEnabled.eraseToAnyPublisher() ?? Just(false).eraseToAnyPublisher()) { enabled in
             // A rebuilt subscription can replay the same value. Do not clear
             // AppState's published diagnostics again on a replay of user mode.
@@ -227,13 +233,22 @@ struct PhotoGalleryViewer: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { recheckAccess() } else { clearPhotoCheck() }
+            if phase == .active {
+                recheckAccess()
+                if loadedPhoto == nil, failedPhoto == nil, imageTask == nil { attempt += 1 }
+            } else {
+                clearPhotoCheck()
+                if phase == .background { cancelDisplay() }
+            }
         }
-        .onDisappear { clearPhotoCheck() }
+        .onReceive(state?.$photoLibraryEpoch.eraseToAnyPublisher() ?? Empty<UUID, Never>().eraseToAnyPublisher()) { _ in
+            recheckAccess()
+        }
+        .onDisappear { cancelDisplay(clearShare: false); clearPhotoCheck() }
         .sheet(item: $shareItem) { item in
             // The sheet uses an immutable snapshot, never whichever UIImage
             // happens to finish loading after the Share button was pressed.
-            if item.photoID == selectedID, library.currentRevision(id: item.photoID) != nil {
+            if item.snapshot.revision.id.utf8.elementsEqual(selectedID.utf8), isCurrent(item.snapshot) {
                 PhotoShareSheet(image: item.image)
             } else {
                 ContentUnavailableView("照片访问权限已更改", systemImage: "lock",
@@ -254,7 +269,7 @@ struct PhotoGalleryViewer: View {
 
     private var topBar: some View {
         HStack {
-            Button { clearPhotoCheck(); dismiss() } label: {
+            Button { cancelDisplay(); clearPhotoCheck(); dismiss() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(IQStyle.text)
@@ -288,6 +303,7 @@ struct PhotoGalleryViewer: View {
                     if let state {
                         Button {
                             let id = selectedID
+                            cancelDisplay()
                             dismiss()
                             state.searchSimilar(to: id)
                         } label: {
@@ -305,6 +321,7 @@ struct PhotoGalleryViewer: View {
                     if let state {
                         Button("找相似", systemImage: "rectangle.on.rectangle") {
                             let id = selectedID
+                            cancelDisplay()
                             dismiss()
                             state.searchSimilar(to: id)
                         }
@@ -454,49 +471,74 @@ struct PhotoGalleryViewer: View {
         .defaultScrollAnchor(.center)
     }
 
-    private func load(_ requested: Request) async {
+    private func startLoad(_ requested: Request) async {
         guard !Task.isCancelled, request == requested else { return }
+        imageTask?.cancel()
+        let token = UUID()
+        loadToken = token
+        let task = Task { @MainActor in await load(requested, token: token) }
+        imageTask = task
+        await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
+        if loadToken == token { imageTask = nil }
+    }
+
+    private func cancelDisplay(clearShare: Bool = true) {
+        loadToken = UUID()
+        imageTask?.cancel()
+        imageTask = nil
+        loadedPhoto = nil
+        // A presented activity sheet can cover this view. Its immutable image
+        // remains owned by that sheet; only an explicit close/page clears it.
+        if clearShare { shareItem = nil }
+    }
+
+    private func load(_ requested: Request, token: UUID) async {
+        guard !Task.isCancelled, request == requested, loadToken == token else { return }
         loadedPhoto = nil
         failedPhoto = nil
         shareItem = nil
         guard ids.contains(requested.id) else { return }
         do {
-            guard library.currentRevision(id: requested.id) != nil else { throw AppFailure.permission }
-            let image = try await library.displayImage(id: requested.id, targetSize: PHImageManagerMaximumSize,
-                                                       networkAllowed: requested.networkAllowed)
+            let photo = try await imageSource.load(requested.id, requested.networkAllowed)
             try Task.checkCancellation()
-            guard request == requested else { return }
-            guard library.currentRevision(id: requested.id) != nil else { throw AppFailure.permission }
-            loadedPhoto = LoadedPhoto(request: requested, image: image)
+            guard request == requested, loadToken == token else { return }
+            guard photo.snapshot.revision.id.utf8.elementsEqual(requested.id.utf8) else { throw CancellationError() }
+            try imageSource.validate(photo.snapshot)
+            try Task.checkCancellation()
+            loadedPhoto = LoadedPhoto(request: requested, photo: photo)
         } catch {
-            guard !Task.isCancelled, request == requested else { return }
-            let issue: PhotoPreviewIssue = library.currentRevision(id: requested.id) == nil
-                ? .access : PhotoPreviewIssue(error: error)
+            guard !Task.isCancelled, request == requested, loadToken == token else { return }
+            let issue: PhotoPreviewIssue = error is CancellationError ? .access : PhotoPreviewIssue(error: error)
             failedPhoto = FailedPhoto(request: requested, issue: issue)
         }
     }
 
+    private func isCurrent(_ snapshot: PhotoViewerSnapshot) -> Bool {
+        do { try imageSource.validate(snapshot); return true }
+        catch { return false }
+    }
+
     private func recheckAccess() {
-        guard ids.contains(selectedID), library.currentRevision(id: selectedID) == nil else { return }
-        loadedPhoto = nil
-        shareItem = nil
+        guard let loadedPhoto, !isCurrent(loadedPhoto.photo.snapshot) else { return }
+        cancelDisplay()
         clearPhotoCheck()
         failedPhoto = FailedPhoto(request: request, issue: .access)
     }
 
     private func shareCurrentPhoto() {
-        guard let image = currentImage else { return }
-        guard library.currentRevision(id: selectedID) != nil else {
+        guard let image = currentImage, let loadedPhoto else { return }
+        let snapshot = loadedPhoto.photo.snapshot
+        guard isCurrent(snapshot) else {
             recheckAccess()
             return
         }
         let rendered = PhotoShareSheet.renderedCopy(of: image)
         // Authorization can change outside the main actor while rendering.
-        guard library.currentRevision(id: selectedID) != nil else {
+        guard isCurrent(snapshot) else {
             recheckAccess()
             return
         }
-        shareItem = ShareItem(photoID: selectedID, image: rendered)
+        shareItem = ShareItem(snapshot: snapshot, image: rendered)
     }
 }
 

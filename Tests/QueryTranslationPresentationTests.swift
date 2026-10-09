@@ -7,7 +7,7 @@ import ImageIQCore
 
 #if targetEnvironment(simulator)
 /// Five fake-only tests and exactly four native phone-size review attachments.
-/// ContentView/SettingsSheet are hosted unchanged; only a TEST watermark is added.
+/// ContentView/the pushed translation page are hosted; only a TEST watermark is added.
 /// No Apple Translation availability/session/download API, encoder, database,
 /// asset fetch, image request or network service is exercised by these fixtures.
 /// AppState still constructs its concrete Photos wrapper/default image manager
@@ -48,11 +48,11 @@ final class QueryTranslationPresentationTests: XCTestCase {
         validate()
     }
 
-    func testSettingsLanguagePackSectionSnapshotUsesOnlyInjectedAvailabilityTask() async throws {
+    func testSecondaryLanguagePackSnapshotUsesOnlyInjectedAvailabilityTask() async throws {
         let context = try await searchedContext(availability: .downloadRequired)
         XCTAssertEqual(context.state.translationAvailability, .unchecked,
                        "Search resolution does not itself publish Settings availability")
-        let checked = expectation(description: "The actual Settings .task checks the fake language pack")
+        let checked = expectation(description: "The explicit translation page checks the fake language pack")
         context.translator.nextAvailability = checked
         let validate: @MainActor () -> Void = {
             self.assertResolution(context, effective: QueryTranslationPresentationFixture.original,
@@ -64,13 +64,14 @@ final class QueryTranslationPresentationTests: XCTestCase {
             XCTAssertEqual(context.state.translationAvailability, .downloadRequired)
             XCTAssertNil(context.state.translationPreparationIssue)
         }
-        try await snapshot(SettingsSheet(state: context.state), id: "settings-language-pack", size: phone,
+        try await snapshot(NavigationStack { QueryTranslationSettingsView(state: context.state) },
+                   id: "settings-language-pack", size: phone,
                            afterLayout: { view in
             await self.fulfillment(of: [checked], timeout: 3)
             await self.settle(view)
             try await self.revealLanguagePackSection(in: view)
         }, validate: validate)
-        validate() // Settings disappearance must not trigger translation/preparation/photo work.
+        validate() // Leaving the secondary page must not trigger translation/preparation/photo work.
     }
 
     func testTranslatedContentLargeDynamicTypeSnapshot() async throws {
@@ -214,17 +215,17 @@ final class QueryTranslationPresentationTests: XCTestCase {
         validate()
     }
 
-    /// iOS 18 Form uses a UICollectionView. Scroll the real second section, not a
-    /// copied translationSection or a screenshot of a taller offscreen canvas.
+    /// iOS 18 Form uses a UICollectionView. Inspect the real secondary page's
+    /// first section, not copied controls or a taller offscreen canvas.
     /// Fail clearly if that UIKit structure changes instead of capturing the wrong section.
     private func revealLanguagePackSection(in view: UIView) async throws {
         let collection = try XCTUnwrap(descendants(of: view).compactMap { $0 as? UICollectionView }.first,
-                                       "Expected the actual Settings Form collection view on iOS 18")
-        guard collection.numberOfSections > 1, collection.numberOfItems(inSection: 1) >= 4 else {
-            XCTFail("Settings language-pack section must contain toggle, picker, availability and preparation rows")
+                                       "Expected the actual translation Form collection view on iOS 18")
+        guard collection.numberOfSections > 0, collection.numberOfItems(inSection: 0) >= 4 else {
+            XCTFail("Translation page must contain toggle, picker, availability and preparation rows")
             throw QueryTranslationPresentationFixture.HarnessFailure.missingLanguageSection
         }
-        let rows = (0..<4).map { IndexPath(item: $0, section: 1) }
+        let rows = (0..<4).map { IndexPath(item: $0, section: 0) }
         collection.scrollToItem(at: rows[0], at: .top, animated: false)
         await settle(view)
         for row in rows {

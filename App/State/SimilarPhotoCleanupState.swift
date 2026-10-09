@@ -366,6 +366,13 @@ final class SimilarPhotoCleanupState: ObservableObject {
                     try Task.checkCancellation()
                     guard self?.isCurrent(token) == true else { return }
                     switch restored {
+                    case .awaitingDeletion:
+                        // Do not compute against an enumeration which still
+                        // contains confirmed deletions, and do not self-retry.
+                        // A real Photos/index event or explicit retry rearms it.
+                        self?.needsRegroup = true
+                        self?.needsAutomaticRefreshRetry = true
+                        return
                     case .restored(let snapshot):
                         operation = .publication
                         try await self?.publish(snapshot, threshold: requestedThreshold, token: token, indexRevision: revision)
@@ -619,11 +626,17 @@ final class SimilarPhotoCleanupState: ObservableObject {
         pendingDeletion = nil
         message = nil
         isDeleting = true
-        mutationTask = Task { @MainActor [weak self, deletion = self.deletion, revisions = intent.revisions] in
+        mutationTask = Task { @MainActor [weak self, deletion = self.deletion, grouping = self.grouping,
+                          revisions = intent.revisions, baselineID = result.deletionBaselineID] in
             // Do not guard on self, cancel on UI changes, or check cancellation
             // after success. Only the service knows the actual mutation outcome.
             do {
                 try await deletion.delete(revisions: revisions)
+                // Capture was validated against this exact published session
+                // BEFORE submission. Keep mutation admission closed until the
+                // successful outcome is registered, even if a Photos callback
+                // has already cleared UI access or this controller was released.
+                await grouping.confirmedDeletion(revisions: revisions, baselineID: baselineID)
                 self?.finishDeletion(message: PhotoDeletionRecoveryNotice.success(count: revisions.count))
             } catch {
                 let text: String

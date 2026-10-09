@@ -20,7 +20,7 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         defer { host.close() }
         XCTAssertEqual(c.navigation.page, .search)
         XCTAssertFalse(c.state.textSearchEnabled)
-        XCTAssertEqual(c.cleanup.threshold, 0.90)
+        XCTAssertEqual(c.cleanup.threshold, 0.95)
         XCTAssertFalse(c.cleanup.hasScanned)
         XCTAssertTrue(c.grouping.thresholds.isEmpty)
         XCTAssertTrue(c.grouping.restores.isEmpty, "A retained hidden page must not restore on search startup")
@@ -30,8 +30,8 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         XCTAssertEqual(search.width, cleanup.width, accuracy: pixel)
         XCTAssertEqual(search.minY, cleanup.minY, accuracy: pixel)
         XCTAssertEqual(search.width + cleanup.width + 8, phone.width - 40, accuracy: pixel)
-        XCTAssertGreaterThanOrEqual(search.height, 44)
-        XCTAssertGreaterThanOrEqual(cleanup.height, 44)
+        XCTAssertEqual(search.height, 44, accuracy: pixel)
+        XCTAssertEqual(cleanup.height, 44, accuracy: pixel)
         XCTAssertTrue(host.controller.view.bounds.contains(search))
         XCTAssertTrue(host.controller.view.bounds.contains(cleanup))
         XCTAssertEqual(c.worker.searches, 0)
@@ -49,8 +49,8 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         try await settle(host)
         await c.cleanup.waitUntilIdle()
         try await settle(host)
-        XCTAssertEqual(c.grouping.restores, [Float(0.90)])
-        XCTAssertEqual(c.grouping.thresholds, [Float(0.90)])
+        XCTAssertEqual(c.grouping.restores, [Float(0.95)])
+        XCTAssertEqual(c.grouping.thresholds, [Float(0.95)])
         XCTAssertTrue(c.cleanup.hasScanned)
         XCTAssertEqual(c.cleanup.groups.map { $0.photos.count }, [4, 3])
         XCTAssertFalse(c.cleanup.needsRegroup)
@@ -85,6 +85,13 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         c.state.query = "TEST synthetic coast"
         c.state.search()
         await c.state.waitUntilIdle()
+        // Five columns can bring later pages into view on first layout. Load
+        // this finite synthetic response before capturing the retention baseline;
+        // the separate hidden-boundary test still verifies page admission.
+        while c.state.hasMoreResults, let session = c.state.resultSessionID {
+            c.state.loadMoreResults(sessionID: session, after: c.state.results.count)
+            await c.state.waitUntilIdle()
+        }
         c.state.setSelectingResults(true)
         let firstID = try XCTUnwrap(c.state.results.first?.id)
         c.state.toggleResultSelection(firstID)
@@ -141,7 +148,7 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         await c.cleanup.waitUntilIdle()
         try await settle(host)
         XCTAssertTrue(c.cleanup.hasScanned)
-        XCTAssertEqual(c.grouping.thresholds, [Float(0.90)])
+        XCTAssertEqual(c.grouping.thresholds, [Float(0.95)])
         XCTAssertEqual(c.state.results.count, 12)
         let hiddenScroll = try searchScroll(host)
         let previousBoundary = host.measurements.boundary
@@ -163,17 +170,21 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         assertNoSideEffects(c)
     }
 
-    func testPhotoTextExplanationIsRightOfUnscaledSwitchAndOptInIsManualOnly() async throws {
+    func testPhotoTextLabelInfoThenUnscaledSwitchAndOptInIsManualOnly() async throws {
         let c = try await context()
         let host = try await mountContent(c)
         defer { host.close() }
         try await requireMeasurements(host, text: true)
         let toggle = try XCTUnwrap(host.measurements.text[.toggle])
-        let explanation = try XCTUnwrap(host.measurements.text[.explanation])
+        let label = try XCTUnwrap(host.measurements.text[.label])
+        let info = try XCTUnwrap(host.measurements.text[.info])
         XCTAssertGreaterThanOrEqual(toggle.height, 44, "Native switch retains a 44-point interaction frame")
-        XCTAssertGreaterThanOrEqual(explanation.minX, toggle.maxX)
-        XCTAssertLessThanOrEqual(explanation.maxX, phone.width - 20)
-        XCTAssertLessThanOrEqual(explanation.height, 20, "The exact V3 caption fits one line at the default 393-point width")
+        XCTAssertLessThanOrEqual(label.maxX, info.minX + pixel(host))
+        XCTAssertLessThanOrEqual(info.maxX, toggle.minX + pixel(host))
+        XCTAssertEqual(info.width, 44, accuracy: pixel(host))
+        XCTAssertEqual(info.height, 44, accuracy: pixel(host))
+        XCTAssertLessThanOrEqual(toggle.maxX, phone.width - 20 + pixel(host))
+        XCTAssertLessThanOrEqual(label.height, 20, "V5 OCR label fits one line at the default 393-point width")
         let nativeSwitch = try XCTUnwrap(descendants(host.controller.view, of: UISwitch.self).first)
         XCTAssertEqual(nativeSwitch.transform, .identity, "No scaleEffect to fake a smaller touch target")
         XCTAssertGreaterThanOrEqual(nativeSwitch.bounds.width, 51)
@@ -191,18 +202,20 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         assertNoSideEffects(c)
     }
 
-    func testMaximumFontWrapsExplanationWithoutHorizontalOverflow() async throws {
+    func testMaximumFontWrapsOCRLabelBeforeInfoAndSwitchWithoutHorizontalOverflow() async throws {
         let c = try await context()
         let size = CGSize(width: 320, height: 852)
         let host = try await mountContent(c, size: size, dynamicType: .accessibility5)
         defer { host.close() }
         try await requireMeasurements(host, text: true)
         let toggle = try XCTUnwrap(host.measurements.text[.toggle])
-        let explanation = try XCTUnwrap(host.measurements.text[.explanation])
+        let label = try XCTUnwrap(host.measurements.text[.label])
+        let info = try XCTUnwrap(host.measurements.text[.info])
         XCTAssertGreaterThanOrEqual(toggle.height, 44)
-        XCTAssertGreaterThanOrEqual(explanation.minX, toggle.maxX)
-        XCTAssertGreaterThan(explanation.height, 20, "Independent caption wraps instead of scaling/truncating")
-        XCTAssertLessThanOrEqual(explanation.maxX, size.width - 20)
+        XCTAssertLessThanOrEqual(label.maxX, info.minX + pixel(host))
+        XCTAssertLessThanOrEqual(info.maxX, toggle.minX + pixel(host))
+        XCTAssertGreaterThan(label.height, 20, "The accessible-size OCR label wraps before its independent controls")
+        XCTAssertLessThanOrEqual(toggle.maxX, size.width - 20 + pixel(host))
         let scroll = try searchScroll(host)
         XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width)
         XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height)
@@ -237,7 +250,7 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         defer { host.close() }
         XCTAssertTrue(descendants(host.controller.view, of: UISlider.self).isEmpty)
         try capture(host, name: "main-navigation-settings-dark")
-        XCTAssertEqual(c.cleanup.threshold, 0.90)
+        XCTAssertEqual(c.cleanup.threshold, 0.95)
         XCTAssertEqual(c.cleanup.selectionSessionID, session)
         XCTAssertEqual(c.cleanup.groups.map(\.id), groupIDs)
         XCTAssertEqual(c.cleanup.selectedIDs, Set([selectedID]))
@@ -246,8 +259,8 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         try await settle(host)
         XCTAssertFalse(c.cleanup.needsRegroup)
         XCTAssertTrue(c.cleanup.canSelect)
-        XCTAssertEqual(c.grouping.restores, [Float(0.90)])
-        XCTAssertEqual(c.grouping.thresholds, [Float(0.90)], "Settings never computes or restores another grouping")
+        XCTAssertEqual(c.grouping.restores, [Float(0.95)])
+        XCTAssertEqual(c.grouping.thresholds, [Float(0.95)], "Settings never computes or restores another grouping")
         assertNoSideEffects(c)
     }
 
@@ -403,7 +416,8 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         // Settings/native hit-test hosts intentionally emit neither preference.
         try await requireNativeLayout(host, description: "Actual control preferences: tabs=\(tabs), text=\(text)") {
             (!tabs || (measured(host.measurements.tabs[.search]) && measured(host.measurements.tabs[.cleanup])))
-                && (!text || (measured(host.measurements.text[.toggle]) && measured(host.measurements.text[.explanation])))
+                && (!text || (measured(host.measurements.text[.toggle]) && measured(host.measurements.text[.label])
+                              && measured(host.measurements.text[.info])))
         }
     }
 
@@ -433,6 +447,8 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
     private func searchScroll(_ host: NavigationReviewHost) throws -> UIScrollView {
         try primarySearchScrollView(in: host.controller.view)
     }
+
+    private func pixel(_ host: NavigationReviewHost) -> CGFloat { 1 / host.window.screen.scale }
 
     private func capture(_ host: NavigationReviewHost, name: String) throws {
         let view = host.controller.view!

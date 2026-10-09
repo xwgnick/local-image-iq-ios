@@ -17,7 +17,7 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         let host = try ControlsNativeHost(content: AnyView(f.sheet()))
         defer { host.close() }
         try await host.wait { host.controls[.disclosure] != nil }
-        XCTAssertEqual(f.cleanup.draftThreshold, 0.90)
+        XCTAssertEqual(f.cleanup.draftThreshold, 0.95)
         XCTAssertTrue(controlsDescendants(host.controller.view, UISlider.self).isEmpty)
         XCTAssertNil(host.controls[.slider])
         XCTAssertNil(host.controls[.introduction], "The folded header has no purpose paragraph")
@@ -34,19 +34,19 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         let hit = host.window.hitTest(instructionPoint, with: nil)
         XCTAssertFalse(hit === arrow || hit?.isDescendant(of: arrow) == true,
                        "The short label must not become part of the disclosure hit target")
-        try host.attach(to: self, name: "UIReview-cleanup-v3-collapsed-090")
+        try host.attach(to: self, name: "UIReview-cleanup-minimal-collapsed-095")
 
         arrow.sendActions(for: .touchUpInside)
         try await host.wait { host.controls[.value] != nil }
         XCTAssertEqual(arrow.accessibilityValue, "已展开")
         let slider = try XCTUnwrap(controlsDescendants(host.controller.view, UISlider.self).first)
         // SwiftUI normalizes the native UISlider; displayed ticks remain 50...99.
-        let initialNativeValue = Float(40) / 49 // (90 - 50) / (99 - 50)
+        let initialNativeValue = Float(45) / 49 // (95 - 50) / (99 - 50)
         XCTAssertEqual(slider.minimumValue, 0)
         XCTAssertEqual(slider.maximumValue, 1)
         XCTAssertEqual(slider.value, initialNativeValue, accuracy: 4 * initialNativeValue.ulp)
         try assertCenteredValue(host)
-        try host.attach(to: self, name: "UIReview-cleanup-v3-expanded-090")
+        try host.attach(to: self, name: "UIReview-cleanup-minimal-expanded-095")
 
         let session = f.cleanup.selectionSessionID
         let groups = f.cleanup.displayGroups.map(\.id)
@@ -54,21 +54,21 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         slider.sendActions(for: .valueChanged)
         try await host.wait { f.cleanup.draftThreshold == 0.85 && host.controls[.pending] != nil }
         XCTAssertNotNil(host.controls[.warning])
-        XCTAssertEqual(f.cleanup.threshold, 0.90)
-        XCTAssertEqual(f.cleanup.resultThreshold, 0.90)
+        XCTAssertEqual(f.cleanup.threshold, 0.95)
+        XCTAssertEqual(f.cleanup.resultThreshold, 0.95)
         XCTAssertEqual(f.cleanup.selectionSessionID, session)
         XCTAssertEqual(f.cleanup.displayGroups.map(\.id), groups)
-        XCTAssertEqual(f.grouping.thresholds, [0.90], "Dragging never starts a read")
+        XCTAssertEqual(f.grouping.thresholds, [0.95], "Dragging never starts a read")
         XCTAssertTrue(f.cleanup.canUpdateResults)
         XCTAssertFalse(f.cleanup.canSelect)
         try assertCenteredValue(host)
-        try host.attach(to: self, name: "UIReview-cleanup-v3-pending-085")
+        try host.attach(to: self, name: "UIReview-cleanup-minimal-pending-085")
         arrow.sendActions(for: .touchUpInside)
         try await host.wait { host.controls[.slider] == nil && host.controls[.value] == nil }
         XCTAssertTrue(controlsDescendants(host.controller.view, UISlider.self).isEmpty)
         XCTAssertNil(host.controls[.warning], "A loose value does not add warning text to the folded header")
         XCTAssertEqual(f.cleanup.draftThreshold, 0.85, "Collapsing does not discard the draft")
-        XCTAssertEqual(f.grouping.thresholds, [0.90])
+        XCTAssertEqual(f.grouping.thresholds, [0.95])
     }
 
     func testMaximumType320KeepsTextAndValueInsideScrollableViewport() async throws {
@@ -134,7 +134,7 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
             }
         }
         XCTAssertTrue(f.grouping.thresholds.isEmpty)
-        XCTAssertEqual(f.cleanup.draftThreshold, 0.90)
+        XCTAssertEqual(f.cleanup.draftThreshold, 0.95)
     }
 
     func testEmbeddedSliderCommitsOnReleaseNotValuePreviewAndHasNoEverydayUpdateButton() async throws {
@@ -151,13 +151,13 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         slider.setValue(Float(35) / 49, animated: false)
         slider.sendActions(for: .valueChanged)
         try await host.wait { f.cleanup.hasPendingThresholdChange }
-        XCTAssertEqual(f.grouping.thresholds, [0.90])
-        XCTAssertEqual(f.cleanup.resultThreshold, 0.90)
+        XCTAssertEqual(f.grouping.thresholds, [0.95])
+        XCTAssertEqual(f.cleanup.resultThreshold, 0.95)
         XCTAssertFalse(f.cleanup.canSelect)
         XCTAssertNil(host.controls[.action])
         slider.sendActions(for: .touchUpInside)
         try await host.wait { f.cleanup.resultThreshold == 0.85 && !f.cleanup.isGrouping }
-        XCTAssertEqual(f.grouping.thresholds, [0.90, 0.85])
+        XCTAssertEqual(f.grouping.thresholds, [0.95, 0.85])
         XCTAssertNil(host.controls[.pending])
         XCTAssertNil(host.controls[.action])
         XCTAssertTrue(f.cleanup.canSelect)
@@ -190,7 +190,7 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         XCTAssertTrue(f.grouping.thresholds.isEmpty)
         sync.release()
         try await host.wait { f.app.photoSync.phase == .cancelled && f.cleanup.hasScanned }
-        XCTAssertEqual(f.grouping.thresholds, [0.90])
+        XCTAssertEqual(f.grouping.thresholds, [0.95])
         XCTAssertNil(host.controls[.pending])
         XCTAssertNil(host.controls[.action])
     }
@@ -215,13 +215,13 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         try await host.wait { host.controls[.pending] != nil }
         XCTAssertTrue(f.cleanup.hasScanned)
         XCTAssertTrue(f.cleanup.displayGroups.isEmpty)
-        XCTAssertEqual(f.cleanup.resultThreshold, 0.90)
+        XCTAssertEqual(f.cleanup.resultThreshold, 0.95)
         XCTAssertTrue(f.cleanup.canUpdateResults)
         f.cleanup.updateResults()
         f.cleanup.updateResults()
         await f.cleanup.waitUntilIdle()
         try await host.wait { host.controls[.pending] == nil }
-        XCTAssertEqual(f.grouping.thresholds, [0.90, 0.85])
+        XCTAssertEqual(f.grouping.thresholds, [0.95, 0.85])
         XCTAssertEqual(f.cleanup.resultThreshold, 0.85)
         XCTAssertFalse(f.cleanup.canUpdateResults, "An unchanged completed result cannot queue another update")
     }
@@ -253,7 +253,7 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         XCTAssertEqual(f.browser.viewer?.id, group.photos[0].id)
         XCTAssertEqual(f.browser.viewer?.ids, group.photos.map(\.id))
         f.browser.viewer = nil
-        f.cleanup.setDraftThreshold(0.90)
+        f.cleanup.setDraftThreshold(0.95)
         f.cleanup.indexSourceChanged()
         try await host.settle()
         XCTAssertTrue(f.cleanup.needsRegroup)
@@ -268,7 +268,7 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         XCTAssertEqual(cell.accessibilityHint, "查看完整照片")
         XCTAssertEqual(cell.accessibilityIdentifier, "similar-cleanup-detail-photo-1")
         XCTAssertTrue(f.cleanup.selectedIDs.isEmpty)
-        XCTAssertEqual(f.grouping.thresholds, [0.90])
+        XCTAssertEqual(f.grouping.thresholds, [0.95])
     }
 
     private func assertCenteredValue(_ host: ControlsNativeHost) throws {

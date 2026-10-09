@@ -38,12 +38,16 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertTrue(done.waitForExistence(timeout: 5))
         XCTAssertTrue(done.isHittable)
         XCTAssertEqual(done.label, "完成")
-        XCTAssertTrue(app.navigationBars["我的图库"].exists)
+        assertLibraryPrimary()
+        attach("library-live")
+        openLibraryPage("library-photo-access", title: "照片访问")
         XCTAssertTrue(app.buttons["authorize-photos"].waitForExistence(timeout: 5),
                   "The library must remain unauthorized; do not tap 选择照片")
         XCTAssertEqual(app.buttons["authorize-photos"].label, "选择照片")
         XCTAssertFalse(app.alerts.firstMatch.exists)
-        attach("library-live")
+        back(from: "照片访问", to: "我的图库")
+        assertLibraryPrimary()
+        openLibraryPage("library-maintenance", title: "索引维护")
         let form = try sheetForm()
         let update = app.buttons["index-photos"]
         scrollTo(update, in: form, allowDisabled: true)
@@ -55,6 +59,8 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(rebuild.isEnabled, "Rebuild is visible without debug tools, but requires index readiness")
         XCTAssertFalse(app.buttons["confirm-rebuild-index"].exists,
                    "Merely opening Library must not expose the destructive confirmation action")
+        back(from: "索引维护", to: "我的图库")
+        assertLibraryPrimary()
         done.tap()
         expectAbsent(done)
         expectHittable(app.textFields["photo-query"])
@@ -151,7 +157,11 @@ final class PresentationNavigationTests: XCTestCase {
         expectHittable(done)
         // This action exists only for .notDetermined, not denied/authorized.
         // Inspect it without tapping; opening/clearing filters must not prompt.
+        assertLibraryPrimary()
+        openLibraryPage("library-photo-access", title: "照片访问")
         expectHittable(app.buttons["authorize-photos"])
+        back(from: "照片访问", to: "我的图库")
+        openLibraryPage("library-maintenance", title: "索引维护")
         let update = app.buttons["index-photos"]
         scrollTo(update, in: try sheetForm(), allowDisabled: true)
         XCTAssertEqual(update.label, "建立索引")
@@ -159,6 +169,8 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(app.buttons["stop-indexing"].exists)
         XCTAssertFalse(app.alerts.firstMatch.exists)
         XCTAssertFalse(springboard.alerts.firstMatch.exists)
+        back(from: "索引维护", to: "我的图库")
+        assertLibraryPrimary()
         done.tap()
         expectAbsent(done)
         assertHomeControls()
@@ -196,25 +208,14 @@ final class PresentationNavigationTests: XCTestCase {
         let done = app.buttons["close-settings"]
         XCTAssertTrue(done.waitForExistence(timeout: 5))
         XCTAssertEqual(done.label, "完成")
-        XCTAssertTrue(app.navigationBars["设置"].exists)
-        let picker = app.descendants(matching: .any).matching(identifier: "result-limit").firstMatch
-        XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        // Production uses a page-size menu Picker with 3张 / 12张, not a segmented
-        // control. Check its stable identifier; do not guess private menu nodes.
-        XCTAssertTrue(picker.label.contains("每批显示"))
-        expectResultLimit("12张", picker: picker)
+        assertSettingsPrimary()
+        attach("settings-live")
+        openSettingsPage("settings-advanced", title: "高级")
         let form = try sheetForm()
         // debug-advanced identifies the Text label ONLY, not its parent button.
         let advanced = app.buttons["高级设置"]
         let weight = app.sliders["location-weight"]
         for element in settingsDebugElements { expectAbsent(element) }
-        attach("settings-live")
-        picker.tap()
-        let pageOfThree = app.buttons["3张"]
-        expectHittable(pageOfThree)
-        pageOfThree.tap()
-        expectResultLimit("3张", picker: picker)
-
         assertSettingsDebugOff(in: form)
         setDebugTools(true, in: form)
         scrollTo(advanced, in: form, swipeUp: false)
@@ -232,18 +233,30 @@ final class PresentationNavigationTests: XCTestCase {
         // Advanced is expanded: hiding tools must remove it, not merely collapse it.
         setDebugTools(false, in: form)
         assertSettingsDebugOff(in: form)
-        scrollTo(picker, in: form, swipeUp: false)
-        expectResultLimit("3张", picker: picker)
+        setDebugTools(true, in: form)
+        scrollTo(advanced, in: form)
+        expectAbsent(weight)
+        tapDisclosure(advanced)
+        expectExpandedWeight(weight)
+        setDebugTools(false, in: form)
+        assertSettingsDebugOff(in: form)
+        back(from: "高级", to: "设置")
+        assertSettingsPrimary()
         done.tap()
         expectAbsent(done)
         expectHittable(field)
         XCTAssertEqual(field.value as? String, preservedQuery)
         assertHomeControls()
 
-        // Returning to Settings must retain the chosen page size in this session.
+        // Reopening must keep debug OFF and never resurrect the removed batch UI.
+        // The internal page size of 12 is checked in the hosted state tests.
         app.buttons["open-settings"].tap()
         expectHittable(done)
-        expectResultLimit("3张", picker: picker)
+        assertSettingsPrimary()
+        openSettingsPage("settings-advanced", title: "高级")
+        assertSettingsDebugOff(in: try sheetForm())
+        back(from: "高级", to: "设置")
+        assertSettingsPrimary()
         done.tap()
         expectAbsent(done)
         expectHittable(field)
@@ -259,11 +272,15 @@ final class PresentationNavigationTests: XCTestCase {
         let done = app.buttons["close-settings"]
         expectHittable(done)
         XCTAssertEqual(done.label, "完成")
-        XCTAssertTrue(app.navigationBars["设置"].exists)
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "result-limit").firstMatch
-            .waitForExistence(timeout: 5))
+        assertSettingsPrimary()
         XCTAssertFalse(app.sliders["location-weight"].exists)
         attach("settings-live-accessibility-large")
+        openSettingsPage("settings-advanced", title: "高级")
+        expectHittable(debugToggle)
+        expectSwitch(debugToggle, enabled: false)
+        for element in settingsDebugElements { expectAbsent(element) }
+        back(from: "高级", to: "设置")
+        assertSettingsPrimary()
         done.tap()
         expectAbsent(done)
         expectHittable(settings)
@@ -274,31 +291,43 @@ final class PresentationNavigationTests: XCTestCase {
         app.buttons["open-library"].tap()
         let libraryDone = app.buttons["close-library"]
         expectHittable(libraryDone)
-        assertUserLibrary(in: try sheetForm())
+        try assertUserLibrary()
         libraryDone.tap()
         expectAbsent(libraryDone)
 
         app.buttons["open-settings"].tap()
         let settingsDone = app.buttons["close-settings"]
         expectHittable(settingsDone)
+        assertSettingsPrimary()
+        openSettingsPage("settings-advanced", title: "高级")
         let settingsForm = try sheetForm()
         assertSettingsDebugOff(in: settingsForm)
         setDebugTools(true, in: settingsForm)
+        back(from: "高级", to: "设置")
+        assertSettingsPrimary()
         settingsDone.tap()
         expectAbsent(settingsDone)
 
         app.buttons["open-library"].tap()
         expectHittable(libraryDone)
+        assertLibraryPrimary()
+        openLibraryPage("library-photo-access", title: "照片访问")
         XCTAssertTrue(app.buttons["authorize-photos"].waitForExistence(timeout: 5))
+        back(from: "照片访问", to: "我的图库")
+        openLibraryPage("library-maintenance", title: "索引维护")
         let details = app.buttons["详细信息"]
         scrollTo(details, in: try sheetForm())
         XCTAssertFalse(debugToggle.exists, "Library uses the single Settings toggle, not a second switch")
         XCTAssertFalse(app.alerts.firstMatch.exists)
+        back(from: "索引维护", to: "我的图库")
+        assertLibraryPrimary()
         libraryDone.tap()
         expectAbsent(libraryDone)
 
         app.buttons["open-settings"].tap()
         expectHittable(settingsDone)
+        assertSettingsPrimary()
+        openSettingsPage("settings-advanced", title: "高级")
         scrollTo(debugToggle, in: try sheetForm())
         expectSwitch(debugToggle, enabled: true)
         // Terminate while ON: turning it off first would not test session-only reset.
@@ -309,13 +338,17 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(app.alerts.firstMatch.exists)
         app.buttons["open-settings"].tap()
         expectHittable(settingsDone)
+        assertSettingsPrimary()
+        openSettingsPage("settings-advanced", title: "高级")
         assertSettingsDebugOff(in: try sheetForm())
+        back(from: "高级", to: "设置")
+        assertSettingsPrimary()
         settingsDone.tap()
         expectAbsent(settingsDone)
 
         app.buttons["open-library"].tap()
         expectHittable(libraryDone)
-        assertUserLibrary(in: try sheetForm())
+        try assertUserLibrary()
         libraryDone.tap()
         expectAbsent(libraryDone)
         assertHomeControls()
@@ -326,8 +359,12 @@ final class PresentationNavigationTests: XCTestCase {
         app.buttons["open-settings"].tap()
         let done = app.buttons["close-settings"]
         expectHittable(done)
+        assertSettingsPrimary()
+        openSettingsPage("settings-advanced", title: "高级")
+        assertSettingsDebugOff(in: try sheetForm())
+        back(from: "高级", to: "设置")
+        openSettingsPage("settings-translation", title: "搜索增强")
         let form = try sheetForm()
-        assertSettingsDebugOff(in: form)
         let chineseSearch = app.switches["chinese-search-enabled"]
         scrollTo(chineseSearch, in: form, swipeUp: false, expectingAbsent: settingsDebugElements)
         XCTAssertTrue(chineseSearch.isEnabled)
@@ -344,7 +381,13 @@ final class PresentationNavigationTests: XCTestCase {
         if availability.label == "需要 iOS 18+ 真机；仍可原文搜索" {
             XCTAssertFalse(prepare.isEnabled)
         }
-        assertSettingsDebugOff(in: form)
+        for element in settingsDebugElements { expectAbsent(element) }
+        XCTAssertFalse(debugToggle.exists, "Translation has no duplicate debug switch")
+        back(from: "搜索增强", to: "设置")
+        assertSettingsPrimary()
+        openSettingsPage("settings-advanced", title: "高级")
+        assertSettingsDebugOff(in: try sheetForm())
+        back(from: "高级", to: "设置")
         done.tap()
         expectAbsent(done)
         assertHomeControls()
@@ -362,6 +405,8 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "startup-recovery-icon").firstMatch.exists)
         app.buttons["open-settings"].tap()
         expectHittable(app.buttons["close-settings"])
+        assertSettingsPrimary()
+        openSettingsPage("settings-advanced", title: "高级")
         let form = try sheetForm()
         assertSettingsDebugOff(in: form)
         setDebugTools(true, in: form)
@@ -370,6 +415,13 @@ final class PresentationNavigationTests: XCTestCase {
         let link = app.buttons["debug-launch-timing"]
         XCTAssertFalse(link.exists, "The link belongs inside the initially collapsed diagnostics group")
         tapDisclosure(diagnostics)
+        let reference = app.switches["reference-search-enabled"]
+        scrollTo(reference, in: form)
+        XCTAssertTrue(reference.isEnabled)
+        expectSwitch(reference, enabled: false)
+        let searchTiming = app.buttons["debug-search-timing"]
+        scrollTo(searchTiming, in: form, swipeUp: false)
+        XCTAssertEqual(searchTiming.label, "搜索耗时")
         scrollTo(link, in: form)
         XCTAssertEqual(link.label, "启动耗时")
         link.tap()
@@ -400,13 +452,18 @@ final class PresentationNavigationTests: XCTestCase {
             XCTAssertNotNil(component.label.range(of: #"[0-9]+\.[0-9]{3} 秒"#, options: .regularExpression))
         }
         attach("launch-timing-parallel-live")
-        let back = app.navigationBars["启动耗时"].buttons.element(boundBy: 0)
-        expectHittable(back)
-        back.tap()
+        let timingBack = app.navigationBars["启动耗时"].buttons.element(boundBy: 0)
+        expectHittable(timingBack)
+        timingBack.tap()
         expectAbsent(page)
-        XCTAssertTrue(app.navigationBars["设置"].exists)
+        XCTAssertTrue(app.navigationBars["高级"].exists)
+        assertNoBatchControls()
+        scrollTo(reference, in: try sheetForm(), swipeUp: false)
+        expectSwitch(reference, enabled: false)
         setDebugTools(false, in: try sheetForm())
         assertSettingsDebugOff(in: try sheetForm())
+        back(from: "高级", to: "设置")
+        assertSettingsPrimary()
         app.buttons["close-settings"].tap()
         assertHomeControls()
         XCTAssertFalse(app.alerts.firstMatch.exists)
@@ -422,6 +479,7 @@ final class PresentationNavigationTests: XCTestCase {
         let toggle = app.switches["photo-text-search-enabled"]
         let update = app.buttons["index-photo-text"]
         let done = app.buttons["close-settings"]
+        let libraryDone = app.buttons["close-library"]
 
         func assertNoWorkOrPermissionPrompt() {
             XCTAssertFalse(app.buttons["pause-text-index"].exists)
@@ -440,13 +498,18 @@ final class PresentationNavigationTests: XCTestCase {
             expectHittable(toggle)
             XCTAssertEqual(app.switches.matching(identifier: "photo-text-search-enabled").count, 1)
             XCTAssertTrue(toggle.isEnabled, "The optional preference must not require Photos permission")
-            XCTAssertEqual(toggle.label, "照片文字")
-            let explanation = app.staticTexts["photo-text-search-explanation"]
-            expectHittable(explanation)
-            XCTAssertEqual(explanation.label, "用照片里的文字进行搜索")
-            XCTAssertGreaterThanOrEqual(explanation.frame.minX, toggle.frame.maxX,
-                                       "The explanation is on the switch's right, not a footer")
-            XCTAssertTrue(app.frame.contains(explanation.frame))
+            XCTAssertEqual(toggle.label, "文本（ocr）增强搜索")
+            let info = app.buttons["photo-text-search-info"]
+            expectHittable(info)
+            XCTAssertEqual(info.label, "文本（ocr）增强搜索介绍")
+            XCTAssertGreaterThanOrEqual(info.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(info.frame.height, 44)
+            XCTAssertLessThanOrEqual(info.frame.maxX, toggle.frame.minX,
+                                     "The independent information button precedes the native switch")
+            XCTAssertTrue(app.frame.contains(info.frame))
+            XCTAssertFalse(app.staticTexts["photo-text-search-explanation"].exists)
+            XCTAssertFalse(app.staticTexts["用照片里的文字进行搜索"].exists)
+            assertNoBatchControls()
         }
 
         func tapOptIn(_ enabled: Bool) {
@@ -464,6 +527,7 @@ final class PresentationNavigationTests: XCTestCase {
             if app.state == .runningForeground,
                !app.alerts.firstMatch.exists, !springboard.alerts.firstMatch.exists {
                 if done.exists && done.isHittable { done.tap(); expectAbsent(done) }
+                if libraryDone.exists && libraryDone.isHittable { libraryDone.tap(); expectAbsent(libraryDone) }
                 if toggle.exists && toggle.isHittable && toggle.value as? String == "1" { tapOptIn(false) }
             }
         }
@@ -475,6 +539,19 @@ final class PresentationNavigationTests: XCTestCase {
         expectSwitch(toggle, enabled: false)
         expectAbsent(update)
         assertNoWorkOrPermissionPrompt()
+
+        app.buttons["photo-text-search-info"].tap()
+        let infoDone = app.buttons["close-photo-text-info"]
+        expectHittable(infoDone)
+        XCTAssertTrue(app.navigationBars["文本（ocr）增强搜索"].exists)
+        expectAbsent(toggle)
+        expectAbsent(update)
+        assertNoBatchControls()
+        assertNoWorkOrPermissionPrompt()
+        infoDone.tap()
+        expectAbsent(infoDone)
+        assertHomeOptIn()
+        expectSwitch(toggle, enabled: false)
 
         tapOptIn(true)
         XCTAssertTrue(update.waitForExistence(timeout: 5))
@@ -490,8 +567,26 @@ final class PresentationNavigationTests: XCTestCase {
         expectSwitch(toggle, enabled: true)
         app.buttons["open-settings"].tap()
         expectHittable(done)
+        assertSettingsPrimary()
+        XCTAssertFalse(toggle.exists, "Settings must not duplicate the home OCR opt-in")
+        XCTAssertFalse(update.exists, "Text index management now belongs to Library, not Settings")
+        openSettingsPage("settings-privacy", title: "隐私与关于")
+        let localPrivacy = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "可选文字搜索使用系统 Vision")).firstMatch
+        scrollTo(localPrivacy, in: try sheetForm())
+        XCTAssertTrue(localPrivacy.label.contains("关闭增强只停止参与搜索"))
+        XCTAssertTrue(localPrivacy.label.contains("清除索引才会一并删除文字记录"))
+        assertNoWorkOrPermissionPrompt()
+        back(from: "隐私与关于", to: "设置")
+        assertSettingsPrimary()
+        done.tap()
+        expectAbsent(done)
+
+        app.buttons["open-library"].tap()
+        expectHittable(libraryDone)
+        assertLibraryPrimary()
+        openLibraryPage("library-text-index", title: "文本索引")
         var form = try sheetForm()
-        XCTAssertFalse(toggle.exists, "Settings manages the index, not a second primary switch")
+        XCTAssertFalse(toggle.exists, "Management never duplicates the primary opt-in")
         scrollTo(update, in: form, allowDisabled: true)
         XCTAssertFalse(update.isEnabled)
         // Check production privacy text via the real XCUI tree, not in-process
@@ -502,8 +597,10 @@ final class PresentationNavigationTests: XCTestCase {
             XCTAssertTrue(privacy.label.contains(fragment))
         }
         assertNoWorkOrPermissionPrompt()
-        done.tap()
-        expectAbsent(done)
+        back(from: "文本索引", to: "我的图库")
+        assertLibraryPrimary()
+        libraryDone.tap()
+        expectAbsent(libraryDone)
 
         // ON is a real persisted preference, unlike session-only debug tools.
         // Relaunch through the unchanged full-model readiness/Photos-reset helper.
@@ -520,21 +617,24 @@ final class PresentationNavigationTests: XCTestCase {
         assertHomeControls()
 
         // OFF keeps the saved-count/privacy management and disables its action.
-        app.buttons["open-settings"].tap()
-        expectHittable(done)
+        app.buttons["open-library"].tap()
+        expectHittable(libraryDone)
+        assertLibraryPrimary()
+        openLibraryPage("library-text-index", title: "文本索引")
         form = try sheetForm()
         XCTAssertFalse(toggle.exists)
         scrollTo(update, in: form, allowDisabled: true)
         XCTAssertFalse(update.isEnabled)
+        scrollTo(privacy, in: form)
+        XCTAssertTrue(privacy.label.contains("关闭增强不会删除"))
         assertNoWorkOrPermissionPrompt()
-        done.tap()
-        expectAbsent(done)
-        app.buttons["open-library"].tap()
-        let libraryDone = app.buttons["close-library"]
-        expectHittable(libraryDone)
+        back(from: "文本索引", to: "我的图库")
+        openLibraryPage("library-photo-access", title: "照片访问")
         // This action is specific to .notDetermined; never tap it.
         expectHittable(app.buttons["authorize-photos"])
         assertNoWorkOrPermissionPrompt()
+        back(from: "照片访问", to: "我的图库")
+        assertLibraryPrimary()
         libraryDone.tap()
         expectAbsent(libraryDone)
         assertHomeControls()
@@ -651,10 +751,13 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertEqual(disclosure.label, "收起相似度调节")
         XCTAssertEqual(disclosure.value as? String, "已展开")
         XCTAssertTrue(threshold.isEnabled)
-        expectThreshold(0.90)
-        // COSINE .90 is integer tick 90, not the normalized thumb position
-        // 40/49. Keep the native thumb/outer-endpoint gestures above unchanged.
-        dragThreshold(from: 0.90, to: 0.99)
+        // Existing valid saved preferences survive an upgrade; don't overwrite
+        // them or assume the previous .90 default. New-state .95 is tested natively.
+        let appliedText = try XCTUnwrap(threshold.value as? String)
+        let appliedThreshold = try XCTUnwrap(Double(appliedText.replacingOccurrences(of: ",", with: ".")))
+        XCTAssertTrue((0.50...0.99).contains(appliedThreshold))
+        expectThreshold(appliedThreshold)
+        dragThreshold(from: appliedThreshold, to: 0.99)
         expectThreshold(0.99)
         assertUnreadyCleanup()
         dragThreshold(from: 0.99, to: 0.50)
@@ -668,22 +771,23 @@ final class PresentationNavigationTests: XCTestCase {
         disclosure.tap()
         expectHittable(threshold)
         expectHittable(app.staticTexts["similar-cleanup-broad-threshold-note"])
-        dragThreshold(from: 0.50, to: 0.90)
-        expectThreshold(0.90)
+        dragThreshold(from: 0.50, to: 0.95)
+        expectThreshold(0.95)
         expectAbsent(app.staticTexts["similar-cleanup-broad-threshold-note"])
         assertUnreadyCleanup()
 
         // Release a NON-default target to distinguish retention/queued work
         // from applied preferences. Missing authorization must not admit it.
-        dragThreshold(from: 0.90, to: 0.99)
-        expectThreshold(0.99)
+        let pendingThreshold = appliedThreshold == 0.99 ? 0.50 : 0.99
+        dragThreshold(from: 0.95, to: pendingThreshold)
+        expectThreshold(pendingThreshold)
         disclosure.tap()
         expectAbsent(threshold)
         expectAbsent(thresholdTitle)
         assertUnreadyCleanup()
         disclosure.tap()
         expectHittable(threshold)
-        expectThreshold(0.99)
+        expectThreshold(pendingThreshold)
 
         let done = app.buttons["close-settings"]
         let hiddenInSettings = [field, threshold, thresholdTitle, disclosure, start,
@@ -691,11 +795,15 @@ final class PresentationNavigationTests: XCTestCase {
             app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "相似度阈值")).firstMatch]
         func assertSettingsExcludesBothPageScopes() throws {
             expectHittable(done)
+            assertSettingsPrimary()
             for element in hiddenInSettings { expectAbsent(element) }
-            // Check every traversed Form viewport, not just the first screen of
-            // lazy rows. Settings may not reintroduce a threshold slider/label.
-            let form = try sheetForm()
-            scrollTo(debugToggle, in: form, expectingAbsent: hiddenInSettings)
+            // Check the actual secondary page as well as the primary scope.
+            openSettingsPage("settings-advanced", title: "高级")
+            scrollTo(debugToggle, in: try sheetForm(), expectingAbsent: hiddenInSettings)
+            assertSettingsDebugOff(in: try sheetForm())
+            back(from: "高级", to: "设置")
+            assertSettingsPrimary()
+            for element in hiddenInSettings { expectAbsent(element) }
             assertNoWorkOrPrompt()
         }
 
@@ -705,7 +813,7 @@ final class PresentationNavigationTests: XCTestCase {
         done.tap()
         expectAbsent(done)
         expectHittable(threshold)
-        expectThreshold(0.99)
+        expectThreshold(pendingThreshold)
         assertUnreadyCleanup()
 
         app.buttons["primary-search-tab"].tap()
@@ -723,11 +831,11 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertEqual(field.value as? String, query)
         entry.tap()
         expectHittable(threshold)
-        expectThreshold(0.99)
+        expectThreshold(pendingThreshold)
         assertUnreadyCleanup()
 
         // A retained tab/sheet preserves the queued target, but a new process
-        // restores only the applied preference (.90), not an unready .99.
+        // restores only the actual applied preference, not the unready target.
         app.terminate()
         launch()
         assertHomeControls()
@@ -742,7 +850,7 @@ final class PresentationNavigationTests: XCTestCase {
         assertUnreadyCleanup()
         disclosure.tap()
         expectHittable(threshold)
-        expectThreshold(0.90)
+        expectThreshold(appliedThreshold)
         assertUnreadyCleanup()
         app.buttons["primary-search-tab"].tap()
         assertHomeControls()
@@ -877,6 +985,75 @@ final class PresentationNavigationTests: XCTestCase {
          app.buttons["高级设置"], app.buttons["诊断信息"], app.sliders["location-weight"]]
     }
 
+    private func assertNoBatchControls(file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "result-limit").firstMatch.exists,
+                       "Page size remains internal; no primary or advanced batch control", file: file, line: line)
+        for label in ["每批显示", "3张", "12张"] {
+            XCTAssertFalse(app.buttons[label].exists, file: file, line: line)
+            XCTAssertFalse(app.staticTexts[label].exists, file: file, line: line)
+        }
+    }
+
+    private func assertSettingsPrimary() {
+        XCTAssertTrue(app.navigationBars["设置"].exists)
+        for id in ["settings-translation", "settings-privacy", "settings-advanced"] {
+            expectHittable(app.buttons[id])
+            XCTAssertEqual(app.buttons.matching(identifier: id).count, 1)
+        }
+        let cloud = app.switches["icloud-download-opt-in"]
+        expectHittable(cloud)
+        expectSwitch(cloud, enabled: false)
+        for element in settingsDebugElements + [debugToggle, app.switches["chinese-search-enabled"],
+                app.buttons["prepare-translation"], app.buttons["refresh-library"], app.buttons["clear-index"],
+            app.buttons["index-photo-text"], app.buttons["clear-search-history"]] { expectAbsent(element) }
+        assertNoBatchControls()
+    }
+
+    private func assertLibraryPrimary() {
+        XCTAssertTrue(app.navigationBars["我的图库"].exists)
+        for id in ["library-photo-access", "library-text-index", "library-maintenance"] {
+            expectHittable(app.buttons[id])
+            XCTAssertEqual(app.buttons.matching(identifier: id).count, 1)
+        }
+        expectHittable(app.staticTexts["stored-index-count"])
+        expectHittable(app.staticTexts["library-auto-sync-status"])
+        for id in ["authorize-photos", "index-photos", "rebuild-index", "index-photo-text", "clear-index", "refresh-library"] {
+            XCTAssertFalse(app.buttons[id].exists, "Actions belong to the pushed page, not the primary Form")
+        }
+        XCTAssertFalse(debugToggle.exists)
+        XCTAssertFalse(app.switches["icloud-download-opt-in"].exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "debug-library-details").firstMatch.exists)
+        assertNoBatchControls()
+    }
+
+    private func openSettingsPage(_ identifier: String, title: String) {
+        openPage(identifier, title: title, parent: "设置")
+    }
+
+    private func openLibraryPage(_ identifier: String, title: String) {
+        openPage(identifier, title: title, parent: "我的图库")
+    }
+
+    private func openPage(_ identifier: String, title: String, parent: String) {
+        XCTAssertTrue(app.navigationBars[parent].exists)
+        let link = app.buttons[identifier]
+        expectHittable(link)
+        link.tap()
+        XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+        assertNoBatchControls()
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    private func back(from title: String, to parent: String) {
+        // UIKit's native leading back button; never a guessed Text ancestor.
+        let button = app.navigationBars[title].buttons.element(boundBy: 0)
+        expectHittable(button)
+        button.tap()
+        XCTAssertTrue(app.navigationBars[parent].waitForExistence(timeout: 5))
+        assertNoBatchControls()
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
     private func sheetForm() throws -> XCUIElement {
         // SwiftUI Form is backed by a collection/table/scroll view depending on
         // iOS. Only use a hittable sheet container, never the home library-scroll.
@@ -894,6 +1071,7 @@ final class PresentationNavigationTests: XCTestCase {
         // At most eight real Form gestures per lookup, TEST ONLY. Check each
         // viewport so lazy off-screen rows cannot alone prove debug UI is absent.
         for attempt in 0...8 {
+            assertNoBatchControls(file: file, line: line)
             for candidate in hidden {
                 XCTAssertFalse(candidate.exists, "Debug controls must be absent, not just off screen",
                                file: file, line: line)
@@ -918,7 +1096,7 @@ final class PresentationNavigationTests: XCTestCase {
     }
 
     private func setDebugTools(_ enabled: Bool, in form: XCUIElement) {
-        scrollTo(debugToggle, in: form)
+        scrollTo(debugToggle, in: form, swipeUp: false)
         XCTAssertEqual(app.switches.matching(identifier: "show-debug-tools").count, 1)
         expectSwitch(debugToggle, enabled: !enabled)
         // The captured iOS AX hierarchy gives the identified SwiftUI switch the
@@ -926,9 +1104,9 @@ final class PresentationNavigationTests: XCTestCase {
         // at the trailing edge. Tapping the row centre hit only the label and
         // left value=0; tap inside this exact identified row's thumb instead.
         debugToggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        // Inserting Advanced/Diagnostics above the bottom switch can move it
-        // out of the Form's realized viewport. Reacquire it after layout changes.
-        scrollTo(debugToggle, in: form)
+        // The opt-in is now the first row of the Advanced destination. Return
+        // toward the top after inspecting either expanded group below it.
+        scrollTo(debugToggle, in: form, swipeUp: false)
         expectSwitch(debugToggle, enabled: enabled)
     }
 
@@ -965,35 +1143,50 @@ final class PresentationNavigationTests: XCTestCase {
     }
 
     private func assertSettingsDebugOff(in form: XCUIElement) {
-        let picker = app.descendants(matching: .any).matching(identifier: "result-limit").firstMatch
-        scrollTo(picker, in: form, swipeUp: false, expectingAbsent: settingsDebugElements)
-        let refresh = app.buttons["refresh-library"]
-        scrollTo(refresh, in: form, expectingAbsent: settingsDebugElements)
-        XCTAssertEqual(refresh.label, "刷新索引统计")
-        scrollTo(debugToggle, in: form, expectingAbsent: settingsDebugElements)
+        XCTAssertTrue(app.navigationBars["高级"].exists)
+        assertNoBatchControls()
+        scrollTo(debugToggle, in: form, swipeUp: false, expectingAbsent: settingsDebugElements)
         XCTAssertEqual(app.switches.matching(identifier: "show-debug-tools").count, 1)
         expectSwitch(debugToggle, enabled: false)
+        form.swipeUp()
+        for element in settingsDebugElements { expectAbsent(element) }
+        XCTAssertFalse(app.switches["reference-search-enabled"].exists)
+        XCTAssertFalse(app.buttons["debug-search-timing"].exists)
+        assertNoBatchControls()
     }
 
-    private func assertUserLibrary(in form: XCUIElement) {
-        XCTAssertTrue(app.navigationBars["我的图库"].exists)
+    private func assertUserLibrary() throws {
+        assertLibraryPrimary()
         let details = app.descendants(matching: .any).matching(identifier: "debug-library-details").firstMatch
         let hidden = [details, app.buttons["详细信息"], debugToggle]
-        scrollTo(app.buttons["authorize-photos"], in: form, swipeUp: false, expectingAbsent: hidden)
-        let cloud = app.switches["icloud-download-opt-in"]
-        scrollTo(cloud, in: form, expectingAbsent: hidden)
-        expectSwitch(cloud, enabled: false)
-        // Details would follow the iCloud footer; inspect that lower viewport too.
+        openLibraryPage("library-photo-access", title: "照片访问")
+        scrollTo(app.buttons["authorize-photos"], in: try sheetForm(), expectingAbsent: hidden)
+        back(from: "照片访问", to: "我的图库")
+        openLibraryPage("library-text-index", title: "文本索引")
+        let textUpdate = app.buttons["index-photo-text"]
+        scrollTo(textUpdate, in: try sheetForm(), expectingAbsent: hidden, allowDisabled: true)
+        XCTAssertFalse(textUpdate.isEnabled)
+        back(from: "文本索引", to: "我的图库")
+        openLibraryPage("library-maintenance", title: "索引维护")
+        let form = try sheetForm()
+        for id in ["index-photos", "rebuild-index"] {
+            let action = app.buttons[id]
+            scrollTo(action, in: form, expectingAbsent: hidden, allowDisabled: true)
+            XCTAssertFalse(action.isEnabled)
+        }
+        let refresh = app.buttons["refresh-library"]
+        scrollTo(refresh, in: form, expectingAbsent: hidden)
+        XCTAssertEqual(refresh.label, "刷新索引统计")
+        scrollTo(app.buttons["clear-index"], in: form, expectingAbsent: hidden)
         form.swipeUp()
         for element in hidden { expectAbsent(element) }
+        assertNoBatchControls()
+        XCTAssertFalse(app.buttons["confirm-clear-index"].exists)
+        XCTAssertFalse(app.buttons["confirm-rebuild-index"].exists)
+        back(from: "索引维护", to: "我的图库")
+        assertLibraryPrimary()
         XCTAssertFalse(app.alerts.firstMatch.exists)
-    }
-
-    private func expectResultLimit(_ title: String, picker: XCUIElement) {
-        // SwiftUI menu Picker exposes the selected title as its label or value.
-        let selected = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", title, title), object: picker)
-        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists)
     }
 
     private func typeExactly(_ text: String, into field: XCUIElement) {
