@@ -161,6 +161,19 @@ final class PhotoSyncPresentationTests: XCTestCase {
         let searchSession = f.app.resultSessionID
         let photosEpoch = f.app.photoLibraryEpoch
         let results = f.app.results.map(\.id)
+        // Seed synthetic browsing before the root can defer cleanup for sync.
+        // This uses the same no-Photos service, never a production guard override.
+        f.cleanup.scan()
+        await f.cleanup.waitUntilIdle()
+        XCTAssertTrue(f.cleanup.hasScanned)
+        XCTAssertTrue(f.cleanup.canSelect)
+        let prepCount = f.grouping.thresholds.count
+        XCTAssertEqual(prepCount, 1)
+        let groupIDs = f.cleanup.displayGroups.map(\.id)
+        let cleanupSession = try XCTUnwrap(f.cleanup.selectionSessionID)
+        let cleanupSelected = try XCTUnwrap(f.cleanup.displayGroups.first?.photos.first?.id)
+        f.cleanup.toggleSelection(cleanupSelected)
+        XCTAssertEqual(f.cleanup.selectedIDs, Set([cleanupSelected]))
         let host = try ControlsNativeHost(content: AnyView(ContentView(state: f.app,
             similarCleanupState: f.cleanup, navigation: f.navigation, cleanupPreferences: nil)))
         defer { host.close() }
@@ -213,18 +226,77 @@ final class PhotoSyncPresentationTests: XCTestCase {
         // root non-overlap and scrolling above it now use native window frames.
         try assertCardGeometry(host, cancel: true)
         f.navigation.select(.cleanup)
-        try await host.wait { f.cleanup.hasScanned }
+        try await host.wait { f.cleanup.isPageVisible && f.cleanup.isAutomaticRefreshDeferred }
         await f.cleanup.waitUntilIdle()
+        XCTAssertTrue(f.cleanup.hasScanned)
+        XCTAssertEqual(f.cleanup.displayGroups.map(\.id), groupIDs)
+        XCTAssertEqual(f.cleanup.selectionSessionID, cleanupSession)
+        XCTAssertEqual(f.cleanup.selectedIDs, Set([cleanupSelected]))
+        XCTAssertFalse(f.cleanup.canSelect)
+        XCTAssertFalse(f.cleanup.isGrouping)
+        XCTAssertFalse(f.cleanup.isRestoring)
+        XCTAssertEqual(f.grouping.thresholds.count, prepCount, "Entering cleanup during sync must not start a new grouping read")
         XCTAssertNotNil(host.sync[.card])
         XCTAssertTrue(host.hasRootBottomFrame(.syncToast))
         XCTAssertFalse(host.hasRootBottomFrame(.selectionToolbar), "Search actions must not leak onto cleanup")
         XCTAssertEqual(f.app.photoSync.phase, .updating)
-        let groupIDs = f.cleanup.displayGroups.map(\.id)
-        let cleanupSession = f.cleanup.selectionSessionID
+
+        // Commit while the fake backend is still held: browsing survives, but
+        // old selection authority is revoked and refresh remains coalesced.
+        let indexEpoch = f.app.indexSourceEpoch
+        try await service.commit(using: access)
+        try await host.wait { f.cleanup.needsRegroup }
+        XCTAssertEqual(f.app.photoSync.phase, .updating)
+        XCTAssertTrue(f.app.photoSync.canCancel)
+        XCTAssertNotEqual(f.app.indexSourceEpoch, indexEpoch)
+        XCTAssertEqual(f.app.photoLibraryEpoch, photosEpoch, "A source commit is not Photos access invalidation")
+        XCTAssertEqual(f.cleanup.displayGroups.map(\.id), groupIDs)
+        XCTAssertEqual(f.cleanup.selectionSessionID, cleanupSession)
+        XCTAssertTrue(f.cleanup.selectedIDs.isEmpty)
+        XCTAssertNil(f.cleanup.pendingDeletion)
+        XCTAssertFalse(f.cleanup.canSelect)
+        XCTAssertTrue(f.cleanup.isAutomaticRefreshDeferred)
+        XCTAssertFalse(f.cleanup.isGrouping)
+        XCTAssertFalse(f.cleanup.isRestoring)
+        XCTAssertEqual(f.grouping.thresholds.count, prepCount, "A held sync commit must not compute cleanup")
+        XCTAssertEqual(f.app.resultSessionID, searchSession)
+        XCTAssertEqual(f.app.results.map(\.id), results)
+        XCTAssertEqual(f.app.selectedResultIDs, Set([selected]))
+        XCTAssertEqual(f.app.query, query)
+        XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === searchScroll)
+
+        // Cancellation drains the backend and lets the real lifecycle observer
+        // release cleanup admission. Its card persists without a completion timer.
+        f.app.photoSync.cancel()
+        XCTAssertEqual(f.app.photoSync.phase, .cancelling)
+        XCTAssertTrue(f.cleanup.isAutomaticRefreshDeferred)
+        XCTAssertEqual(f.grouping.thresholds.count, prepCount)
+        run.release.open()
+        await f.app.waitForSync()
+        try await host.wait {
+            f.cleanup.hasScanned && !f.cleanup.needsRegroup
+                && !f.cleanup.isGrouping && !f.cleanup.isRestoring
+                && !f.cleanup.isAutomaticRefreshDeferred
+                && host.sync[.card] != nil && host.hasRootBottomFrame(.syncToast)
+        }
+        await f.cleanup.waitUntilIdle()
+        XCTAssertEqual(f.grouping.thresholds.count, prepCount + 1, "Exactly one coalesced automatic grouping follows the seed")
+        XCTAssertNotEqual(try XCTUnwrap(f.cleanup.selectionSessionID), cleanupSession)
+        XCTAssertEqual(f.cleanup.displayGroups.map(\.id), groupIDs)
+        XCTAssertTrue(f.cleanup.canSelect)
+        XCTAssertTrue(f.cleanup.selectedIDs.isEmpty)
+        XCTAssertEqual(f.app.photoSync.phase, .cancelled)
+        XCTAssertFalse(f.app.photoSync.canCancel)
+        XCTAssertTrue(f.app.photoSync.visible)
+        XCTAssertEqual(PhotoSyncToast(state: f.app.photoSync).title, "同步已取消")
+        XCTAssertNil(host.sync[.progress])
+        try assertCardGeometry(host, cancel: false)
         let navigationBeforeModal = try host.rootBottomFrame(.navigation)
         XCTAssertEqual(Set(host.tabs.keys), Set(PrimaryPage.allCases))
 
         f.cleanup.prepareDeletion() // Empty-selection alert only; never confirm/delete.
+        XCTAssertEqual(f.cleanup.message, PhotoDeletionError.emptySelection.localizedDescription)
+        XCTAssertNil(f.cleanup.pendingDeletion)
         try await host.wait {
             host.controller.presentedViewController != nil && host.sync[.card] == nil
                 && !host.hasRootBottomFrame(.syncToast)
@@ -249,21 +321,13 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertEqual(try host.rootBottomFrame(.navigation).height,
                        navigationBeforeModal.height, accuracy: host.pixel)
 
-        let indexEpoch = f.app.indexSourceEpoch
-        try await service.commit(using: access)
-        try await host.wait { f.cleanup.needsRegroup }
-        XCTAssertNotEqual(f.app.indexSourceEpoch, indexEpoch)
-        XCTAssertEqual(f.app.photoLibraryEpoch, photosEpoch, "A source commit is not Photos access invalidation")
-        XCTAssertEqual(f.cleanup.displayGroups.map(\.id), groupIDs)
-        XCTAssertEqual(f.cleanup.selectionSessionID, cleanupSession)
-        XCTAssertFalse(f.cleanup.canSelect)
-        XCTAssertEqual(f.app.resultSessionID, searchSession)
-        XCTAssertEqual(f.app.results.map(\.id), results)
-        XCTAssertEqual(f.app.selectedResultIDs, Set([selected]))
         f.navigation.select(.search)
         try await host.settle()
         XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === searchScroll)
         XCTAssertEqual(f.app.query, query)
+        XCTAssertEqual(f.app.resultSessionID, searchSession)
+        XCTAssertEqual(f.app.results.map(\.id), results)
+        XCTAssertEqual(f.app.selectedResultIDs, Set([selected]))
         let returnedToolbar = try host.rootSelectionToolbarFrame()
         XCTAssertLessThanOrEqual(returnedToolbar.maxY, try host.rootBottomFrame(.syncToast).minY + host.pixel)
         try host.assertRootActionRegionsRouteOutsideScroll(in: returnedToolbar, excluding: searchScroll)
@@ -276,7 +340,10 @@ final class PhotoSyncPresentationTests: XCTestCase {
         try await host.wait { host.sync[.card] != nil && host.hasRootBottomFrame(.syncToast) }
         XCTAssertLessThanOrEqual(try host.rootSelectionToolbarFrame().maxY,
                      try host.rootBottomFrame(.syncToast).minY + host.pixel)
-        XCTAssertTrue(f.app.photoSync.canCancel)
+        XCTAssertEqual(f.app.photoSync.phase, .cancelled)
+        XCTAssertFalse(f.app.photoSync.canCancel)
+        XCTAssertTrue(f.app.photoSync.visible)
+        XCTAssertEqual(f.grouping.thresholds.count, prepCount + 1)
         let calls = await service.calls
         XCTAssertEqual(calls, 1)
         // Public notification + native scope evidence, not a real keyboard tap
