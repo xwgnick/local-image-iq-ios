@@ -311,11 +311,10 @@ final class ResultPaginationPresentationTests: XCTestCase {
             Text("TEST • synthetic results / no Photos")
                 .font(.caption2.weight(.semibold)).foregroundStyle(.white)
                 .padding(.vertical, 4).frame(maxWidth: .infinity).background(Color.black)
-            ContentView(state: state, cleanupPreferences: nil)
-                // A legitimate ancestor preference observer. No replacement
-                // sentinel, onAppear hook or mutation of observable view state.
-                // ContentView keeps its own preference reader and busy retry.
-                .onPreferenceChange(ResultPageBoundaryPreference.self) { boundary.observe($0) }
+            // Capture the production reader's actual callback before it can
+            // append a page; no separately coalesced ancestor preference reader.
+            ContentView(state: state, cleanupPreferences: nil,
+                        onPageBoundaryMeasured: { boundary.observe($0) })
         }
         .preferredColorScheme(.light)
         .environment(\.locale, Locale(identifier: "en_US"))
@@ -434,7 +433,7 @@ final class ResultPaginationPresentationTests: XCTestCase {
                                          session: UUID, count: Int = 12,
                                          file: StaticString = #filePath, line: UInt = #line) throws {
         let boundary = try XCTUnwrap(hosted.boundary.latest,
-                                     "The real offscreen boundary must already emit a parent preference",
+                                     "The real offscreen boundary must already reach the production preference callback",
                                      file: file, line: line)
         XCTAssertEqual(boundary.sessionID, session, file: file, line: line)
         XCTAssertEqual(boundary.visibleCount, count, file: file, line: line)

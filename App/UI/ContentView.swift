@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var visiblePageBoundary: ResultPageBoundaryValue?
     @FocusState private var isSearchFocused: Bool
     private let photoTextPresentation: SearchPhotoTextPresentation?
+    private let onPageBoundaryMeasured: ((ResultPageBoundaryValue?) -> Void)?
     private var showingResults: Bool { state.completedQuery != nil || state.activity == .searching }
     private var isSearchPageActive: Bool { navigation.page == .search }
     // Presentation gates page AX and stateless footer controls, never logical
@@ -42,9 +43,11 @@ struct ContentView: View {
          similarCleanupState: SimilarPhotoCleanupState? = nil,
          navigation: PrimaryNavigationPresentation? = nil,
          cleanupPreferences: UserDefaults? = .standard,
-         photoTextPresentation: SearchPhotoTextPresentation? = nil) {
+         photoTextPresentation: SearchPhotoTextPresentation? = nil,
+         onPageBoundaryMeasured: ((ResultPageBoundaryValue?) -> Void)? = nil) {
         self.state = state
         self.photoTextPresentation = photoTextPresentation
+        self.onPageBoundaryMeasured = onPageBoundaryMeasured
         _navigation = StateObject(wrappedValue: navigation ?? PrimaryNavigationPresentation())
         _photoActions = StateObject(wrappedValue: ResultPhotoActionsState(
             service: photoActionService ?? SystemPhotoLibraryActions(library: state.library)))
@@ -235,6 +238,9 @@ struct ContentView: View {
                 .coordinateSpace(name: ResultPageBoundary.coordinateSpace)
                 .onPreferenceChange(ResultPageBoundaryPreference.self) { boundary in
                     visiblePageBoundary = boundary
+                    // Observe the exact value consumed here, before paging can
+                    // replace it. Forward nil only when this callback receives it.
+                    onPageBoundaryMeasured?(boundary)
                     requestVisiblePage(boundary, viewportHeight: viewport.size.height)
                 }
                 .onChange(of: state.isBusy) { _, busy in

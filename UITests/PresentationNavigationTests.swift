@@ -770,19 +770,20 @@ final class PresentationNavigationTests: XCTestCase {
         disclosure.tap()
         expectHittable(threshold)
         expectHittable(app.staticTexts["similar-cleanup-broad-threshold-note"])
-        // Use XCTest's slider action for an exact interior value. AX frame
-        // height is not the native thumb's travel inset: the old coordinate
-        // estimate ended at .94 on the observed 370x31 slider. Physical drags
-        // above/below still test both endpoint gestures without relaxing values.
-        threshold.adjust(toNormalizedSliderPosition: CGFloat((95.0 - 50.0) / 49.0))
-        expectThreshold(0.95)
+        // Reopen and move to the strict endpoint. Interior touch positions are
+        // approximate even through XCTest's normalized API (observed .94/.96
+        // for requested .95). Exact .95 default and all ticks are separately
+        // asserted by native controls/policy tests; this case tests real drag,
+        // collapsed warning and retained unauthorized-page behavior.
+        dragThreshold(from: 0.50, to: 0.99)
+        expectThreshold(0.99)
         expectAbsent(app.staticTexts["similar-cleanup-broad-threshold-note"])
         assertUnreadyCleanup()
 
         // Release a NON-default target to distinguish retention/queued work
         // from applied preferences. Missing authorization must not admit it.
         let pendingThreshold = appliedThreshold == 0.99 ? 0.50 : 0.99
-        dragThreshold(from: 0.95, to: pendingThreshold)
+        dragThreshold(from: 0.99, to: pendingThreshold)
         expectThreshold(pendingThreshold)
         disclosure.tap()
         expectAbsent(threshold)

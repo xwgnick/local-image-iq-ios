@@ -295,9 +295,10 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
     }
 
     private func settleVisibleResults(_ c: PrimaryAXContext, host: PrimaryAXHost,
-                                      scroll: UIScrollView, boundary: PrimaryAXBoundaryProbe) async throws {
+                                      scroll: UIScrollView, boundary: PrimaryAXBoundaryProbe,
+                                      file: StaticString = #filePath, line: UInt = #line) async throws {
         try await settle(host)
-        try await requireLayout(host) {
+        try await requireLayout(host, file: file, line: line) {
             guard c.navigation.page == .search, !c.state.isBusy, scroll.window === host.window,
                   scroll.bounds.height > 0, !c.state.results.isEmpty else { return false }
             if !c.state.hasMoreResults { return boundary.latest == nil }
@@ -400,8 +401,8 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
 
     private func mountContent(_ c: PrimaryAXContext, boundary: PrimaryAXBoundaryProbe? = nil) async throws -> PrimaryAXHost {
         let host = try await mount(AnyView(ContentView(state: c.state, photoActionService: PrimaryAXNoPhotos(),
-            similarCleanupState: c.cleanup, navigation: c.navigation)
-            .onPreferenceChange(ResultPageBoundaryPreference.self) { boundary?.latest = $0 }))
+            similarCleanupState: c.cleanup, navigation: c.navigation,
+            onPageBoundaryMeasured: { boundary?.latest = $0 })))
         do {
             try await requireLayout(host) {
                 self.descendants(host.controller.view, PrimaryPageAccessibilityAnchorView.self).count == 2
@@ -437,7 +438,9 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         guard await XCTWaiter.fulfillment(of: [delivered], timeout: 5) == .completed else { throw PrimaryAXFailure.layout }
     }
 
-    private func requireLayout(_ host: PrimaryAXHost, observed: @escaping @MainActor () -> Bool) async throws {
+    private func requireLayout(_ host: PrimaryAXHost,
+                               file: StaticString = #filePath, line: UInt = #line,
+                               observed: @escaping @MainActor () -> Bool) async throws {
         let inspect: @MainActor () -> Bool = { host.layout(); return observed() }
         let predicate = NSPredicate { _, _ in
             if Thread.isMainThread { return MainActor.assumeIsolated { inspect() } }
@@ -445,7 +448,7 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         }
         let ready = XCTNSPredicateExpectation(predicate: predicate, object: nil)
         guard await XCTWaiter.fulfillment(of: [ready], timeout: 5) == .completed else {
-            XCTFail("Missing actual native page boundary/layout")
+            XCTFail("Missing actual native page boundary/layout", file: file, line: line)
             throw PrimaryAXFailure.layout
         }
     }
