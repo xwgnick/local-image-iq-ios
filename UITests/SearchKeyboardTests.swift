@@ -106,13 +106,11 @@ final class SearchKeyboardTests: XCTestCase {
     }
 
     func testDraggingScrollViewDismissesKeyboard() throws {
-        // 2026-10-08: the user explicitly accepted this one unresolved gesture
-        // for builds 33/34; on 2026-10-09 explicitly extended it to build 35's
-        // photo-sync repair IPA. Record a SKIP, never a pass. Other builds retain
-        // the original assertion; all Search/Done/Library keyboard tests run.
-        let build = Bundle(for: SearchKeyboardTests.self).object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        try XCTSkipIf(build == "33" || build == "34" || build == "35",
-            "User-approved build 33/34/35 release exception: scroll-to-dismiss remains unresolved; use Done. Not a pass.")
+        // 2026-10-09: the user explicitly made ONLY this existing release
+        // exception permanent ("永久沿用，以后不必询问"). Keep the original
+        // test body for future repair; Search/Done/Library and edge-back run.
+        try XCTSkipIf(true,
+            "Permanent user-approved exception: scroll-to-dismiss remains unresolved; use Done. Not a pass.")
         let field = focusQuery()
         let scroll = app.scrollViews["library-scroll"]
         let keyboard = app.keyboards.firstMatch
