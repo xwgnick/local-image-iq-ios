@@ -8,6 +8,7 @@ struct ContentView: View {
     @StateObject private var photoActions: ResultPhotoActionsState
     @StateObject private var similarCleanup: SimilarPhotoCleanupState
     @StateObject private var navigation: PrimaryNavigationPresentation
+    @StateObject private var layoutDelivery = SearchLayoutDelivery()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var showFilters = false
@@ -212,7 +213,16 @@ struct ContentView: View {
                             ResultPageBoundary(sessionID: session, visibleCount: state.results.count)
                         }
                     }
-                    .onPreferenceChange(SearchHeaderHeight.self) { searchHeaderHeight = $0 }
+                    .onPreferenceChange(SearchHeaderHeight.self) { height in
+                        // Only the idle illustration needs this height. Never
+                        // feed result-grid growth back during a layout pass.
+                        guard !showingResults else { return }
+                        layoutDelivery.deliverHeader {
+                            guard !showingResults, height.isFinite, height > 0,
+                                  searchHeaderHeight != height else { return }
+                            searchHeaderHeight = height
+                        }
+                    }
                     .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 24)
                     .frame(maxWidth: 800).frame(maxWidth: .infinity)
                     .background {
@@ -237,11 +247,14 @@ struct ContentView: View {
                 })
                 .coordinateSpace(name: ResultPageBoundary.coordinateSpace)
                 .onPreferenceChange(ResultPageBoundaryPreference.self) { boundary in
-                    visiblePageBoundary = boundary
                     // Observe both exact inputs before admission can replace the
                     // boundary. Forward nil only when this callback receives it.
                     onPageBoundaryMeasured?(boundary, viewport.size.height)
-                    requestVisiblePage(boundary, viewportHeight: viewport.size.height)
+                    let height = viewport.size.height
+                    layoutDelivery.deliverBoundary {
+                        visiblePageBoundary = boundary
+                        requestVisiblePage(boundary, viewportHeight: height)
+                    }
                 }
                 .onChange(of: state.isBusy) { _, busy in
                     if !busy { requestVisiblePage(visiblePageBoundary, viewportHeight: viewport.size.height) }
