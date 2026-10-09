@@ -643,10 +643,9 @@ final class PresentationNavigationTests: XCTestCase {
     }
 
     func testPrimaryCleanupDraftDisclosureAndSettingsIsolationWithoutPermission() throws {
-        // The existing helper's model-free recovery route is not model readiness.
-        if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
-            throw XCTSkip("Live similar cleanup navigation requires the real bundled models")
-        }
+        // This case explicitly stays unauthorized and asserts NO grouping work.
+        // It can validate controls model-free; launch() still forbids recovery
+        // bypass in model-required release runs. This is not model readiness.
         launch()
         assertHomeControls()
         let library = app.buttons["open-library"]
@@ -771,7 +770,11 @@ final class PresentationNavigationTests: XCTestCase {
         disclosure.tap()
         expectHittable(threshold)
         expectHittable(app.staticTexts["similar-cleanup-broad-threshold-note"])
-        dragThreshold(from: 0.50, to: 0.95)
+        // Use XCTest's slider action for an exact interior value. AX frame
+        // height is not the native thumb's travel inset: the old coordinate
+        // estimate ended at .94 on the observed 370x31 slider. Physical drags
+        // above/below still test both endpoint gestures without relaxing values.
+        threshold.adjust(toNormalizedSliderPosition: CGFloat((95.0 - 50.0) / 49.0))
         expectThreshold(0.95)
         expectAbsent(app.staticTexts["similar-cleanup-broad-threshold-note"])
         assertUnreadyCleanup()

@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 import UIKit
+import Combine
 import Photos
 import ImageIQCore
 @testable import LocalImageIQ
@@ -66,48 +67,93 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         c.state.search()
         await c.state.waitUntilIdle()
         let searchSession = try XCTUnwrap(c.state.resultSessionID)
-        let ids = c.state.results.map(\.id)
-        let scores = c.state.results.map { $0.score.bitPattern }
-        let first = try XCTUnwrap(ids.first)
+        let resolution = c.state.completedSearchQuery
+        let status = c.state.status
+        var pages: [[SearchHit]] = []
+        let subscription = c.state.$results.sink { pages.append($0) }
+        defer { subscription.cancel() }
+        let first = try XCTUnwrap(c.state.results.first?.id)
         c.state.setSelectingResults(true)
         c.state.toggleResultSelection(first)
-        let host = try await mountContent(c)
+        let boundary = PrimaryAXBoundaryProbe()
+        let host = try await mountContent(c, boundary: boundary)
         defer { host.close() }
         let scopes = try pageScopes(host)
         let scroll = try primarySearchScrollView(in: host.controller.view)
+        try await settleVisibleResults(c, host: host, scroll: scroll, boundary: boundary)
         let original = scroll.contentOffset
-        scroll.setContentOffset(CGPoint(x: original.x, y: original.y + 100), animated: false)
-        try await settle(host)
+        let bottom = max(-scroll.adjustedContentInset.top,
+                         scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+        XCTAssertGreaterThan(bottom, original.y, "Exercise actual scrolling, not an out-of-content offset")
+        scroll.setContentOffset(CGPoint(x: original.x, y: min(original.y + 100, bottom)), animated: false)
+        try await settleVisibleResults(c, host: host, scroll: scroll, boundary: boundary)
         XCTAssertGreaterThan(scroll.contentOffset.y, original.y)
+        // Native five-column layout can auto-fill multiple pages both at mount
+        // and after scrolling. Capture retention ONLY after those real events.
         let offset = scroll.contentOffset
+        let ids = c.state.results.map(\.id)
+        let scores = c.state.results.map { $0.score.bitPattern }
+        let visiblePageCounts = pages.map(\.count)
+        assertSearchPageTrace(pages, context: c, session: searchSession)
+        attachSearchGeometry(c, host: host, scroll: scroll, boundary: boundary, phase: "before-tab")
         c.navigation.select(.cleanup)
         try await settle(host)
         await c.cleanup.waitUntilIdle()
         try await settle(host)
         assertScopes(scopes, scroll: scroll, active: .cleanup, host: host)
+        XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === scroll)
+        XCTAssertEqual(scroll.contentOffset.x, offset.x)
+        XCTAssertEqual(scroll.contentOffset.y, offset.y, accuracy: 1 / host.window.screen.scale)
+        XCTAssertEqual(c.state.resultSessionID, searchSession)
+        XCTAssertEqual(c.state.results.map(\.id), ids, "Hidden layout must not append or reset search pages")
+        XCTAssertEqual(c.state.results.map { $0.score.bitPattern }, scores)
+        XCTAssertEqual(pages.map(\.count), visiblePageCounts, "No publication while search is hidden")
+        XCTAssertTrue(c.state.isSelectingResults)
+        XCTAssertEqual(c.state.selectedResultIDs, Set([first]))
+        attachSearchGeometry(c, host: host, scroll: scroll, boundary: boundary, phase: "hidden")
         let cleanupSession = try XCTUnwrap(c.cleanup.selectionSessionID)
         let photo = try XCTUnwrap(c.cleanup.groups.first?.photos.first)
         c.cleanup.toggleSelection(photo.id)
         XCTAssertEqual(c.cleanup.selectedIDs, Set([photo.id]))
 
         c.navigation.select(.search)
-        try await settle(host)
+        try await settleVisibleResults(c, host: host, scroll: scroll, boundary: boundary)
         assertScopes(scopes, scroll: scroll, active: .search, host: host)
         XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === scroll)
         XCTAssertEqual(scroll.contentOffset.x, offset.x)
         XCTAssertEqual(scroll.contentOffset.y, offset.y, accuracy: 1 / host.window.screen.scale)
         XCTAssertEqual(c.state.query, "TEST coast")
         XCTAssertEqual(c.state.completedQuery, c.state.query)
+        XCTAssertEqual(c.state.completedSearchQuery, resolution)
+        XCTAssertEqual(c.state.status, status)
         XCTAssertEqual(c.state.resultSessionID, searchSession)
-        XCTAssertEqual(c.state.results.map(\.id), ids)
-        XCTAssertEqual(c.state.results.map { $0.score.bitPattern }, scores)
+        XCTAssertGreaterThanOrEqual(c.state.results.count, ids.count)
+        XCTAssertEqual(Array(c.state.results.prefix(ids.count)).map(\.id), ids)
+        XCTAssertEqual(Array(c.state.results.prefix(ids.count)).map { $0.score.bitPattern }, scores)
+        assertSearchPageTrace(pages, context: c, session: searchSession)
         XCTAssertTrue(c.state.isSelectingResults)
         XCTAssertEqual(c.state.selectedResultIDs, Set([first]))
+        attachSearchGeometry(c, host: host, scroll: scroll, boundary: boundary, phase: "returned")
+        let returnedIDs = c.state.results.map(\.id)
+        let returnedScores = c.state.results.map { $0.score.bitPattern }
+        let returnedPageCounts = pages.map(\.count)
         c.navigation.select(.cleanup)
         try await settle(host)
         await c.cleanup.waitUntilIdle()
+        try await settle(host)
+        assertScopes(scopes, scroll: scroll, active: .cleanup, host: host)
+        XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === scroll)
+        XCTAssertEqual(scroll.contentOffset.x, offset.x)
+        XCTAssertEqual(scroll.contentOffset.y, offset.y, accuracy: 1 / host.window.screen.scale)
+        XCTAssertEqual(c.state.resultSessionID, searchSession)
+        XCTAssertEqual(c.state.results.map(\.id), returnedIDs)
+        XCTAssertEqual(c.state.results.map { $0.score.bitPattern }, returnedScores)
+        XCTAssertEqual(pages.map(\.count), returnedPageCounts)
+        XCTAssertTrue(c.state.isSelectingResults)
+        XCTAssertEqual(c.state.selectedResultIDs, Set([first]))
         XCTAssertEqual(c.cleanup.selectionSessionID, cleanupSession)
         XCTAssertEqual(c.cleanup.selectedIDs, Set([photo.id]))
+        attachSearchGeometry(c, host: host, scroll: scroll, boundary: boundary, phase: "hidden-again")
         XCTAssertEqual(c.grouping.restores, 1)
         XCTAssertEqual(c.grouping.scans, 1)
         XCTAssertEqual(c.worker.searches, 1)
@@ -235,6 +281,52 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
 
     // MARK: Actual production hosts and public UIKit containment only
 
+    private func attachSearchGeometry(_ c: PrimaryAXContext, host: PrimaryAXHost, scroll: UIScrollView,
+                                      boundary: PrimaryAXBoundaryProbe, phase: String) {
+        let attachment = XCTAttachment(string: """
+        phase=\(phase) page=\(c.navigation.page) count=\(c.state.results.count)
+        window=\(host.window.bounds) viewport=\(scroll.bounds) insets=\(scroll.adjustedContentInset)
+        content=\(scroll.contentSize) offset=\(scroll.contentOffset)
+        boundary=\(String(describing: boundary.latest)) session=\(String(describing: c.state.resultSessionID))
+        """)
+        attachment.name = "primary-AX-search-geometry-\(phase)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func settleVisibleResults(_ c: PrimaryAXContext, host: PrimaryAXHost,
+                                      scroll: UIScrollView, boundary: PrimaryAXBoundaryProbe) async throws {
+        try await settle(host)
+        try await requireLayout(host) {
+            guard c.navigation.page == .search, !c.state.isBusy, scroll.window === host.window,
+                  scroll.bounds.height > 0, !c.state.results.isEmpty else { return false }
+            if !c.state.hasMoreResults { return boundary.latest == nil }
+            guard let value = boundary.latest, value.sessionID == c.state.resultSessionID,
+                  value.visibleCount == c.state.results.count,
+                  value.frame.minY.isFinite, value.frame.width > 0, value.frame.height > 0 else { return false }
+            return value.frame.minY >= scroll.bounds.height || value.frame.maxY <= 0
+        }
+    }
+
+    private func assertSearchPageTrace(_ pages: [[SearchHit]], context c: PrimaryAXContext, session: UUID,
+                                       file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(pages.map(\.count), [12, 24, 36, 37].filter { $0 <= c.state.results.count },
+                       "Returning may append only the next full ordered prefix, not replace/replay a page",
+                       file: file, line: line)
+        for page in pages {
+            let expected = Array(c.worker.hits.prefix(page.count))
+            XCTAssertEqual(page.map(\.id), expected.map(\.id), file: file, line: line)
+            XCTAssertEqual(page.map { $0.score.bitPattern }, expected.map { $0.score.bitPattern }, file: file, line: line)
+        }
+        XCTAssertEqual(c.state.resultSessionID, session, file: file, line: line)
+        XCTAssertEqual(c.state.totalResultCount, c.worker.hits.count, file: file, line: line)
+        XCTAssertEqual(c.state.hasMoreResults, c.state.results.count < c.worker.hits.count, file: file, line: line)
+        XCTAssertNil(c.state.activity, file: file, line: line)
+        XCTAssertNil(c.state.errorMessage, file: file, line: line)
+        XCTAssertFalse(PhotoLibraryClient.canRead, file: file, line: line)
+        XCTAssertEqual(c.worker.searches, 1, file: file, line: line)
+    }
+
     private func pageScopes(_ host: PrimaryAXHost) throws -> (search: UINavigationController, cleanup: UINavigationController) {
         let anchors = descendants(host.controller.view, PrimaryPageAccessibilityAnchorView.self)
         XCTAssertEqual(anchors.count, 2)
@@ -306,9 +398,10 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         }
     }
 
-    private func mountContent(_ c: PrimaryAXContext) async throws -> PrimaryAXHost {
+    private func mountContent(_ c: PrimaryAXContext, boundary: PrimaryAXBoundaryProbe? = nil) async throws -> PrimaryAXHost {
         let host = try await mount(AnyView(ContentView(state: c.state, photoActionService: PrimaryAXNoPhotos(),
-            similarCleanupState: c.cleanup, navigation: c.navigation)))
+            similarCleanupState: c.cleanup, navigation: c.navigation)
+            .onPreferenceChange(ResultPageBoundaryPreference.self) { boundary?.latest = $0 }))
         do {
             try await requireLayout(host) {
                 self.descendants(host.controller.view, PrimaryPageAccessibilityAnchorView.self).count == 2
@@ -390,6 +483,11 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
 }
 
 private enum PrimaryAXFailure: Error { case layout, photosReadable, unexpectedWork }
+
+@MainActor
+private final class PrimaryAXBoundaryProbe {
+    var latest: ResultPageBoundaryValue?
+}
 
 @MainActor
 private struct PrimaryAXContext {
