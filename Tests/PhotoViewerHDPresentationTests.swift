@@ -186,10 +186,16 @@ final class PhotoViewerHDPresentationTests: XCTestCase {
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
             context.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
         }
-        return stride(from: 0, to: bytes.count, by: 4).reduce(0) { count, i in
-            count + (bytes[i + channel] > 240 && bytes[i + (channel + 1) % 3] < 16
-                     && bytes[i + (channel + 2) % 3] < 16 ? 1 : 0)
+        let otherChannel = (channel + 1) % 3
+        let lastChannel = (channel + 2) % 3
+        var matchingPixels = 0
+        for index in stride(from: 0, to: bytes.count, by: 4) {
+            let strongPrimary = bytes[index + channel] > 240
+            let weakOther = bytes[index + otherChannel] < 16
+            let weakLast = bytes[index + lastChannel] < 16
+            if strongPrimary && weakOther && weakLast { matchingPixels += 1 }
         }
+        return matchingPixels
     }
 }
 

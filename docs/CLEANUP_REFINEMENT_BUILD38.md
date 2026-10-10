@@ -25,3 +25,4 @@ New source tests cover adaptive chips/navigation, OCR intent/drain/footer/librar
 ## Validation ledger
 
 1. Targeted run38041139808 / job114181461565, source `d321dfab731c0952e6fcb2f2cee3c42b87056afa`: FAILED at test compilation, not a test pass. Production compile reached test compilation. Two test-source issues: integer arithmetic inferred as Int in CGFloat expectation; subscription attempted to use a projected publisher for computed `selectionSessionID`. Fixed by explicit CGFloat arithmetic and observing actual groups publication (after session assignment). No production safety gates or assertions weakened; no IPA from this run.
+2. Targeted run38041450136 / job114182355819, source `a34b4bfea9c18c8cd4ed105e8276a48c68db2a75`: FAILED at test compilation. Swift type checker exceeded its expression budget in the HD test pixel-count reduce expression. Replaced it with equivalent typed loop and unchanged RGB thresholds. No production or acceptance change.
