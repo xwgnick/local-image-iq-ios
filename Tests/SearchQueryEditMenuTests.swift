@@ -16,6 +16,9 @@ final class SearchQueryEditMenuTests: XCTestCase {
         XCTAssertFalse(button.showsMenuAsPrimaryAction)
         XCTAssertFalse(button.isEnabled)
         XCTAssertFalse(button.isAccessibilityElement)
+        XCTAssertTrue(button.accessibilityElementsHidden)
+        XCTAssertFalse(button.isUserInteractionEnabled)
+        XCTAssertNil(button.accessibilityIdentifier)
         XCTAssertNil(button.accessibilityHint)
     }
 
@@ -30,6 +33,9 @@ final class SearchQueryEditMenuTests: XCTestCase {
         XCTAssertTrue(children[1].attributes.contains(.disabled))
         XCTAssertTrue(button.showsMenuAsPrimaryAction)
         XCTAssertTrue(button.isAccessibilityElement)
+        XCTAssertFalse(button.accessibilityElementsHidden)
+        XCTAssertTrue(button.isUserInteractionEnabled)
+        XCTAssertEqual(button.accessibilityIdentifier, "search-query-menu")
         XCTAssertEqual(button.accessibilityCustomActions?.map(\.name), ["显示译文"])
     }
 
@@ -163,17 +169,35 @@ final class SearchQueryEditMenuTests: XCTestCase {
 
     func testDismantleDoesNotOverwriteMenusOrAccessibilityActionsItNoLongerOwns() throws {
         var calls = 0
+        var foreignMenuCalls = 0
+        var foreignAXCalls = 0
         let button = makeButton([SearchQueryMenuAction(id: "show", title: "Show") { calls += 1 }])
         let old = try XCTUnwrap(menuActions(button).first)
-        let foreignMenu = UIMenu(children: [UIAction(title: "Other owner") { _ in }])
-        let foreignAX = UIAccessibilityCustomAction(name: "Other owner") { _ in true }
+        let oldAX = try XCTUnwrap(button.accessibilityCustomActions?.first)
+        let foreignMenu = UIMenu(children: [UIAction(title: "Other owner") { _ in foreignMenuCalls += 1 }])
+        let foreignAX = UIAccessibilityCustomAction(name: "Other owner") { _ in
+            foreignAXCalls += 1
+            return true
+        }
         button.menu = foreignMenu
         button.accessibilityCustomActions = [foreignAX]
+        // UIButton.menu has copy semantics. Ownership is the object read back
+        // after assignment, not necessarily the UIMenu passed to the setter.
+        let installedForeignMenu = try XCTUnwrap(button.menu)
+        XCTAssertEqual(installedForeignMenu.children.map(\.title), ["Other owner"])
         SearchQueryEditMenu.dismantleUIView(button, coordinator: ())
-        XCTAssertTrue(button.menu === foreignMenu)
+        XCTAssertTrue(button.menu === installedForeignMenu, "Dismantle must leave the installed foreign menu untouched")
+        XCTAssertTrue(button.showsMenuAsPrimaryAction)
         XCTAssertTrue(button.accessibilityCustomActions?.first === foreignAX)
         UIControl().sendAction(old)
+        XCTAssertEqual(oldAX.actionHandler?(oldAX), false)
         XCTAssertEqual(calls, 0)
+        UIControl().sendAction(try XCTUnwrap(menuActions(button).first))
+        let currentAX = try XCTUnwrap(button.accessibilityCustomActions?.first)
+        XCTAssertEqual(currentAX.actionHandler?(currentAX), true)
+        XCTAssertEqual(foreignMenuCalls, 1)
+        XCTAssertEqual(foreignAXCalls, 1)
+        XCTAssertEqual(calls, 0, "Foreign actions must not invoke the dismantled search handler")
     }
 
     func testRetainedMenuAndAccessibilityActionsDoNotRetainTheButton() throws {

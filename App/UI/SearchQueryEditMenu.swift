@@ -83,10 +83,12 @@ final class SearchQueryEditMenuButton: UIButton {
         setImage(UIImage(systemName: "magnifyingglass",
                          withConfiguration: UIImage.SymbolConfiguration(textStyle: .body)), for: .normal)
         imageView?.adjustsImageSizeForAccessibilityContentSizeCategory = true
-        accessibilityIdentifier = "search-query-menu"
+        accessibilityIdentifier = nil
         accessibilityLabel = "本次搜索"
         tintColor = .secondaryLabel
         isAccessibilityElement = false
+        accessibilityElementsHidden = true
+        isUserInteractionEnabled = false
         isEnabled = false
     }
 
@@ -98,7 +100,14 @@ final class SearchQueryEditMenuButton: UIButton {
         self.actions = actions
         installed = true
         isEnabled = enabled && !actions.isEmpty
+        isUserInteractionEnabled = isEnabled
         isAccessibilityElement = !actions.isEmpty
+        // UIKit can expose a UIButton through automation even when only
+        // isAccessibilityElement is false. Empty state is decoration, with no
+        // interaction, identifier or accessible subtree; preserve the view's
+        // layout identity so editing focus does not churn when actions appear.
+        accessibilityElementsHidden = actions.isEmpty
+        accessibilityIdentifier = actions.isEmpty ? nil : "search-query-menu"
         accessibilityHint = actions.isEmpty ? nil : "轻点或长按查看搜索选项"
         showsMenuAsPrimaryAction = !actions.isEmpty
 

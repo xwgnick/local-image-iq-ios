@@ -85,7 +85,12 @@ final class SearchRootAccessibilityIntegrationTests: XCTestCase {
         XCTAssertEqual(app.buttons.matching(identifier: "primary-cleanup-tab").count, 1, file: file, line: line)
         // Without a completed query the magnifier is decorative, not an empty
         // menu or an ellipsis control competing with text selection.
-        XCTAssertFalse(element("search-query-menu").exists, file: file, line: line)
+        let menu = element("search-query-menu")
+        let menuExists = menu.exists
+        if menuExists {
+            attachAccessibilityFailure("Search root exposes search-query-menu before a completed query", element: menu)
+        }
+        XCTAssertFalse(menuExists, "The decorative icon must not expose a query-menu AX element", file: file, line: line)
     }
 
     private func assertCoveredRoot(file: StaticString = #filePath, line: UInt = #line) {
@@ -112,6 +117,23 @@ final class SearchRootAccessibilityIntegrationTests: XCTestCase {
 
     private func expectAbsent(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, file: file, line: line)
+        let result = XCTWaiter.wait(for: [gone], timeout: 5)
+        if result != .completed {
+            attachAccessibilityFailure("Expected root element to leave the AX tree", element: element)
+        }
+        XCTAssertEqual(result, .completed, file: file, line: line)
+    }
+
+    private func attachAccessibilityFailure(_ message: String, element: XCUIElement) {
+        // Keep the exact matched element and complete tree: a sheet's same-label
+        // text must not be mistaken for the underlying root without evidence.
+        let hierarchy = XCTAttachment(string: "\(message)\n\nMatched query:\n\(element.debugDescription)\n\nApplication:\n\(app.debugDescription)")
+        hierarchy.name = "Search-root-accessibility-failure"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Search-root-accessibility-failure-screen"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 }

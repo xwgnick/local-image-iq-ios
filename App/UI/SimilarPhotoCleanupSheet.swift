@@ -658,7 +658,7 @@ struct SimilarPhotoCleanupSheet: View {
 /// Public layout preferences describe the real controls, not a second fitting
 /// copy. Native-host tests can measure the same text/slider frames.
 enum SimilarCleanupControlPart: Hashable {
-    case introduction, instruction, disclosure, labels, slider, value, action, pending, warning
+    case introduction, instruction, disclosure, labels, slider, minimumCountSlider, value, action, pending, warning
 }
 
 struct SimilarCleanupControlFrames: PreferenceKey {
@@ -774,6 +774,7 @@ struct SimilarCleanupThresholdControls: View {
                     SimilarCleanupMinimumCountSlider(value: state.minimumGroupCount,
                         maximum: max(2, state.largestGroupCount), changed: state.setMinimumGroupCount)
                         .frame(height: 44)
+                        .cleanupControlFrame(.minimumCountSlider)
                     Text(state.groups.isEmpty ? "暂无可筛选分组" : "\(state.minimumGroupCount)张 · 当前最大组\(state.largestGroupCount)张")
                         .font(.system(size: 11)).monospacedDigit()
                         .accessibilityIdentifier("similar-cleanup-minimum-count-value")

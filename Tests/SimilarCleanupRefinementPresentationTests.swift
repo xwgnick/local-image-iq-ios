@@ -17,14 +17,17 @@ final class SimilarCleanupRefinementPresentationTests: XCTestCase {
         defer { host.close() }
         try await host.wait { host.controls[.disclosure] != nil }
         try host.disclosure().sendActions(for: .touchUpInside)
-        try await host.wait { controlsDescendants(host.controller.view, UISlider.self).count == 2 }
+        try await host.wait {
+            controlsDescendants(host.controller.view, UISlider.self).count == 2
+                && host.controls[.minimumCountSlider] != nil
+        }
         let sliders = controlsDescendants(host.controller.view, UISlider.self)
         let minimum = try XCTUnwrap(sliders.first { $0.accessibilityIdentifier == "similar-cleanup-minimum-count" })
         let similarity = try XCTUnwrap(sliders.first { $0 !== minimum })
         XCTAssertEqual(minimum.minimumValue, 2)
         XCTAssertEqual(minimum.maximumValue, 6)
         XCTAssertEqual(minimum.value, 2)
-        XCTAssertEqual(minimum.bounds.height, 44, accuracy: host.pixel)
+        try assertMinimumCountHitArea(minimum, in: host)
         XCTAssertEqual(similarity.value, Float(45) / 49, accuracy: 0.000_001)
         minimum.setValue(5, animated: false)
         minimum.sendActions(for: .valueChanged)
@@ -191,6 +194,49 @@ final class SimilarCleanupRefinementPresentationTests: XCTestCase {
         f.cleanup.confirmDeletion(intent)
         XCTAssertEqual(f.cleanup.pendingDeletion?.id, fresh.id)
         XCTAssertEqual(f.grouping.thresholds, [0.95], "A transient inactive scene does not recompute groups")
+    }
+
+    private func assertMinimumCountHitArea(_ slider: UISlider, in host: ControlsNativeHost,
+                                           file: StaticString = #filePath, line: UInt = #line) throws {
+        // Measure the actual outer .frame(height: 44), not UISlider's intrinsic
+        // drawing height (31 points on the failing simulator). Padding alone is
+        // not a hit-target proof: also check window routing in both outer bands.
+        let target = try XCTUnwrap(host.controls[.minimumCountSlider], file: file, line: line)
+        let native = slider.convert(slider.bounds, to: host.window)
+        let points = [CGPoint(x: target.midX, y: target.minY + host.pixel),
+                      CGPoint(x: target.midX, y: target.maxY - host.pixel)]
+        let hits = points.map { host.window.hitTest($0, with: nil) }
+        var evidence = ["target=\(target)", "native=\(native)"]
+        for (point, hit) in zip(points, hits) {
+            if let hit {
+                evidence.append("point=\(point) hit=\(String(reflecting: type(of: hit))) frame=\(hit.convert(hit.bounds, to: host.window))")
+            } else { evidence.append("point=\(point) hit=nil") }
+        }
+        let attachment = XCTAttachment(string: evidence.joined(separator: "\n"))
+        attachment.name = "Cleanup-minimum-slider-native-hit-geometry"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        XCTAssertEqual(target.height, 44, accuracy: host.pixel, file: file, line: line)
+        XCTAssertGreaterThan(native.height, 0, file: file, line: line)
+        XCTAssertEqual(native.midX, target.midX, accuracy: host.pixel, file: file, line: line)
+        XCTAssertEqual(native.midY, target.midY, accuracy: host.pixel, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(native.minY + host.pixel, target.minY, file: file, line: line)
+        XCTAssertLessThanOrEqual(native.maxY, target.maxY + host.pixel, file: file, line: line)
+        XCTAssertEqual(native.width, target.width, accuracy: host.pixel, file: file, line: line)
+        for hit in hits {
+            let hit = try XCTUnwrap(hit, "The 44-point slider target must receive touches", file: file, line: line)
+            if hit === slider || hit.isDescendant(of: slider) { continue }
+            // SwiftUI may own a touch wrapper. Accept only the slider's own
+            // tightly bounded wrapper, never an arbitrary scroll/root ancestor.
+            XCTAssertTrue(slider.isDescendant(of: hit), "Hit must belong to this slider", file: file, line: line)
+            let frame = hit.convert(hit.bounds, to: host.window)
+            XCTAssertEqual(frame.minX, target.minX, accuracy: host.pixel, file: file, line: line)
+            XCTAssertEqual(frame.minY, target.minY, accuracy: host.pixel, file: file, line: line)
+            XCTAssertEqual(frame.width, target.width, accuracy: host.pixel, file: file, line: line)
+            XCTAssertEqual(frame.height, target.height, accuracy: host.pixel, file: file, line: line)
+        }
+        // This is native hit routing, not a claim of a delivered physical drag.
     }
 
     private func grid(in controller: UIViewController) -> SimilarPhotoGroupGridController? {
