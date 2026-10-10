@@ -10,14 +10,14 @@ import ImageIQCore
 /// recursive SwiftUI AX snapshot (which is not available in an app-host test).
 /// The unchanged external XCUI tests remain responsible for strict public
 /// button/label existence and identifier absence, including photo-query,
-/// photo-text-search-enabled and index-photo-text. Native bar attachment and
+/// photo-text-search-enabled and the absence of index-photo-text on search. Native bar attachment and
 /// geometry below do not establish that individual toolbar buttons are visible.
 @MainActor
 final class PrimaryPageAccessibilityTests: XCTestCase {
     func testActualPagesExcludeInactiveNativeContentAndHeadersWithoutRemovingControls() async throws {
         let c = try await context()
         c.state.query = "TEST retained query"
-        c.state.textSearchEnabled = true // Also renders the manual OCR action.
+        c.state.textSearchEnabled = true // Explicit OCR intent; fixture lacks indexing readiness.
         let host = try await mountContent(c)
         defer { host.close() }
         let scopes = try pageScopes(host)

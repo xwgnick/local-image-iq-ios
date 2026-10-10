@@ -279,7 +279,7 @@ final class SimilarCleanupRefinementTests: XCTestCase {
         f.state.resume()
         try await reached(hold.entered)
         let published = expectation(description: "Fresh full result published")
-        let subscription = f.state.$selectionSessionID.compactMap { $0 }.prefix(1).sink { _ in published.fulfill() }
+        let subscription = f.state.$groups.dropFirst().filter { !$0.isEmpty }.prefix(1).sink { _ in published.fulfill() }
         defer { subscription.cancel() }
         f.state.setAutomaticRefreshDeferred(false)
         try await reached(published)

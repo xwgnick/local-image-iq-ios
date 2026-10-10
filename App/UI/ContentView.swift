@@ -234,7 +234,7 @@ struct ContentView: View {
                             .accessibilityHidden(true)
                     }
                     // Inside the navigation/scroll AX boundaries, including
-                    // the query, OCR switch and its manual indexing action.
+                    // the query, OCR switch and its introduction action.
                     .accessibilityHidden(!isSearchPageAccessible)
                 }
                 .scrollDismissesKeyboard(.interactively)

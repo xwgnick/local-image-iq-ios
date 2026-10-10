@@ -63,7 +63,7 @@ final class SearchQueryChipLayoutTests: XCTestCase {
     func testImpossibleMinimumStillKeepsOneBoundedContentProportionalRow() {
         let result = allocate([50, 100, 300], width: 120)
         XCTAssertEqual(result.spacing, 0)
-        assertWidths(result, [120 * 50 / 450, 120 * 100 / 450, 80])
+        assertWidths(result, [CGFloat(120) * 50 / 450, CGFloat(120) * 100 / 450, 80])
         assertWidths(allocate([50, 100, 300], width: 0), [0, 0, 0])
     }
 

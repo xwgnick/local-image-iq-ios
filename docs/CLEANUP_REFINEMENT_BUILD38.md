@@ -21,3 +21,7 @@ Status: implementation and targeted native validation in progress. No build38 IP
 Targeted native workflow first, full release only after related checks pass. No added waiver; permanent drag-dismiss-keyboard exception remains SKIP, not PASS. No real private Photos deletion, no uninstall/data reset/reindex requirement. Same Sideloadly identity for overwrite installation after delivery.
 
 New source tests cover adaptive chips/navigation, OCR intent/drain/footer/library, HD demand/permissions/late callbacks, cleanup filters/multi-selection/browsing authority, cold-cache cost and exact scores, secondary menu and integrated root presentation. Source/static review is not native validation; exact runs/results will be appended as available.
+
+## Validation ledger
+
+1. Targeted run38041139808 / job114181461565, source `d321dfab731c0952e6fcb2f2cee3c42b87056afa`: FAILED at test compilation, not a test pass. Production compile reached test compilation. Two test-source issues: integer arithmetic inferred as Int in CGFloat expectation; subscription attempted to use a projected publisher for computed `selectionSessionID`. Fixed by explicit CGFloat arithmetic and observing actual groups publication (after session assignment). No production safety gates or assertions weakened; no IPA from this run.
