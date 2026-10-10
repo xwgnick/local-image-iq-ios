@@ -856,10 +856,24 @@ private struct SimilarCleanupMinimumCountSlider: UIViewRepresentable {
         slider.tintColor = UIColor(IQStyle.accent)
         slider.accessibilityValue = "\(value)张"
     }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISlider, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width, height: 44)
+    }
 }
 
 @MainActor
 private final class SimilarCleanupIntegerSlider: UISlider {
+    // UISlider's native alignment rectangle can inset a 31pt drawing surface
+    // inside SwiftUI's outer frame. Own the full promised touch rectangle rather
+    // than relying on passive padding (which routed to the scroll view on iOS).
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: super.intrinsicContentSize.width, height: 44)
+    }
+    override var alignmentRectInsets: UIEdgeInsets { .zero }
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        bounds.contains(point)
+    }
     override func accessibilityIncrement() { adjust(by: 1) }
     override func accessibilityDecrement() { adjust(by: -1) }
     private func adjust(by amount: Float) {
