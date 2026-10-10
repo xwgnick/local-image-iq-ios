@@ -11,7 +11,7 @@ import ImageIQCore
 /// Gates signal entry/cancellation explicitly; no sleeps, polling or timeouts.
 @MainActor
 final class PhotoTextStateTests: XCTestCase {
-    func testDefaultIsOffAndSessionOnlyTogglesStartNoWork() async {
+    func testDefaultIsOffAndUnavailableToggleDefersOneIntentWithoutWork() async {
         let c = context()
         XCTAssertFalse(c.state.textSearchEnabled)
         XCTAssertFalse(c.state.canIndexText)
@@ -25,6 +25,7 @@ final class PhotoTextStateTests: XCTestCase {
             await c.state.waitUntilIdle()
             XCTAssertEqual(c.state.textSearchEnabled, enabled)
             XCTAssertTrue(c.worker.events.isEmpty)
+            XCTAssertEqual(c.state.ocrSync.pending, enabled)
             XCTAssertEqual(c.translator.counts, [0, 0, 0])
         }
         let fresh = context()
@@ -62,12 +63,11 @@ final class PhotoTextStateTests: XCTestCase {
         let disabled = context(preferences: defaults)
         XCTAssertFalse(disabled.state.textSearchEnabled)
         XCTAssertEqual(defaults.object(forKey: PhotoTextStateFixtures.preferenceKey) as? Bool, false)
-        assertNoIndexWork(c)
+        assertNoIndexWork(c, textCalls: 1)
     }
 
     func testEnabledColdStartAndForegroundOnlyPrepareOrRefreshNeverAutoIndex() async {
-        let c = context()
-        c.state.textSearchEnabled = true
+        let c = context(savedEnabled: true)
         c.state.allowICloudDownload = true
         c.state.start()
         await c.state.waitUntilIdle()
@@ -93,8 +93,7 @@ final class PhotoTextStateTests: XCTestCase {
 
     func testIndexTextGuardsEnabledAccessModelsCurrentImageCountsAndForeground() async {
         for condition in PhotoTextStateBlockedCondition.allCases {
-            let c = context()
-            c.state.textSearchEnabled = condition != .disabled
+            let c = context(savedEnabled: condition != .disabled)
             switch condition {
             case .disabled: break
             case .denied: c.permission.status = .denied
@@ -121,12 +120,11 @@ final class PhotoTextStateTests: XCTestCase {
             assertNoIndexWork(c)
         }
         for access in [PHAuthorizationStatus.authorized, .limited] {
-            let c = context()
+            let c = context(savedEnabled: true)
             c.permission.status = access
             c.worker.refreshSummary.authorizedCount = 0
             c.worker.refreshSummary.authorizedCountKnown = false
             c.worker.refreshSummary.textIndexStatisticsKnown = false
-            c.state.textSearchEnabled = true
             c.state.refresh()
             await c.state.waitUntilIdle()
             XCTAssertTrue(c.state.canIndexText, "Stored current-model image counts, not a live Photos or OCR count, gate the action")
@@ -135,8 +133,7 @@ final class PhotoTextStateTests: XCTestCase {
 
     func testExplicitIndexCapturesNetworkFlagAndBusyCallsCannotStartAnotherJob() async {
         for allowed in [false, true] {
-            let c = await ready()
-            c.state.textSearchEnabled = true
+            let c = await ready(enabled: true)
             c.state.allowICloudDownload = allowed
             XCTAssertTrue(c.worker.textNetworkFlags.isEmpty)
             let gate = c.makeGate()
@@ -164,11 +161,10 @@ final class PhotoTextStateTests: XCTestCase {
     }
 
     func testTextProgressAndSuccessfulSummaryNeverOverwriteImageProgress() async {
-        let c = await ready()
+        let c = await ready(enabled: true)
         await seedImageProgress(c)
         let imageProgress = c.state.progress
         let imageSummary = c.state.summary
-        c.state.textSearchEnabled = true
         let gate = c.makeGate()
         c.worker.nextTextGate = gate
         c.worker.textProgressAfter = PhotoTextStateFixtures.complete
@@ -194,11 +190,10 @@ final class PhotoTextStateTests: XCTestCase {
     }
 
     func testPartialCancellationKeepsImageStateAndRequiresExplicitTextRetry() async {
-        let c = await ready()
+        let c = await ready(enabled: true)
         await seedImageProgress(c)
         let imageProgress = c.state.progress
         let oldSummary = c.state.summary
-        c.state.textSearchEnabled = true
         let gate = c.makeGate()
         c.worker.nextTextGate = gate
         c.state.indexPhotoText()
@@ -233,9 +228,8 @@ final class PhotoTextStateTests: XCTestCase {
         XCTAssertEqual(c.state.progress, imageProgress)
     }
 
-    func testDisablingDuringTextIndexCancelsAndReenablingDoesNotResumeAutomatically() async {
-        let c = await ready()
-        c.state.textSearchEnabled = true
+    func testDisablingDuringTextIndexCancelsAndNewOnEventStartsOneFreshIncrementalUpdate() async {
+        let c = await ready(enabled: true)
         let gate = c.makeGate()
         c.worker.nextTextGate = gate
         c.state.indexPhotoText()
@@ -253,14 +247,13 @@ final class PhotoTextStateTests: XCTestCase {
         c.state.textSearchEnabled = true
         await c.state.waitUntilIdle()
         XCTAssertTrue(c.state.canIndexText)
-        XCTAssertEqual(c.worker.textNetworkFlags, [false])
+        XCTAssertEqual(c.worker.textNetworkFlags, [false, false])
         XCTAssertTrue(c.worker.imageNetworkFlags.isEmpty)
     }
 
     func testSuccessorAwaitsCancelledPredecessorAndRejectsOldProgressAndSummaryTokens() async throws {
-        let c = await ready()
+        let c = await ready(enabled: true)
         await seedImageProgress(c)
-        c.state.textSearchEnabled = true
         let imageProgress = c.state.progress
         let originalCounts = c.state.summary.textIndexCounts
         let oldGate = c.makeGate()
@@ -301,11 +294,10 @@ final class PhotoTextStateTests: XCTestCase {
     }
 
     func testBackgroundCancelsTextIndexRejectsLateCallbacksAndForegroundDoesNotResumeIt() async throws {
-        let c = await ready()
+        let c = await ready(enabled: true)
         await seedImageProgress(c)
         let imageProgress = c.state.progress
         let oldSummary = c.state.summary
-        c.state.textSearchEnabled = true
         let gate = c.makeGate()
         c.worker.nextTextGate = gate
         c.worker.textProgressAfter = PhotoTextStateFixtures.complete
@@ -340,11 +332,10 @@ final class PhotoTextStateTests: XCTestCase {
         let errors: [Error] = [PhotoTextStatePrivateError(),
                                AppFailure.photo(PhotoTextStateFixtures.privateDetail), CancellationError()]
         for error in errors {
-            let c = await ready()
+            let c = await ready(enabled: true)
             await seedImageProgress(c)
             let imageProgress = c.state.progress
             let imageSummary = c.state.summary
-            c.state.textSearchEnabled = true
             c.worker.textError = error
             c.state.indexPhotoText()
             await c.state.waitUntilIdle()
@@ -375,8 +366,7 @@ final class PhotoTextStateTests: XCTestCase {
 
     func testNewSearchOverloadReceivesExactOriginalChineseAlongsideResolvedEnglishOnAndOff() async throws {
         for enabled in [false, true] {
-            let c = await ready()
-            c.state.textSearchEnabled = enabled
+            let c = await ready(enabled: enabled)
             c.state.query = PhotoTextStateFixtures.chinese
             c.state.locationWeight = 0.37
             c.worker.searchResponse = PhotoTextStateFixtures.response(textUsed: enabled)
@@ -403,8 +393,7 @@ final class PhotoTextStateTests: XCTestCase {
     }
 
     func testFilterRerunPreservesCompletedOriginalAndEnglishWithoutRetranslation() async throws {
-        let c = await ready()
-        c.state.textSearchEnabled = true
+        let c = await ready(enabled: true)
         c.state.query = PhotoTextStateFixtures.chinese
         await search(c)
         let resolution = try XCTUnwrap(c.state.completedSearchQuery)
@@ -426,8 +415,7 @@ final class PhotoTextStateTests: XCTestCase {
     }
 
     func testUseOriginalAndItsFilterRerunKeepChineseThenANormalSearchTranslatesAgain() async throws {
-        let c = await ready()
-        c.state.textSearchEnabled = true
+        let c = await ready(enabled: true)
         c.state.query = PhotoTextStateFixtures.chinese
         c.state.search(useOriginal: true)
         await c.state.waitUntilIdle()
@@ -451,8 +439,7 @@ final class PhotoTextStateTests: XCTestCase {
     }
 
     func testSimilarityAndItsFilterRerunNeverInvokeTextSearchOCRorTranslation() async throws {
-        let c = await ready()
-        c.state.textSearchEnabled = true
+        let c = await ready(enabled: true)
         c.state.query = PhotoTextStateFixtures.chinese
         c.worker.searchResponse = PhotoTextStateFixtures.response(textUsed: true)
         await search(c)
@@ -483,8 +470,7 @@ final class PhotoTextStateTests: XCTestCase {
 
     func testEitherToggleInvalidatesCompletedResultsAndCancelsHeldWorkerSearch() async throws {
         for initiallyEnabled in [false, true] {
-            let c = await ready()
-            c.state.textSearchEnabled = initiallyEnabled
+            let c = await ready(enabled: initiallyEnabled)
             c.worker.searchResponse = PhotoTextStateFixtures.response(textUsed: initiallyEnabled)
             await search(c)
             let session = try XCTUnwrap(c.state.resultSessionID)
@@ -514,14 +500,13 @@ final class PhotoTextStateTests: XCTestCase {
             XCTAssertEqual(c.worker.searchRequests.map(\.enabled), [initiallyEnabled, !initiallyEnabled])
             XCTAssertNil(c.state.errorMessage)
             assertNoSearch(c.state)
-            assertNoIndexWork(c)
+            assertNoIndexWork(c, textCalls: 1)
         }
     }
 
     func testEitherToggleCancelsHeldTranslationBeforeAnyWorkerSearch() async {
         for enabled in [false, true] {
-            let c = await ready()
-            c.state.textSearchEnabled = enabled
+            let c = await ready(enabled: enabled)
             c.state.query = PhotoTextStateFixtures.chinese
             let gate = c.makeGate()
             c.translator.nextGate = gate
@@ -537,7 +522,7 @@ final class PhotoTextStateTests: XCTestCase {
             XCTAssertTrue(c.worker.searchRequests.isEmpty)
             XCTAssertNil(c.state.errorMessage)
             assertNoSearch(c.state)
-            assertNoIndexWork(c)
+            assertNoIndexWork(c, textCalls: enabled ? 0 : 1)
         }
     }
 
@@ -571,8 +556,7 @@ final class PhotoTextStateTests: XCTestCase {
     }
 
     func testEnabledFreshStatisticsReplaceOldCountsAndNewSessionsClearTextBadgesImmediately() async throws {
-        let c = await ready()
-        c.state.textSearchEnabled = true
+        let c = await ready(enabled: true)
         c.worker.searchResponse = PhotoTextStateFixtures.response(textUsed: true)
         await search(c)
         let firstSession = try XCTUnwrap(c.state.resultSessionID)
@@ -666,21 +650,135 @@ final class PhotoTextStateTests: XCTestCase {
         XCTAssertEqual(worker.mutationCalls, 0)
     }
 
+    func testUserOnStartsOnceAndDuplicateTrueRefreshAndReopenDoNotRepeatOCR() async {
+        let c = await ready()
+        let gate = c.makeGate()
+        c.worker.nextTextGate = gate
+        c.state.textSearchEnabled = true
+        await gate.entered.wait()
+        XCTAssertEqual(c.state.ocrSync.phase, .updating)
+        XCTAssertTrue(c.state.ocrSync.currentRunning)
+        c.state.textSearchEnabled = true
+        c.state.indexPhotoText() // Busy manual duplicate must also coalesce.
+        XCTAssertEqual(c.worker.textNetworkFlags, [false])
+        gate.open()
+        await c.state.waitUntilIdle()
+        XCTAssertFalse(c.state.ocrSync.currentRunning)
+        c.state.textSearchEnabled = true
+        c.state.refresh()
+        await c.state.waitUntilIdle()
+        c.state.enterBackground()
+        await c.state.waitUntilIdle()
+        c.state.enterForeground()
+        await c.state.waitUntilIdle()
+        assertNoIndexWork(c, textCalls: 1)
+    }
+
+    func testOnDuringBusyRefreshDefersOnceAndOffCancelsOnlyPendingOCR() async {
+        for disable in [false, true] {
+            let c = await ready()
+            let gate = c.makeGate()
+            c.worker.nextRefreshGate = gate
+            c.state.refresh()
+            await gate.entered.wait()
+            c.state.textSearchEnabled = true
+            c.state.textSearchEnabled = true
+            XCTAssertTrue(c.state.ocrSync.pending)
+            XCTAssertFalse(c.state.ocrSync.currentRunning)
+            XCTAssertTrue(c.worker.textNetworkFlags.isEmpty)
+            if disable { c.state.textSearchEnabled = false }
+            XCTAssertEqual(c.state.activity, .refreshing)
+            gate.open()
+            await c.state.waitUntilIdle()
+            XCTAssertEqual(c.worker.maximumActiveCalls, 1)
+            assertNoIndexWork(c, textCalls: disable ? 0 : 1)
+        }
+    }
+
+    func testOffOnDuringCancelledWorkerDrainStartsOneNewRunAfterOldReturn() async throws {
+        let c = await ready()
+        let old = c.makeGate()
+        c.worker.nextTextGate = old
+        c.state.textSearchEnabled = true
+        await old.entered.wait()
+        let callback = try XCTUnwrap(c.worker.textCallbacks.first)
+        c.state.textSearchEnabled = false
+        await old.cancelled.wait()
+        let new = c.makeGate()
+        c.worker.nextTextGate = new
+        c.state.textSearchEnabled = true
+        c.state.textSearchEnabled = true
+        XCTAssertEqual(c.state.ocrSync.phase, .cancelling)
+        XCTAssertTrue(c.state.ocrSync.pending)
+        XCTAssertEqual(c.worker.textNetworkFlags.count, 1)
+        old.open()
+        await new.entered.wait()
+        await callback(.init(total: 999, completed: 998))
+        XCTAssertEqual(c.state.textIndexProgress, PhotoTextStateFixtures.partial)
+        XCTAssertEqual(c.state.ocrSync.progress, PhotoTextStateFixtures.partial)
+        XCTAssertEqual(c.worker.maximumActiveCalls, 1)
+        new.open()
+        await c.state.waitUntilIdle()
+        XCTAssertEqual(c.worker.textNetworkFlags, [false, false])
+        XCTAssertFalse(c.state.ocrSync.currentRunning)
+    }
+
+    func testToggleFailureDoesNotAutoRetryButExplicitRetryUsesLatestCloudChoice() async {
+        let c = await ready()
+        c.worker.textError = PhotoTextStatePrivateError()
+        c.state.textSearchEnabled = true
+        await c.state.waitUntilIdle()
+        XCTAssertEqual(c.state.ocrSync.phase, .failed)
+        c.state.refresh()
+        await c.state.waitUntilIdle()
+        c.state.textSearchEnabled = true
+        XCTAssertEqual(c.worker.textNetworkFlags, [false])
+        c.worker.textError = nil
+        c.state.allowICloudDownload = true
+        XCTAssertEqual(c.worker.textNetworkFlags, [false])
+        c.state.retryOCRSync()
+        await c.state.waitUntilIdle()
+        XCTAssertEqual(c.worker.textNetworkFlags, [false, true])
+        XCTAssertNil(c.state.errorMessage)
+        XCTAssertFalse(c.state.status.contains(PhotoTextStateFixtures.privateDetail))
+    }
+
+    func testPendingToggleInBackgroundWaitsForForegroundReadinessOnce() async {
+        let c = await ready()
+        c.state.enterBackground()
+        await c.state.waitUntilIdle()
+        c.state.textSearchEnabled = true
+        c.state.textSearchEnabled = true
+        XCTAssertTrue(c.state.ocrSync.pending)
+        XCTAssertTrue(c.worker.textNetworkFlags.isEmpty)
+        c.state.enterForeground()
+        await c.state.waitUntilIdle()
+        assertNoIndexWork(c, textCalls: 1)
+    }
+
     // MARK: In-memory fixture lifecycle and assertions
 
-    private func context(preferences: UserDefaults? = nil) -> PhotoTextStateContext {
+    private func context(preferences: UserDefaults? = nil, savedEnabled: Bool = false) -> PhotoTextStateContext {
+        var preferences = preferences
+        if preferences == nil, savedEnabled {
+            let suite = "PhotoTextStateTests.restored.\(UUID().uuidString)"
+            let saved = UserDefaults(suiteName: suite)!
+            saved.set(true, forKey: PhotoTextStateFixtures.preferenceKey)
+            preferences = saved
+            addTeardownBlock { saved.removePersistentDomain(forName: suite) }
+        }
         let c = PhotoTextStateContext(preferences: preferences)
         addTeardownBlock { await c.releaseAndDrain() }
         return c
     }
 
-    private func ready() async -> PhotoTextStateContext {
-        let c = context()
+    private func ready(enabled: Bool = false) async -> PhotoTextStateContext {
+        let c = context(savedEnabled: enabled)
         c.state.refresh()
         await c.state.waitUntilIdle()
         c.state.query = "TEST photo text state"
         XCTAssertTrue(c.state.canSearch)
-        XCTAssertFalse(c.state.textSearchEnabled)
+        XCTAssertEqual(c.state.textSearchEnabled, enabled)
         return c
     }
 
@@ -710,9 +808,10 @@ final class PhotoTextStateTests: XCTestCase {
         XCTAssertTrue(state.textMatchedIDs.isEmpty, file: file, line: line)
     }
 
-    private func assertNoIndexWork(_ c: PhotoTextStateContext, file: StaticString = #filePath, line: UInt = #line) {
+    private func assertNoIndexWork(_ c: PhotoTextStateContext, textCalls: Int = 0,
+                                   file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(c.worker.imageNetworkFlags.isEmpty, file: file, line: line)
-        XCTAssertTrue(c.worker.textNetworkFlags.isEmpty, file: file, line: line)
+        XCTAssertEqual(c.worker.textNetworkFlags.count, textCalls, file: file, line: line)
         XCTAssertEqual(c.worker.clearCalls, 0, file: file, line: line)
         XCTAssertEqual(c.worker.diagnosticCalls, 0, file: file, line: line)
         XCTAssertEqual(c.translator.prepareCalls, 0, file: file, line: line)

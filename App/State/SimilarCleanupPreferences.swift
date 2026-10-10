@@ -7,6 +7,12 @@ import Foundation
 /// (including 80) unchanged; initialization and draft edits never rewrite it.
 enum SimilarCleanupPreferences {
     static let thresholdKey = "similarCleanupThreshold.v1"
+    // Presentation only, deliberately absent from the grouping/cache policy.
+    static let defaultMinimumGroupCount = 2
+
+    static func minimumGroupCount(_ value: Int, largestGroup: Int) -> Int {
+        min(max(defaultMinimumGroupCount, value), max(defaultMinimumGroupCount, largestGroup))
+    }
 
     static func threshold(in preferences: UserDefaults?) -> Float {
         guard let number = preferences?.object(forKey: thresholdKey) as? NSNumber,

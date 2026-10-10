@@ -12,7 +12,28 @@ struct SearchIndexCacheResult: Sendable {
     let records: [CachedPhoto]
     let source: SearchIndexCacheSource
     let signature: String
+    let writebackToken: UUID?
+
+    init(records: [CachedPhoto], source: SearchIndexCacheSource, signature: String, writebackToken: UUID? = nil) {
+        self.records = records
+        self.source = source
+        self.signature = signature
+        self.writebackToken = writebackToken
+    }
 }
+
+/// Optional aggregate observations of actual work, never a timing gate. No IDs,
+/// vectors, paths or digests are exposed. Production does not install an observer.
+enum SearchCachePreparationEvent: Sendable {
+    case sourceHashed(bytes: Int)
+    case recordsValidated(count: Int)
+    case encodingStarted
+    case imagesPacked(bytes: Int)
+    case payloadEncoded, envelopeEncoded
+    case fileStaged(bytes: Int), filePublished
+}
+
+enum SearchCacheDeferredCheckpoint: Sendable, Equatable { case beforeEncoding, beforeCommit }
 
 /// Disposable, scope-bound records, not a scorer or a replacement for SQLite.
 /// Initialization does no I/O. Only an explicit records request can write the
@@ -25,14 +46,24 @@ actor SearchIndexCache {
     private var resident: Resident?
     private var generation = UUID()
     private var ownPartials: Set<URL> = []
+    private var pendingWriteback: PendingWriteback?
+    private let observeWork: (@Sendable (SearchCachePreparationEvent) -> Void)?
+    private let deferredCheckpoint: (@Sendable (SearchCacheDeferredCheckpoint) async -> Void)?
 
-    init(directory: URL) { self.directory = directory }
+    init(directory: URL,
+         observeWork: (@Sendable (SearchCachePreparationEvent) -> Void)? = nil,
+         deferredCheckpoint: (@Sendable (SearchCacheDeferredCheckpoint) async -> Void)? = nil) {
+        self.directory = directory
+        self.observeWork = observeWork
+        self.deferredCheckpoint = deferredCheckpoint
+    }
 
     /// Closes the monitor and drops memory, but leaves the disposable disk file.
     func invalidate() {
         generation = UUID()
         resident = nil
         monitor = nil
+        pendingWriteback = nil
     }
 
     /// Manual clear never enumerates or deletes image/OCR databases, sidecars,
@@ -49,12 +80,13 @@ actor SearchIndexCache {
         if failed { throw SearchCacheFailure.unavailable }
     }
 
-    func records(modelVersion: String, accessibleIDs: Set<String>,
+    func records(modelVersion: String, accessibleIDs: Set<String>, deferPersistence: Bool = false,
                  load: @escaping @Sendable () async throws -> [CachedPhoto]) async throws -> SearchIndexCacheResult {
         // Actor reentrancy must not allow a suspended loader to undo clear(),
         // invalidate(), or a newer request (including a narrower access scope).
         let ticket = UUID()
         generation = ticket
+        pendingWriteback = nil
         var publication: SearchCacheFileIdentity?
         do {
             try check(ticket)
@@ -68,8 +100,13 @@ actor SearchIndexCache {
             if let resident, resident.scope == scope, resident.stamp == stamp {
                 if try unchanged(stamp) {
                     try check(ticket)
+                    if deferPersistence, let key = resident.unpersistedKey {
+                        pendingWriteback = PendingWriteback(ticket: ticket, key: key, stamp: stamp,
+                                                            records: resident.records)
+                    }
                     return SearchIndexCacheResult(records: resident.records, source: .resident,
-                                                  signature: resident.signature)
+                                                  signature: resident.signature,
+                                                  writebackToken: pendingWriteback?.ticket)
                 }
                 self.resident = nil
                 return try await uncached(scope: scope, ids: accessibleIDs, ticket: ticket, load: load)
@@ -79,7 +116,7 @@ actor SearchIndexCache {
             // Only the disposable file is ever read whole. The source database
             // is streamed in fixed 64 KiB chunks, including inaccessible rows as
             // opaque bytes, never interpreting their vector JSON.
-            guard let sourceSHA = try cacheFacilityValue({ try Self.hashDatabase(databaseURL) }) else {
+            guard let sourceSHA = try cacheFacilityValue({ try Self.hashDatabase(databaseURL, observeWork: observeWork) }) else {
                 return try await uncached(scope: scope, ids: accessibleIDs, ticket: ticket, load: load)
             }
             guard try unchanged(stamp) else {
@@ -99,11 +136,24 @@ actor SearchIndexCache {
             let loaded = try await load()
             try check(ticket)
             let records = try Self.acceptLoaded(loaded, scope: scope, ids: accessibleIDs)
+            observeWork?(.recordsValidated(count: records.count))
             guard try unchanged(stamp) else { return try Self.uncachedResult(records) }
+
+            if deferPersistence {
+                // These are the SAME validated immutable arrays used for this
+                // search, not a second SQL load. Swift arrays share storage here.
+                // No packing, plist encoding, checksum of payload, or write yet.
+                try check(ticket)
+                pendingWriteback = PendingWriteback(ticket: ticket, key: key, stamp: stamp, records: records)
+                resident = Resident(scope: scope, stamp: stamp, records: records, signature: signature,
+                                    unpersistedKey: key)
+                return SearchIndexCacheResult(records: records, source: .sqlite, signature: signature,
+                                              writebackToken: ticket)
+            }
 
             // Serialization/disk errors are optional-cache misses, not search
             // failures. Source changes and cancellation are NOT swallowed.
-            let data = try encodeIfPossible(records, key: key)
+            let data = try Self.encodeIfPossible(records, key: key, observeWork: observeWork)
             if let data {
                 let write = try persist(data, stamp: stamp, ticket: ticket)
                 publication = write.publication
@@ -133,6 +183,78 @@ actor SearchIndexCache {
         let stamp: SearchCacheStamp
         let records: [CachedPhoto]
         let signature: String
+        var unpersistedKey: SearchCacheKey? = nil
+    }
+
+    private struct PendingWriteback {
+        let ticket: UUID
+        let key: SearchCacheKey
+        let stamp: SearchCacheStamp
+        let records: [CachedPhoto]
+    }
+
+    /// Optional tail work, authorized only by the exact successful search read.
+    /// The worker owns/cancels/drains the task. Encoding immutable records runs
+    /// off this actor, so invalidate/clear/new scopes can revoke it while busy.
+    /// A newer request consumes a new ticket; old bytes can NEVER be relabelled
+    /// with a newer source hash or published after that request's invalidation.
+    func persistDeferred(_ ticket: UUID, indexAccess: IndexAccessCoordinator? = nil,
+                         validateAccess: @escaping @Sendable () throws -> Void = {}) async {
+        var publication: SearchCacheFileIdentity?
+        do {
+            try check(ticket)
+            guard let pending = pendingWriteback, pending.ticket == ticket else { return }
+            pendingWriteback = nil // One attempt per token, even on optional I/O failure.
+            guard try unchanged(pending.stamp) else { return }
+            try validateAccess()
+            await deferredCheckpoint?(.beforeEncoding)
+            try check(ticket)
+            guard try unchanged(pending.stamp) else { return }
+            try validateAccess()
+            let data = try await Self.encodeDeferred(pending.records, key: pending.key, observeWork: observeWork)
+            await deferredCheckpoint?(.beforeCommit)
+            try check(ticket)
+            // Do not queue a nonessential cache write ahead of a sync writer or
+            // hold a read lease during plist encoding. Contention skips this
+            // optional attempt; the source stamp still guards noncooperating SQL.
+            let lease: IndexAccessCoordinator.Lease?
+            if let indexAccess {
+                guard let granted = indexAccess.tryRead() else { return }
+                lease = granted
+            } else { lease = nil }
+            defer { lease?.release() }
+            guard try unchanged(pending.stamp) else { return }
+            try validateAccess()
+            if let data {
+                let write = try persist(data, stamp: pending.stamp, ticket: ticket)
+                publication = write.publication
+                guard write.safe else { return }
+            }
+            try check(ticket)
+            guard try unchanged(pending.stamp) else {
+                discardOwnPublication(publication)
+                return
+            }
+            try validateAccess()
+            resident?.unpersistedKey = nil
+        } catch {
+            discardOwnPublication(publication)
+            if generation == ticket {
+                // Cancelling optional tail work must not turn the next query
+                // into another cold SQL load. The read already succeeded and
+                // remains stamp/scope checked. Lifecycle invalidate/clear drops
+                // it explicitly; a source/access failure still drops it here.
+                if !Task.isCancelled { resident = nil }
+                pendingWriteback = nil
+            }
+            // The already computed response is snapshot-authoritative. This
+            // optional tail cannot change it or surface a late UI failure.
+        }
+    }
+
+    private nonisolated static func encodeDeferred(_ records: [CachedPhoto], key: SearchCacheKey,
+        observeWork: (@Sendable (SearchCachePreparationEvent) -> Void)?) async throws -> Data? {
+        try encodeIfPossible(records, key: key, observeWork: observeWork)
     }
 
     private func check(_ ticket: UUID) throws {
@@ -272,16 +394,20 @@ actor SearchIndexCache {
         }
     }
 
-    private static func hashDatabase(_ url: URL) throws -> Data {
+    private static func hashDatabase(_ url: URL,
+        observeWork: (@Sendable (SearchCachePreparationEvent) -> Void)?) throws -> Data {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hash = SHA256()
+        var bytesRead = 0
         while true {
             try Task.checkCancellation()
             guard let chunk = try handle.read(upToCount: 64 * 1024), !chunk.isEmpty else { break }
             hash.update(data: chunk)
+            bytesRead += chunk.count
         }
         try Task.checkCancellation()
+        observeWork?(.sourceHashed(bytes: bytesRead))
         return Data(hash.finalize())
     }
 
@@ -317,11 +443,15 @@ actor SearchIndexCache {
         }
     }
 
-    private func encodeIfPossible(_ records: [CachedPhoto], key: SearchCacheKey) throws -> Data? {
+    private static func encodeIfPossible(_ records: [CachedPhoto], key: SearchCacheKey,
+        observeWork: (@Sendable (SearchCachePreparationEvent) -> Void)?) throws -> Data? {
         do {
+            try Task.checkCancellation()
+            observeWork?(.encodingStarted)
             let encoder = PropertyListEncoder()
             encoder.outputFormat = .binary
             var packedLocations: [Data: Data] = [:]
+            var imageBytes = 0
             let rows = try records.map { cached -> SearchCacheRow in
                 try Task.checkCancellation()
                 let locationData = cached.photo.location.map { place -> Data in
@@ -330,11 +460,16 @@ actor SearchIndexCache {
                     packedLocations[bytes] = bytes
                     return bytes
                 }
-                return SearchCacheRow(cached, locationData: locationData)
+                let row = SearchCacheRow(cached, locationData: locationData)
+                imageBytes += row.image.count
+                return row
             }
+            observeWork?(.imagesPacked(bytes: imageBytes))
             let payload = try encoder.encode(rows)
+            observeWork?(.payloadEncoded)
             try Task.checkCancellation()
             let bytes = try encoder.encode(SearchCacheEnvelope(key: key, payload: payload))
+            observeWork?(.envelopeEncoded)
             try Task.checkCancellation()
             return bytes
         } catch {
@@ -364,6 +499,7 @@ actor SearchIndexCache {
             values.isExcludedFromBackup = true
             try excluded.setResourceValues(values)
             try bytes.write(to: temporary, options: [.withoutOverwriting, .completeFileProtectionUntilFirstUserAuthentication])
+            observeWork?(.fileStaged(bytes: bytes.count))
             var excludedFile = temporary
             try excludedFile.setResourceValues(values)
             guard let stagedIdentity = try SearchCacheFileIdentity.read(temporary) else {
@@ -382,6 +518,7 @@ actor SearchIndexCache {
         let published = temporary.path.withCString { from in
             binaryURL.path.withCString { to in Darwin.rename(from, to) == 0 }
         }
+        if published { observeWork?(.filePublished) }
         do {
             try check(ticket)
             let safe = try unchanged(stamp)
@@ -530,7 +667,7 @@ private final class SearchCacheMonitor {
     }
 }
 
-private struct SearchCacheScope: Codable, Equatable {
+private struct SearchCacheScope: Codable, Equatable, Sendable {
     let modelUTF8: Data
     let idsSHA256: Data
 
@@ -555,7 +692,7 @@ private struct SearchCacheScope: Codable, Equatable {
     }
 }
 
-private struct SearchCacheKey: Codable, Equatable {
+private struct SearchCacheKey: Codable, Equatable, Sendable {
     let scope: SearchCacheScope
     let databaseSHA256: Data
 

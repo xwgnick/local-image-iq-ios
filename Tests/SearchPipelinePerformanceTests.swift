@@ -83,6 +83,11 @@ final class SearchPipelinePerformanceTests: XCTestCase {
         assertPhase(cold, source: "数据库读取", matrix: false, snapshot: false,
                     enumerations: 1, captures: 1, loads: 1, builds: 1, validations: 3)
         assertSame(cold, old[0])
+        // Disk durability is no longer part of awaited search. Separately drain
+        // its optional tail before disk/restart assertions, outside cold timing.
+        let tailDrainStart = ProcessInfo.processInfo.systemUptime
+        await worker?.waitForSearchCacheWriteback()
+        let tailDrainSeconds = ProcessInfo.processInfo.systemUptime - tailDrainStart
         XCTAssertTrue(FileManager.default.fileExists(atPath: binary.path))
 
         // No adjacent repeat after cold; each of the three warm requests has a
@@ -149,7 +154,8 @@ final class SearchPipelinePerformanceTests: XCTestCase {
         }
         try Task.checkCancellation()
         try attachReport(old: old, cold: cold, warm: warm, warmOrder: warmOrder, restart: restart,
-                         databaseBytes: databaseBytes, binaryBytes: binaryBytes, seed: seed)
+                         databaseBytes: databaseBytes, binaryBytes: binaryBytes, seed: seed,
+                         tailDrainSeconds: tailDrainSeconds)
     }
 
     private func timedSearch(worker: PhotoIndexWorker, library: PipelinePerformanceLibrary,
@@ -245,7 +251,8 @@ final class SearchPipelinePerformanceTests: XCTestCase {
 
     private func attachReport(old: [PipelinePerformanceRun], cold: PipelinePerformanceRun,
                               warm: [PipelinePerformanceRun], warmOrder: [Int], restart: PipelinePerformanceRun,
-                              databaseBytes: Int64, binaryBytes: Int64, seed: PipelinePerformanceSeed) throws {
+                              databaseBytes: Int64, binaryBytes: Int64, seed: PipelinePerformanceSeed,
+                              tailDrainSeconds: Double) throws {
         var oldMS: [Double] = []
         var warmMS: [Double] = []
         var pairedSpeedups: [Double] = []
@@ -287,11 +294,14 @@ final class SearchPipelinePerformanceTests: XCTestCase {
             "timed_scope": "recorder creation through awaited PhotoIndexWorker.search and finish; worker return only",
             "model_boundary": "synthetic normalized vectors; mock prepare and text lookup; no ML or tokenizer",
             "photo_boundary": "fake full-access metadata walks and actual versioned snapshot cache; no PhotoKit or pixels",
-            "cold_scope": "first derived-cache request; includes full source SHA, SQLite JSON decode, binary encode/write, matrix construction",
+            "cold_scope": "first derived-cache request; includes full source SHA, SQLite JSON decode/validation and matrix construction; binary encode/write is non-awaited tail work after result construction",
+            "cache_tail_remaining_drain_seconds": tailDrainSeconds,
+            "cache_tail_drain_boundary": "wait after cold parity assertion; tail can already be running/completed; not total encoding duration",
             "binary_scope": "first request of new worker and metadata cache; includes full source SHA, binary validation/decode, matrix construction",
             "os_cache_state": "uncontrolled; seed/hash/reference reads precede cold; binary hash/header reads precede restart; no OS cache eviction",
             "cold_worker_previously_ran_reference_only": true,
-            "hash_serialization_matrix_costs_included_in_index_read": true,
+            "hash_serialization_matrix_costs_included_in_index_read": false,
+            "hash_and_matrix_costs_included_in_index_read": true,
             "hash_serialization_matrix_subtimings_separately_measured": false,
             "restart_is_same_process": true, "process_restart_measured": false,
             "ui_publication_measured": false, "page_access_validation_measured": false,

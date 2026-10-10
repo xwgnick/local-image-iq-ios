@@ -437,10 +437,11 @@ final class SimilarCleanupAutomaticRefreshTests: XCTestCase {
             XCTAssertTrue(f.state.groups.isEmpty)
             XCTAssertTrue(f.state.selectedIDs.isEmpty)
             XCTAssertNil(f.state.pendingDeletion)
-            let expected = outcome == 0 ? PhotoDeletionRecoveryNotice.success(count: 1)
+            let expected: String? = outcome == 0 ? nil
                 : outcome == 1 ? PhotoDeletionError.mutationFailed.localizedDescription
                 : PhotoDeletionError.cancelled.localizedDescription
             XCTAssertEqual(f.state.message, expected)
+            if outcome == 0 { XCTAssertEqual(f.state.statusNotice, "已删除1张照片") }
         }
     }
 

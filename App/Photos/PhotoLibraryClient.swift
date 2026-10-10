@@ -88,6 +88,9 @@ final class PhotoRequestGate<Value>: @unchecked Sendable {
 /// generation, authorization, registration and retained immutable fetch result.
 /// PhotoKit's thread-safe manager is shared; individual assets remain call-local.
 final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLibraryIndexing, PhotoThumbnailProviding, @unchecked Sendable {
+    /// Additive notification: compatibility viewers also observe invalidation,
+    /// without taking over the app's existing single change handler.
+    static let viewerDidChangeNotification = Notification.Name("PhotoLibraryClient.viewerDidChange")
     private let manager = PHImageManager.default()
     private let callbackLock = NSLock()
     private var changeHandler: (@Sendable () -> Void)?
@@ -144,6 +147,7 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
             guard let details = changeInstance.changeDetails(for: source.result) else { return source }
             return SearchFetch(result: details.fetchResultAfterChanges)
         }
+        NotificationCenter.default.post(name: Self.viewerDidChangeNotification, object: self)
         callbackLock.lock()
         let callback = changeHandler
         callbackLock.unlock()
@@ -472,6 +476,45 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
     func validateViewerSnapshot(_ snapshot: PhotoViewerSnapshot, id: String) throws {
         try snapshot.validate(id: id, authorization: { Self.authorization },
                               generation: { self.changeGeneration }, currentRevision: currentRevision(id:))
+    }
+
+    /// Captured before the first request, including when no local preview exists.
+    /// A cloud confirmation can therefore bind metadata without downloading first.
+    func viewerAsset(id: String) throws -> PhotoViewerAsset {
+        try Task.checkCancellation()
+        let authorization = Self.authorization
+        guard authorization == .authorized || authorization == .limited else { throw AppFailure.permission }
+        let generation = changeGeneration
+        guard let selectedAsset = asset(id: id) else { throw AppFailure.photo("This photo is no longer accessible.") }
+        let snapshot = PhotoViewerSnapshot(revision: PhotoRevision(asset: selectedAsset),
+                                           authorization: authorization, generation: generation)
+        try validateViewerSnapshot(snapshot, id: id)
+        return PhotoViewerAsset(snapshot: snapshot,
+            pixelSize: CGSize(width: selectedAsset.pixelWidth, height: selectedAsset.pixelHeight))
+    }
+
+    func viewerUpgrade(asset captured: PhotoViewerAsset, targetSize: CGSize,
+                       cloudConsent: Bool) async throws -> PhotoViewerImage {
+        let snapshot = captured.snapshot
+        let id = snapshot.revision.id
+        try validateViewerSnapshot(snapshot, id: id)
+        guard let selectedAsset = asset(id: id), PhotoRevision(asset: selectedAsset) == snapshot.revision,
+              selectedAsset.localIdentifier.utf8.elementsEqual(id.utf8),
+              CGSize(width: selectedAsset.pixelWidth, height: selectedAsset.pixelHeight) == captured.pixelSize else {
+            throw CancellationError()
+        }
+        try validateViewerSnapshot(snapshot, id: id)
+        let result = try await PhotoViewerImageLoader.upgrade(targetSize: targetSize, cloudConsent: cloudConsent,
+            request: { [self, manager] size, mode, options, callback in
+                do { try validateViewerSnapshot(snapshot, id: id) }
+                catch { callback(nil, [PHImageErrorKey: error]); return PHInvalidImageRequestID }
+                return manager.requestImage(for: selectedAsset, targetSize: size, contentMode: mode,
+                                            options: options, resultHandler: callback)
+            }, cancel: { [manager] in manager.cancelImageRequest($0) }, validate: { [self] in
+                try validateViewerSnapshot(snapshot, id: id)
+            })
+        try validateViewerSnapshot(snapshot, id: id)
+        return PhotoViewerImage(snapshot: snapshot, result: result)
     }
 
     private static func flag(_ key: String, _ info: [AnyHashable: Any]?) -> Bool {

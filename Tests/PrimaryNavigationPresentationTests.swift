@@ -170,8 +170,9 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         assertNoSideEffects(c)
     }
 
-    func testPhotoTextLabelInfoThenUnscaledSwitchAndOptInIsManualOnly() async throws {
+    func testPhotoTextLabelInfoThenUnscaledSwitchAndOnUpdatesExactlyOnce() async throws {
         let c = try await context()
+        c.worker.permitsTextUpdate = true
         let host = try await mountContent(c)
         defer { host.close() }
         try await requireMeasurements(host, text: true)
@@ -190,11 +191,16 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(nativeSwitch.bounds.width, 51)
         XCTAssertFalse(nativeSwitch.isOn)
         c.state.textSearchEnabled = true
+        await c.state.waitUntilIdle()
         try await settle(host)
         XCTAssertTrue(nativeSwitch.isOn)
         XCTAssertTrue(c.state.canIndexText)
-        XCTAssertEqual(c.state.summary.textIndexCounts.records, 0, "First ON offers manual establishment")
+        XCTAssertEqual(c.worker.textUpdates, 1, "First ON triggers one incremental worker call")
+        XCTAssertEqual(c.state.summary.textIndexCounts.records, 0, "Synthetic worker returns zero saved text records")
         XCTAssertNil(c.state.activity)
+        c.state.textSearchEnabled = true
+        await c.state.waitUntilIdle()
+        XCTAssertEqual(c.worker.textUpdates, 1)
         try capture(host, name: "main-navigation-search-text-on-dark")
         c.state.textSearchEnabled = false
         try await settle(host)
@@ -491,6 +497,8 @@ private final class NavigationReviewWorker: PhotoWorkServicing {
     let hits: [SearchHit]
     private(set) var searches = 0
     private(set) var unexpectedCalls = 0
+    private(set) var textUpdates = 0
+    var permitsTextUpdate = false
     var gate: NavigationSearchGate?
 
     init() {
@@ -513,12 +521,13 @@ private final class NavigationReviewWorker: PhotoWorkServicing {
         throw unexpected()
     }
     func indexText(networkAllowed: Bool, progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
+        if permitsTextUpdate { textUpdates += 1; return summary }
         throw unexpected()
     }
     func clear() async throws -> LibrarySummary { throw unexpected() }
     private func unexpected() -> NavigationReviewFailure {
         unexpectedCalls += 1
-        XCTFail("Presenting or opting in must never index/recognize/clear")
+        XCTFail("Presentation alone must never index/recognize/clear; only the explicit OCR toggle fixture permits text work")
         return .unexpectedWork
     }
 }

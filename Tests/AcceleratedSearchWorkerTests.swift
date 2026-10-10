@@ -23,7 +23,10 @@ final class AcceleratedSearchWorkerTests: XCTestCase {
     }
 
     private func context(rows: [CachedPhoto]? = nil, revisions: [PhotoRevision]? = nil,
-                         legacy: Bool = false, seed: Bool = true) throws -> AcceleratedWorkerContext {
+                         legacy: Bool = false, seed: Bool = true,
+                         observeWork: (@Sendable (SearchCachePreparationEvent) -> Void)? = nil,
+                         checkpoint: (@Sendable (SearchCacheDeferredCheckpoint) async -> Void)? = nil,
+                         indexAccess: IndexAccessCoordinator? = nil) throws -> AcceleratedWorkerContext {
         let directory = try TestFixtures.temporaryDirectory()
         let rows = rows ?? [row("a"), row("b", axis: 1), row("c", axis: 2)]
         if seed { try TestFixtures.seedRawCache(rows, directory: directory) }
@@ -35,8 +38,11 @@ final class AcceleratedSearchWorkerTests: XCTestCase {
             ? AcceleratedWorkerLibrary(current) : AcceleratedSnapshotLibrary(current)
         let encoders = try AcceleratedWorkerEncoders()
         let writer = SQLitePhotoStore(directory: directory)
-        let worker = PhotoIndexWorker(library: library, encoders: encoders, directory: directory, resolver: resolver)
+        let cache = SearchIndexCache(directory: directory, observeWork: observeWork, deferredCheckpoint: checkpoint)
+        let worker = PhotoIndexWorker(library: library, encoders: encoders, directory: directory, resolver: resolver,
+                                      indexAccess: indexAccess, searchCache: cache)
         addTeardownBlock {
+            await worker.releaseSearchMemory()
             await writer.close()
             try FileManager.default.removeItem(at: directory)
         }
@@ -45,26 +51,35 @@ final class AcceleratedSearchWorkerTests: XCTestCase {
     }
 
     private func anotherWorker(_ c: AcceleratedWorkerContext) -> PhotoIndexWorker {
-        PhotoIndexWorker(library: c.library, encoders: c.encoders, directory: c.directory, resolver: resolver)
+        let worker = PhotoIndexWorker(library: c.library, encoders: c.encoders, directory: c.directory, resolver: resolver)
+        addTeardownBlock { await worker.releaseSearchMemory() }
+        return worker
     }
 
     private func search(_ c: AcceleratedWorkerContext, text: String = "first", original: String = "receipt",
                         limit: Int = Int.max, weight: Float = 0.6, filters: PhotoSearchFilters = .init(),
                         ocr: Bool = false, reference: Bool = false,
-                        timing: SearchTimingRecorder? = nil) async throws -> SearchResponse {
+                        timing: SearchTimingRecorder? = nil, drainWriteback: Bool = true) async throws -> SearchResponse {
         let service: any PhotoWorkServicing = c.worker
-        return try await service.search(text: text, originalText: original, limit: limit, locationWeight: weight,
-                                        filters: filters, textSearchEnabled: ocr, timing: timing, referenceSearch: reference)
+        let response = try await service.search(text: text, originalText: original, limit: limit, locationWeight: weight,
+                                               filters: filters, textSearchEnabled: ocr, timing: timing, referenceSearch: reference)
+        // Existing disk assertions explicitly wait for optional persistence;
+        // production search does NOT wait. Cold-path tests opt out below.
+        if drainWriteback { await c.worker.waitForSearchCacheWriteback() }
+        return response
     }
 
     private func measured(_ c: AcceleratedWorkerContext, text: String = "first", limit: Int = Int.max,
                           weight: Float = 0.6, reference: Bool = false) async throws
         -> (response: SearchResponse, report: SearchTimingReport) {
         let timing = SearchTimingRecorder(mode: reference ? "reference" : "accelerated")
-        let response = try await search(c, text: text, limit: limit, weight: weight, reference: reference, timing: timing)
+        let response = try await search(c, text: text, limit: limit, weight: weight, reference: reference,
+                        timing: timing, drainWriteback: false)
         // The caller owns publication/finish; worker marks but never freezes it.
         try response.validatePageAccess(Array(response.hits.prefix(12)).map(\.id))
-        return (response, timing.finish(.ready))
+        let report = timing.finish(.ready)
+        await c.worker.waitForSearchCacheWriteback()
+        return (response, report)
     }
 
     private func indexReport(_ report: SearchTimingReport, source: String, count: Int,
@@ -514,7 +529,9 @@ final class AcceleratedSearchWorkerTests: XCTestCase {
         let c = try context()
         _ = try await search(c)
         try Data("corrupt disposable binary".utf8).write(to: c.binary)
-        let recovered = try await anotherWorker(c).search(text: "first", limit: Int.max, locationWeight: 0.6)
+        let recoveringWorker = anotherWorker(c)
+        let recovered = try await recoveringWorker.search(text: "first", limit: Int.max, locationWeight: 0.6)
+        await recoveringWorker.waitForSearchCacheWriteback()
         let raw = try await search(c, reference: true)
         same(recovered, raw)
         XCTAssertNotEqual(try Data(contentsOf: c.binary), Data("corrupt disposable binary".utf8))
@@ -569,6 +586,182 @@ final class AcceleratedSearchWorkerTests: XCTestCase {
         XCTAssertEqual(try sourceHash(c), before)
         XCTAssertEqual(try Data(contentsOf: c.binary), binary)
         await noPixels(c)
+    }
+
+    func testColdResultIsReadyWhileCacheEncodingIsHeldAndMatchesReferenceBitForBit() async throws {
+        let gate = SearchColdGate()
+        let probe = SearchColdWorkProbe()
+        let c = try context(observeWork: { probe.record($0) }, checkpoint: { stage in
+            if stage == .beforeEncoding { await gate.pause() }
+        })
+        let source = try sourceHash(c)
+        let raw = try await search(c, reference: true)
+        // This await must complete even though the optional encoder cannot run.
+        let fast = try await search(c, drainWriteback: false)
+        await gate.waitUntilEntered()
+        same(fast, raw)
+        try fast.validateAccess()
+        XCTAssertEqual(probe.snapshot().encodingStarts, 0)
+        XCTAssertEqual(probe.snapshot().publications, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.binary.path))
+        await gate.release()
+        await c.worker.waitForSearchCacheWriteback()
+        XCTAssertEqual(probe.snapshot().encodingStarts, 1)
+        XCTAssertEqual(probe.snapshot().publications, 1)
+        let diskWorker = anotherWorker(c)
+        let disk = try await diskWorker.search(text: "first", limit: Int.max, locationWeight: 0.6)
+        same(disk, raw)
+        XCTAssertEqual(try sourceHash(c), source)
+        await noPixels(c)
+    }
+
+    func testBackgroundReleaseCancelsAndDrainsEncodedCacheTailWithoutLateWrite() async throws {
+        let gate = SearchColdGate()
+        let probe = SearchColdWorkProbe()
+        let c = try context(observeWork: { probe.record($0) }, checkpoint: { stage in
+            if stage == .beforeCommit { await gate.pause() }
+        })
+        _ = try await search(c, drainWriteback: false)
+        await gate.waitUntilEntered()
+        XCTAssertEqual(probe.snapshot().encodingStarts, 1)
+        let releasing = Task { await c.worker.releaseSearchMemory() }
+        await gate.waitUntilCancelled()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.binary.path))
+        await gate.release()
+        await releasing.value
+        XCTAssertEqual(probe.snapshot().publications, 0)
+        let timing = SearchTimingRecorder()
+        _ = try await search(c, timing: timing)
+        indexReport(timing.finish(.ready), source: "数据库读取", count: 3, matrix: false)
+        XCTAssertEqual(probe.snapshot().publications, 1)
+    }
+
+    func testNewQueryDoesNotWaitForCancelledOldCacheEncodingAndOnlyNewTailPublishes() async throws {
+        let gate = SearchColdGate()
+        let probe = SearchColdWorkProbe()
+        let c = try context(observeWork: { probe.record($0) }, checkpoint: { stage in
+            if stage == .beforeCommit { await gate.pause() }
+        })
+        _ = try await search(c, weight: 0, drainWriteback: false)
+        await gate.waitUntilEntered()
+        let timing = SearchTimingRecorder()
+        let next = try await search(c, text: "second", weight: 0, timing: timing, drainWriteback: false)
+        indexReport(timing.finish(.ready), source: "内存驻留", count: 3, matrix: true)
+        XCTAssertEqual(next.hits.first?.id, "b")
+        await gate.waitUntilCancelled()
+        XCTAssertEqual(probe.snapshot().encodingStarts, 1, "Tail encoders must not overlap.")
+        await gate.release()
+        await c.worker.waitForSearchCacheWriteback()
+        XCTAssertEqual(probe.snapshot().encodingStarts, 2)
+        XCTAssertEqual(probe.snapshot().publications, 1)
+        let raw = try await search(c, text: "second", weight: 0, reference: true)
+        same(next, raw)
+    }
+
+    func testCancelledOrRejectedColdQueryNeverStartsOptionalCacheSerialization() async throws {
+        for rejection in ["cancel", "permission", "undelivered-edit"] {
+            let probe = SearchColdWorkProbe()
+            let c = try context(observeWork: { probe.record($0) })
+            let library = c.library
+            await c.encoders.onQuery {
+                switch rejection {
+                case "cancel": throw CancellationError()
+                case "permission": library.setReadable(false)
+                default:
+                    // Same generation, change an unreturned row's revision.
+                    library.replace([PhotoRevision(id: "a", modificationTime: 123, creationTime: 100),
+                                     PhotoRevision(id: "b", modificationTime: 123, creationTime: 100),
+                                     PhotoRevision(id: "c", modificationTime: 124, creationTime: 100)])
+                }
+            }
+            do { _ = try await search(c, limit: 1, drainWriteback: false); XCTFail("Rejected search must not return.") }
+            catch is CancellationError { XCTAssertEqual(rejection, "cancel") }
+            catch AppFailure.permission { XCTAssertEqual(rejection, "permission") }
+            catch AppFailure.photo { XCTAssertEqual(rejection, "undelivered-edit") }
+            await c.worker.waitForSearchCacheWriteback()
+            XCTAssertEqual(probe.snapshot().sourceHashPasses, 1)
+            XCTAssertEqual(probe.snapshot().encodingStarts, 0)
+            XCTAssertEqual(probe.snapshot().publications, 0)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: c.binary.path))
+        }
+    }
+
+    func testWorkerPassesCoordinatorToTailAndDoesNotHoldReadLeaseDuringEncoding() async throws {
+        let gate = SearchColdGate()
+        let probe = SearchColdWorkProbe()
+        let coordinator = IndexAccessCoordinator()
+        let c = try context(observeWork: { probe.record($0) }, checkpoint: { stage in
+            if stage == .beforeCommit { await gate.pause() }
+        }, indexAccess: coordinator)
+        _ = try await search(c, drainWriteback: false)
+        await gate.waitUntilEntered()
+        let writer = try await coordinator.acquireWrite()
+        await gate.release()
+        await c.worker.waitForSearchCacheWriteback()
+        XCTAssertEqual(probe.snapshot().publications, 0)
+        writer.release()
+        _ = try await search(c)
+        XCTAssertEqual(probe.snapshot().publications, 1)
+        XCTAssertTrue(coordinator.canReadImmediately)
+    }
+
+    func testAccessRevocationWhileTailIsEncodedPreventsDiskPublication() async throws {
+        let gate = SearchColdGate()
+        let probe = SearchColdWorkProbe()
+        let c = try context(observeWork: { probe.record($0) }, checkpoint: { stage in
+            if stage == .beforeCommit { await gate.pause() }
+        })
+        let response = try await search(c, drainWriteback: false)
+        await gate.waitUntilEntered()
+        c.library.setReadable(false)
+        XCTAssertThrowsError(try response.validateAccess())
+        await gate.release()
+        await c.worker.waitForSearchCacheWriteback()
+        XCTAssertEqual(probe.snapshot().publications, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.binary.path))
+    }
+
+    func testClearCancelsAndDrainsTailBeforeMutatingSource() async throws {
+        let gate = SearchColdGate()
+        let probe = SearchColdWorkProbe()
+        let c = try context(observeWork: { probe.record($0) }, checkpoint: { stage in
+            if stage == .beforeCommit { await gate.pause() }
+        })
+        let before = try sourceHash(c)
+        _ = try await search(c, drainWriteback: false)
+        await gate.waitUntilEntered()
+        let clearing = Task { try await c.worker.clear() }
+        await gate.waitUntilCancelled()
+        XCTAssertEqual(try sourceHash(c), before, "Source clear cannot overtake the cancelled tail's drain.")
+        await gate.release()
+        let summary = try await clearing.value
+        XCTAssertEqual(summary.indexedCount, 0)
+        XCTAssertEqual(probe.snapshot().publications, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.binary.path))
+    }
+
+    func testTailDoesNotRetainWorkerAndDeinitCancelsPendingWrite() async throws {
+        let c = try context()
+        let gate = SearchColdGate()
+        let probe = SearchColdWorkProbe()
+        let cache = SearchIndexCache(directory: c.directory, observeWork: { probe.record($0) },
+                                     deferredCheckpoint: { stage in
+            if stage == .beforeCommit { await gate.pause() }
+        })
+        var worker: PhotoIndexWorker? = PhotoIndexWorker(library: c.library, encoders: c.encoders,
+            directory: c.directory, resolver: resolver, searchCache: cache)
+        weak var weakWorker = worker
+        _ = try await worker?.search(text: "first", limit: Int.max, locationWeight: 0)
+        await gate.waitUntilEntered()
+        worker = nil
+        XCTAssertNil(weakWorker, "Background tail must not keep the worker/matrix alive.")
+        await gate.waitUntilCancelled()
+        // Revoke the cache before releasing the deliberately noncooperative test
+        // gate. Even after the worker is gone, no late disk commit is possible.
+        await cache.invalidate()
+        await gate.release()
+        XCTAssertEqual(probe.snapshot().publications, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.binary.path))
     }
 }
 

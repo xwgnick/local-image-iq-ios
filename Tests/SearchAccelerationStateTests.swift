@@ -12,13 +12,12 @@ import ImageIQCore
 @MainActor
 final class SearchAccelerationStateTests: XCTestCase {
     func testDefaultAcceleratedSearchForwardsOriginalEffectiveQueryAndRecorder() async throws {
-        let c = await ready()
+        let c = await ready(savedTextEnabled: true)
         XCTAssertFalse(c.state.debugToolsEnabled)
         XCTAssertFalse(c.state.referenceSearchEnabled)
         XCTAssertNil(c.state.searchTimingReport)
         c.state.query = AccelerationFixture.original
         c.state.locationWeight = 0.37
-        c.state.textSearchEnabled = true
         c.state.search()
         await c.state.waitUntilIdle()
 
@@ -392,13 +391,12 @@ final class SearchAccelerationStateTests: XCTestCase {
     }
 
     func testHidingDebugToolsResetsReferenceOnlyAndDoesNotAutomaticallySearch() async throws {
-        let c = await ready()
+        let c = await ready(savedTextEnabled: true)
         c.state.debugToolsEnabled = true
         c.state.referenceSearchEnabled = true
         c.state.query = AccelerationFixture.original
         c.state.locationWeight = 0.23
         c.state.resultLimit = 3
-        c.state.textSearchEnabled = true
         c.state.searchFilters = PhotoSearchFilters(imageKind: .photos)
         c.state.allowICloudDownload = true
         await search(c)
@@ -483,11 +481,16 @@ final class SearchAccelerationStateTests: XCTestCase {
         XCTAssertNil(state.activity)
     }
 
-    private func ready() async -> AccelerationContext {
+    private func ready(savedTextEnabled: Bool = false) async -> AccelerationContext {
         let worker = AccelerationWorker()
         let translator = AccelerationTranslator()
         let permission = AccelerationPermission()
-        let state = AppState(worker: worker, authorizationStatus: { permission.status }, queryTranslator: translator)
+        let suite = "SearchAccelerationStateTests.\(UUID().uuidString)"
+        let preferences = UserDefaults(suiteName: suite)!
+        preferences.set(savedTextEnabled, forKey: "photoTextSearchEnabled.v1")
+        addTeardownBlock { preferences.removePersistentDomain(forName: suite) }
+        let state = AppState(worker: worker, authorizationStatus: { permission.status }, queryTranslator: translator,
+                     textSearchPreferences: preferences)
         addTeardownBlock {
             await worker.openAllGates()
             await state.waitUntilIdle()

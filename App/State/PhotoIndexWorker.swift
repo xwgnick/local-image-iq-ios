@@ -160,9 +160,19 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
     /// AppState calls only after its cancelled predecessor has drained. The
     /// derived disk file survives; source/authorization checks still run on reuse.
     func releaseSearchMemory() async {
+        let writeback = searchCacheWriteback
+        writeback?.cancel()
+        searchCacheWriteback = nil
         residentSearchIndex = nil
         await searchIndexCache?.invalidate()
+        await writeback?.value
     }
+
+    /// A deterministic drain for cache tests/benchmarks, NOT a foreground-search
+    /// prerequisite. Lifecycle release cancels instead of completing this work.
+    func waitForSearchCacheWriteback() async { await searchCacheWriteback?.value }
+
+    deinit { searchCacheWriteback?.cancel() }
 
     private let library: any PhotoLibraryIndexing
     private let encoders: any PhotoEncoding
@@ -180,6 +190,7 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
     // Created only by an explicit search, never by init/readiness/refresh.
     private var searchIndexCache: SearchIndexCache?
     private var residentSearchIndex: (signature: String, geoVersion: String, index: ResidentSearchIndex)?
+    private var searchCacheWriteback: Task<Void, Never>?
 
     init(library: any PhotoLibraryIndexing, encoders: any PhotoEncoding = CoreMLEncoders(), directory: URL? = nil,
          resolver: OfflinePlaceResolver? = nil,
@@ -187,10 +198,12 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
          boundaryLoader: @escaping @Sendable () -> OfflinePlaceResolver = { OfflinePlaceResolver.bundled() },
          filtering: (any PhotoSearchFiltering)? = nil,
          textRecognizer: (any PhotoTextRecognizing)? = nil,
-         indexAccess: IndexAccessCoordinator? = nil) {
+         indexAccess: IndexAccessCoordinator? = nil,
+         searchCache: SearchIndexCache? = nil) {
         self.library = library
         self.encoders = encoders
         self.indexAccess = indexAccess
+        searchIndexCache = searchCache
         if let textRecognizer { self.textRecognizer = textRecognizer }
         else if let realLibrary = library as? PhotoLibraryClient {
             self.textRecognizer = VisionPhotoTextRecognizer(library: realLibrary)
@@ -256,7 +269,8 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
         let readonly = try reader()
         let load = SearchRecordLoad()
         do {
-            return try await searchCache().records(modelVersion: modelVersion, accessibleIDs: accessibleIDs) {
+            return try await searchCache().records(modelVersion: modelVersion, accessibleIDs: accessibleIDs,
+                                                   deferPersistence: true) {
                 try await load.read(readonly, modelVersion: modelVersion, ids: accessibleIDs)
             }
         } catch {
@@ -458,8 +472,7 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
         try Task.checkCancellation()
         let access = try ManualIndexAccess(library: library)
         let validate: @Sendable (PhotoRevision?) throws -> Void = { try access.validate($0) }
-        residentSearchIndex = nil
-        if let searchIndexCache { await searchIndexCache.invalidate() }
+        await releaseSearchMemory()
         try access.validate()
         let snapshot = try await reconcile(access: access)
         let manifest = try await encoders.prepare()
@@ -1262,6 +1275,9 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                         filters: PhotoSearchFilters, originalText: String? = nil,
                         timing: SearchTimingRecorder? = nil, referenceSearch: Bool = false) async throws -> SearchResponse {
         try Task.checkCancellation()
+        // Cancel obsolete tail work without making this query wait for plist
+        // encoding. A replacement tail drains its predecessor before starting.
+        searchCacheWriteback?.cancel()
         try filters.validate()
         guard filters.isEmpty || filtering != nil else { throw AppFailure.photo("此搜索服务不支持筛选。") }
         guard library.canReadImages else { throw AppFailure.permission }
@@ -1302,11 +1318,13 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
         let cached: [CachedPhoto]
         let photos: [IndexedPhoto]
         let scoringIndex: ResidentSearchIndex?
+        var writebackToken: UUID?
         if searchSnapshot != nil {
             let records = try await searchRecords(modelVersion: cacheVersion, accessibleIDs: Set(snapshot.map(\.id)))
             try validateSearchEpoch(authorization: authorization, generation: generation)
             try searchSnapshot?.validate()
             cached = records.records
+            writebackToken = records.writebackToken
             let reused: Bool
             if let resident = residentSearchIndex, resident.signature == records.signature,
                resident.geoVersion == metadata.version {
@@ -1464,7 +1482,7 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
         }
         try Task.checkCancellation()
         timing?.mark(.publication)
-        return SearchResponse(summary: LibrarySummary(authorizedCount: snapshot.count, authorizedCountKnown: true,
+        let response = SearchResponse(summary: LibrarySummary(authorizedCount: snapshot.count, authorizedCountKnown: true,
                                                        indexedCount: counts.indexed, locatedCount: counts.located,
                                                        modelVersion: cacheVersion, placesDescription: metadata.coverageDescription,
                                                        textIndexCounts: textCounts,
@@ -1473,6 +1491,25 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                               validatePageAccess: validatePage,
                               textMatchedIDs: textMatchIDs.intersection(returnedIDs),
                               textSearchUsed: !textMatchIDs.intersection(returnedIDs).isEmpty)
+                    try Task.checkCancellation()
+        if let writebackToken, let cache = searchIndexCache {
+            let predecessor = searchCacheWriteback
+            let coordinator = indexAccess
+            // No worker capture, no UI callback, no source writes. This tail is
+            // not awaited by search and cannot start until scoring/final access
+            // validation and response construction above have succeeded.
+            searchCacheWriteback = Task.detached(priority: .utility) {
+                await predecessor?.value
+                guard !Task.isCancelled else { return }
+                await cache.persistDeferred(writebackToken, indexAccess: coordinator) {
+                    try Task.checkCancellation()
+                    guard library.canReadImages,
+                          library.authorizationStatusRawValue == authorization,
+                          library.changeGeneration == generation else { throw CancellationError() }
+                }
+            }
+        }
+        return response
     }
 
     /// Cheap checks at suspension boundaries. Legacy/reference searches retain
@@ -1619,7 +1656,8 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
 
     func clear() async throws -> LibrarySummary {
         try Task.checkCancellation()
-        residentSearchIndex = nil
+        await releaseSearchMemory()
+        try Task.checkCancellation()
         // Also remove a previous worker's derived file. A cache-only failure must
         // not prevent the user's image/OCR clear, but cancellation still aborts.
         do { try await searchCache().clear() }

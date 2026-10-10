@@ -326,11 +326,11 @@ final class SimilarPhotoSelectionCommitTests: XCTestCase {
     }
 
     func testThresholdChangeCancelsGestureAndValidationWithoutLatePublicationOrScan() async throws {
-        try await assertReadInvalidation { $0.threshold = 0.75 }
+        try await assertReadInvalidation(retainingBrowsing: true) { $0.threshold = 0.75 }
     }
 
     func testPauseCancelsGestureAndValidationAndResumeNeverRestoresThem() async throws {
-        try await assertReadInvalidation {
+        try await assertReadInvalidation(retainingBrowsing: true) {
             $0.pause()
             XCTAssertNil($0.beginRangeSelection(groupID: "first"))
             $0.scan() // Foreground guard must reject this explicit scan too.
@@ -499,8 +499,13 @@ final class SimilarPhotoSelectionCommitTests: XCTestCase {
         f.state.confirmDeletion(intent)
         await f.state.waitUntilIdle()
         XCTAssertEqual(f.deletion.calls, [intent.revisions])
-        XCTAssertEqual(f.state.message, PhotoDeletionRecoveryNotice.success(count: 3))
-        assertInvalidated(f.state)
+        XCTAssertNil(f.state.message)
+        XCTAssertEqual(f.state.statusNotice, "已删除3张照片")
+        XCTAssertTrue(f.state.selectedIDs.isEmpty)
+        XCTAssertNil(f.state.pendingDeletion)
+        XCTAssertFalse(f.state.canSelect)
+        XCTAssertFalse(f.state.canBrowse, "A legacy fixture has no early display-check provider")
+        XCTAssertTrue(Set(f.state.groups.flatMap(\.photos).map(\.id)).isDisjoint(with: intent.revisions.map(\.id)))
         XCTAssertFalse(f.state.isDeleting)
     }
 
@@ -521,9 +526,9 @@ final class SimilarPhotoSelectionCommitTests: XCTestCase {
         XCTAssertTrue(full.contains("不保留任何照片"))
     }
 
-    func testSuccessConfirmsDeletionIncludesRecoveryAndRequiresManualRegrouping() {
+    func testSuccessConfirmsDeletionAndRecoveryWithoutManualRegroupAdvice() {
         XCTAssertEqual(PhotoDeletionRecoveryNotice.success(count: 7),
-            "已确认删除7张照片。" + PhotoDeletionRecoveryNotice.recovery + "请手动重新分组。")
+            "已确认删除7张照片。" + PhotoDeletionRecoveryNotice.recovery)
     }
 
     // MARK: Deterministic gates; timeouts bound tests only, never app work.
@@ -581,11 +586,27 @@ final class SimilarPhotoSelectionCommitTests: XCTestCase {
         await task.value
     }
 
-    private func assertReadInvalidation(_ invalidate: (SimilarPhotoCleanupState) -> Void) async throws {
+    private func assertReadInvalidation(retainingBrowsing: Bool = false,
+                                        _ invalidate: (SimilarPhotoCleanupState) -> Void) async throws {
         for validating in [false, true] {
             for fails in [false, true] {
                 let f = fixture()
                 await scan(f.state)
+                let members = f.state.groups.map { $0.photos.map(\.id) }
+                let candidateCount = f.state.candidateCount
+                let check: @MainActor () -> Void = {
+                    if retainingBrowsing {
+                        XCTAssertEqual(f.state.groups.map { $0.photos.map(\.id) }, members)
+                        XCTAssertEqual(f.state.candidateCount, candidateCount)
+                        XCTAssertTrue(f.state.hasScanned)
+                        XCTAssertNotNil(f.state.browsingSessionID)
+                        XCTAssertFalse(f.state.canSelect)
+                        XCTAssertFalse(f.state.isSelecting)
+                        XCTAssertFalse(f.state.isValidatingSelection)
+                        XCTAssertTrue(f.state.selectedIDs.isEmpty)
+                        XCTAssertNil(f.state.pendingDeletion)
+                    } else { self.assertInvalidated(f.state) }
+                }
                 f.state.toggleSelection("a0")
                 let gate = SelectionCommitGate(fails: fails)
                 let token = try XCTUnwrap(f.state.beginRangeSelection(groupID: "first"))
@@ -596,15 +617,15 @@ final class SimilarPhotoSelectionCommitTests: XCTestCase {
                 }
                 let epochs = f.probes[0].trace.epochThreads.count
                 invalidate(f.state)
-                assertInvalidated(f.state)
+                check()
                 f.state.finishRangeSelection(token: token, selectedInGroup: ["a1"])
                 try await heartbeat {
-                    self.assertInvalidated(f.state)
+                    check()
                     XCTAssertEqual(f.grouping.calls, 1)
                 }
                 gate.release()
                 await f.state.waitUntilIdle()
-                assertInvalidated(f.state)
+                check()
                 XCTAssertNil(f.state.message)
                 XCTAssertEqual(f.probes[0].trace.epochThreads.count, epochs)
                 XCTAssertEqual(f.grouping.calls, 1)

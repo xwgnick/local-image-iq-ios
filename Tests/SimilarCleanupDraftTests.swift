@@ -630,10 +630,12 @@ final class SimilarCleanupDraftTests: XCTestCase {
         XCTAssertEqual(f.state.candidateCount, 1)
         XCTAssertNotNil(f.state.resultThreshold)
         f.state.pause()
-        XCTAssertFalse(f.state.hasScanned)
-        XCTAssertNil(f.state.resultThreshold)
+        XCTAssertTrue(f.state.hasScanned)
+        XCTAssertNotNil(f.state.resultThreshold)
         XCTAssertNil(f.state.selectionSessionID)
-        XCTAssertEqual(f.state.candidateCount, 0)
+        XCTAssertEqual(f.state.candidateCount, 1)
+        XCTAssertFalse(f.state.canBrowse)
+        XCTAssertFalse(f.state.canSelect)
         XCTAssertTrue(f.state.displayGroups.isEmpty)
         XCTAssertNil(f.state.message)
     }
@@ -892,7 +894,8 @@ final class SimilarCleanupDraftTests: XCTestCase {
         await f.state.waitUntilIdle()
         XCTAssertEqual(deletion.calls, [intent.revisions])
         XCTAssertFalse(f.state.isDeleting)
-        XCTAssertEqual(f.state.message, PhotoDeletionRecoveryNotice.success(count: 1))
+        XCTAssertNil(f.state.message)
+        XCTAssertEqual(f.state.statusNotice, "已删除1张照片")
         XCTAssertEqual(f.service.trace.events, ["group"])
     }
 

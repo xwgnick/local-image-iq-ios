@@ -5,8 +5,8 @@ final class SearchPhotoTextPresentation: ObservableObject {
     @Published var showingIntroduction = false
 }
 
-/// Opt-in changes only the existing persisted preference. Recognition always
-/// requires a separate explicit action, including the very first ON transition.
+/// OFF->ON requests one incremental OCR update through AppState. Merely
+/// rendering this view or opening its introduction never requests any work.
 @MainActor
 struct SearchPhotoTextTools: View {
     @ObservedObject var state: AppState
@@ -69,23 +69,6 @@ struct SearchPhotoTextTools: View {
             if state.similarPhotoID != nil {
                 Text("相似照片").font(.caption).foregroundStyle(IQStyle.accent)
             }
-            if state.textSearchEnabled {
-                if state.activity == .indexingText {
-                    ProgressView("正在识别照片文字…").font(.caption)
-                    Button("暂停文字索引") { state.cancel() }
-                        .frame(minHeight: 44).accessibilityIdentifier("pause-text-index")
-                } else {
-                    Button(state.summary.textIndexCounts.records == 0 ? "建立文字索引" : "更新文字索引") {
-                        state.indexPhotoText()
-                    }
-                    .font(.caption).frame(minHeight: 44)
-                    .disabled(!state.canIndexText).accessibilityIdentifier("index-photo-text")
-                }
-                if let issue = state.textIndexOperationIssue {
-                    Text(issue).font(.caption).foregroundStyle(IQStyle.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
         }
         .tint(IQStyle.accent)
         .onChange(of: presentation.showingIntroduction, initial: true) { _, presented in
@@ -97,7 +80,7 @@ struct SearchPhotoTextTools: View {
                     VStack(alignment: .leading, spacing: 20) {
                         Text("识别照片里的文字，让文字也能成为搜索线索。")
                         Text("适合查找证件、票据、截图和招牌；识别结果可能有遗漏。")
-                        Text("查看介绍不会开启功能或建立索引。开启后仍需手动建立文字索引；识别在本机完成。关闭不会删除已有文字索引。")
+                        Text("查看介绍不会开启功能。每次从关闭切换为开启，会自动增量更新一次文字索引；忙碌时等待当前任务结束。识别在本机完成，是否允许读取 iCloud 照片仍由原设置决定。关闭会取消等待或正在进行的更新，已完成的索引保留。")
                     }
                     .font(.body).foregroundStyle(IQStyle.text)
                     .padding(20).frame(maxWidth: .infinity, alignment: .leading)

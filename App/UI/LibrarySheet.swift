@@ -51,6 +51,9 @@ struct LibrarySheet: View {
                             .accessibilityIdentifier("stored-index-count")
                         LibraryAutoSyncStatusView(state: state.photoSync, canRead: state.canRead,
                                                   modelsReady: state.modelsReady)
+                        // The root footer is covered by this sheet. Its child
+                        // state must still publish queued/running OCR here.
+                        PhotoTextIndexStatusView(sync: state.ocrSync, showsDetail: false)
                     }
                     .padding(.vertical, 8)
                 }
@@ -268,7 +271,7 @@ struct LibraryMaintenanceView: View {
             .accessibilityIdentifier("confirm-rebuild-index")
             Button("取消", role: .cancel) { }
         } message: {
-            Text("清除图片、地点及文字索引，再重新建立图片索引；文字索引需另行手动更新。不会修改或删除原照片，重建期间未完成索引的照片不可搜索。")
+            Text("清除图片、地点及文字索引，再重新建立图片索引。文字索引可在图片就绪后到「文本索引」手动更新，或将主页文字开关从关闭切换为开启以更新一次；仅保持开启不会自动重建文字索引。不会修改或删除原照片，重建期间未完成索引的照片不可搜索。")
         }
         .confirmationDialog("清除本地索引？", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("清除索引", role: .destructive) {
@@ -279,7 +282,7 @@ struct LibraryMaintenanceView: View {
             .accessibilityIdentifier("confirm-clear-index")
             Button("取消", role: .cancel) { }
         } message: {
-            Text("只删除本机图片、地点及文字索引，不删除原照片。图片索引和可选文字索引需分别手动更新。")
+            Text("只删除本机图片、地点及文字索引，不删除原照片。之后可手动更新图片索引。文字索引可在图片就绪后手动更新，或将主页文字开关从关闭切换为开启以更新一次；仅保持开启不会自动重建文字索引。")
         }
         .onChange(of: state.debugToolsEnabled) { _, enabled in
             if !enabled {
@@ -505,7 +508,7 @@ struct LibraryMaintenanceView: View {
                 if let error = state.errorMessage, error != modelProblem {
                     diagnostic("上次操作问题", error)
                 }
-                diagnostic("预览请求", "先请求短边 224 的高质量本地预览，不可用时再尝试快速本地预览，不请求原图。仅当两者均不可用且已开启 iCloud 时，系统照片才可能通过无线网络或移动数据下载，下载量由系统决定。关闭 iCloud 时，两次预览请求均离线。")
+                diagnostic("索引预览请求", "图片索引先请求短边 224 的高质量本地预览，不可用时再尝试快速本地预览，不请求原图。仅当两者均不可用且已开启全局 iCloud 下载时，索引任务才允许系统照片下载，下载量由系统决定。关闭全局下载时，图片索引的两次预览请求均离线；单张照片明确同意后的高清下载是独立操作。")
                     .accessibilityIdentifier("debug-indexing-info")
                 Text("\(PhotoIndexWorker.indexingWorkerCount) 个图像任务并发读取与编码照片")
                     .font(.footnote)
@@ -547,7 +550,7 @@ struct LibraryMaintenanceView: View {
         state.summary.authorizedCountKnown ? "\(state.summary.authorizedCount.formatted()) 张" : "未扫描"
     }
 
-    static let manualIndexExplanation = "图片索引在应用前台就绪时自动更新，也可在这里手动更新。手动更新会等待自动同步停止，不是重新开启自动同步。文字索引仍需单独手动建立。搜索会排除已删除或不可访问的照片；本机保存的索引数不代表当前可搜索数量。请保持应用在前台，已完成的记录会保留。"
+    static let manualIndexExplanation = "图片索引在应用前台就绪时自动更新，也可在这里手动更新。手动更新会等待自动同步停止，不是重新开启自动同步。文字搜索每次从关闭切换为开启会增量更新一次；恢复已保存的开启状态不会自动运行，也可在「文本索引」中手动更新或重试。搜索会排除已删除或不可访问的照片；本机保存的索引数不代表当前可搜索数量。请保持应用在前台，已完成的记录会保留。"
 
     var coverageDescription: String {
         if !state.canRead { return "请先选择照片，授权后可手动建立索引与搜索。" }

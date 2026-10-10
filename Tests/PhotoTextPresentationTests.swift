@@ -19,8 +19,9 @@ final class PhotoTextPresentationTests: XCTestCase {
     private let phone = CGSize(width: 393, height: 852)
 
     func testStoredCountsAndPrivacySettingsDarkSnapshotWithoutPhotosAccess() async throws {
-        let c = try await context(authorization: .notDetermined)
-        c.state.textSearchEnabled = true
+        // Restored ON has no queued intent. A real OFF->ON now correctly shows
+        // waiting/cancel instead of pretending that this is an idle saved count.
+        let c = try await context(authorization: .notDetermined, savedEnabled: true)
         XCTAssertFalse(c.state.canRead)
         XCTAssertFalse(c.state.canIndexText, "Saved counts are not current Photos permission or search coverage")
         XCTAssertFalse(c.state.summary.authorizedCountKnown)
@@ -52,8 +53,7 @@ final class PhotoTextPresentationTests: XCTestCase {
 
     func testExplicitIndexPublishesHeldProgressDarkSnapshot() async throws {
         let published = expectation(description: "Explicit text index callback accepted before capture")
-        let c = try await context(authorization: .authorized, progressPublished: published)
-        c.state.textSearchEnabled = true
+        let c = try await context(authorization: .authorized, progressPublished: published, savedEnabled: true)
         XCTAssertTrue(c.state.canIndexText, "Only injected authorization is readable; real Photos stays unreadable")
         c.state.indexPhotoText()
         XCTAssertEqual(c.state.activity, .indexingText)
@@ -71,7 +71,7 @@ final class PhotoTextPresentationTests: XCTestCase {
         let host = try await mount(c.state)
         defer { host.close() }
         let form = try collection(in: host, rows: 5)
-        // Determinate progress, pause, aggregate progress, scope, privacy.
+        // Live child status/progress, cancel, aggregate progress, scope, privacy.
         // Capture before scrolling; five existing rows need not fit one viewport.
         try assertVisibleRow(0, in: form)
         try attachReview(host, name: "UIReview-photo-text-progress-dark")
@@ -89,7 +89,7 @@ final class PhotoTextPresentationTests: XCTestCase {
 
         // Exercise the production pause action's state method, not a fabricated
         // SwiftUI tap. Release and drain even the deliberately held fake worker.
-        c.state.cancel()
+        PhotoTextIndexContent(state: c.state).cancelUpdate()
         c.worker.release()
         await c.state.waitUntilIdle()
         try await settle(host)
@@ -100,8 +100,9 @@ final class PhotoTextPresentationTests: XCTestCase {
         assertServices(c, textCalls: 1)
     }
 
-    func testRenderingAndOptInRoundTripsNeverAutomaticallyIndexOrRecognize() async throws {
+    func testRenderingAndDuplicateTrueDoNotIndexButEachOffOnUpdatesOnce() async throws {
         let c = try await context(authorization: .authorized)
+        c.worker.permitsUnheldUpdate = true
         XCTAssertFalse(c.state.textSearchEnabled, "No persisted defaults are injected into hosted fixtures")
         let host = try await mount(c.state)
         defer { host.close() }
@@ -110,7 +111,7 @@ final class PhotoTextPresentationTests: XCTestCase {
 
         // State bindings only; actual switch-thumb activation is covered by the
         // separate live UI test. Require the real Form to respond on each change.
-        for enabled in [true, false, true, false] {
+        for (enabled, calls) in [(true, 1), (true, 1), (false, 1), (true, 2), (false, 2)] {
             c.state.textSearchEnabled = enabled
             try await settle(host)
             await c.state.waitUntilIdle()
@@ -122,13 +123,12 @@ final class PhotoTextPresentationTests: XCTestCase {
             XCTAssertEqual(c.state.summary.textIndexCounts, c.worker.metadata.textIndexCounts,
                            "Turning OFF preserves stored text counts; it does not clear the index")
             XCTAssertEqual(c.state.textIndexProgress, TextIndexProgress())
-            assertServices(c, textCalls: 0)
+            assertServices(c, textCalls: calls)
         }
     }
 
     func testMaximumDynamicTypeCanScrollToPrivacyAndBackWithoutHorizontalContentOverflow() async throws {
-        let c = try await context(authorization: .authorized)
-        c.state.textSearchEnabled = true
+        let c = try await context(authorization: .authorized, savedEnabled: true)
         let host = try await mount(c.state, size: CGSize(width: 320, height: 568), dynamicType: .accessibility5)
         defer { host.close() }
         let form = try collection(in: host, rows: 5)
@@ -161,7 +161,8 @@ final class PhotoTextPresentationTests: XCTestCase {
     // MARK: Public state APIs, aggregate-only injected services
 
     private func context(authorization: PHAuthorizationStatus,
-                         progressPublished: XCTestExpectation? = nil) async throws -> PhotoTextReviewContext {
+                         progressPublished: XCTestExpectation? = nil,
+                         savedEnabled: Bool = false) async throws -> PhotoTextReviewContext {
         let permission = PhotoLibraryClient.authorization
         guard !PhotoLibraryClient.canRead else {
             XCTFail("Use an unreadable Photos test host; these tests never reset or request permission")
@@ -169,7 +170,12 @@ final class PhotoTextPresentationTests: XCTestCase {
         }
         let worker = PhotoTextReviewWorker(progressPublished: progressPublished)
         let translator = PhotoTextReviewTranslator()
-        let state = AppState(worker: worker, authorizationStatus: { authorization }, queryTranslator: translator)
+        let suite = "PhotoTextPresentationTests.\(UUID().uuidString)"
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        preferences.set(savedEnabled, forKey: "photoTextSearchEnabled.v1")
+        addTeardownBlock { preferences.removePersistentDomain(forName: suite) }
+        let state = AppState(worker: worker, authorizationStatus: { authorization }, queryTranslator: translator,
+                     textSearchPreferences: preferences)
         let c = PhotoTextReviewContext(state: state, worker: worker, translator: translator, permission: permission)
         addTeardownBlock { @MainActor in
             state.enterBackground()
@@ -222,7 +228,7 @@ final class PhotoTextPresentationTests: XCTestCase {
             realPhotosReadable=\(PhotoLibraryClient.canRead); iCloudAllowed=\(c.state.allowICloudDownload)
             Only aggregate values were supplied: no asset IDs, recognized strings or photo pixels.
             Scope/privacy sentences are rendered from production, not copied into a fake view.
-            Review saved-count/permission distinction, manual-only work, local/no-backup storage,
+            Review saved-count/permission distinction, explicit OFF->ON/manual requests, local/no-backup storage,
             retained records when OFF, clear-index deletion, and the conditional iCloud explanation.
             Rendering is not proof of storage protection, actual OCR quality, or device performance.
             """)
@@ -372,6 +378,7 @@ private final class PhotoTextReviewWorker: PhotoWorkServicing {
     private(set) var refreshCount = 0
     private(set) var textNetworkFlags: [Bool] = []
     private(set) var unexpectedCalls = 0
+    var permitsUnheldUpdate = false
     private let progressPublished: XCTestExpectation?
     private var continuation: CheckedContinuation<Void, Never>?
     private var released = false
@@ -383,6 +390,9 @@ private final class PhotoTextReviewWorker: PhotoWorkServicing {
     func indexText(networkAllowed: Bool,
                    progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
         textNetworkFlags.append(networkAllowed)
+        // No progress callback means an unknown total, not a fabricated count.
+        // This branch tests event/rendering ownership, not OCR data correctness.
+        if permitsUnheldUpdate { return metadata }
         guard let progressPublished else { throw unexpected("Automatic text indexing") }
         try Task.checkCancellation()
         await progress(Self.progressFixture)

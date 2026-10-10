@@ -13,25 +13,28 @@ import ImageIQCore
 /// async metadata validation itself is covered by the selection-state suite.
 @MainActor
 final class SimilarPhotoGroupBrowserTests: XCTestCase {
-    func testCoverSamplesAreEvenDeterministicIncludeEndpointsAndNeverLimitMembership() {
+    func testCoverHasFiveDeterministicLeadingTilesAndOverflowNeverLimitsMembership() {
         XCTAssertEqual(SimilarPhotoGroupGeometry.previewIndices(count: 0), [])
         XCTAssertEqual(SimilarPhotoGroupGeometry.previewIndices(count: 1), [0])
         for count in [2, 9, 29, 30, 31, 300, 3_000] {
             let indices = SimilarPhotoGroupGeometry.previewIndices(count: count)
-            XCTAssertEqual(indices.count, min(count, 30))
+            XCTAssertEqual(indices.count, min(count, 5))
             XCTAssertEqual(indices.first, 0)
-            XCTAssertEqual(indices.last, count - 1)
+            XCTAssertEqual(indices.last, min(count, 5) - 1)
             XCTAssertEqual(Set(indices).count, indices.count)
             XCTAssertEqual(indices, indices.sorted())
             XCTAssertEqual(indices, SimilarPhotoGroupGeometry.previewIndices(count: count))
-            if count <= 30 { XCTAssertEqual(indices, Array(0..<count)) }
+            if count <= 5 { XCTAssertEqual(indices, Array(0..<count)) }
             let steps = zip(indices.dropFirst(), indices).map { $0.0 - $0.1 }
             XCTAssertLessThanOrEqual((steps.max() ?? 0) - (steps.min() ?? 0), 1)
         }
-        XCTAssertEqual(SimilarPhotoGroupGeometry.previewIndices(count: 300)[17], 175)
+        XCTAssertEqual(SimilarPhotoGroupGeometry.previewIndices(count: 300), [0, 1, 2, 3, 4])
+        XCTAssertEqual(SimilarPhotoGroupGeometry.overflowCount(count: 300), 296)
+        XCTAssertEqual(SimilarPhotoGroupGeometry.overflowCount(count: 6), 2)
+        XCTAssertEqual(SimilarPhotoGroupGeometry.overflowCount(count: 5), 0)
     }
 
-    func testCoverHeightStopsAtThreeRowsWhileFiveColumnGridRetainsEveryMember() {
+    func testCoverHeightStopsAtOneRowWhileFiveColumnGridRetainsEveryMember() {
         for width in [CGFloat(264), 320, 393, 430] {
             let compact = SimilarPhotoGroupGeometry.previewHeight(count: 30, width: width)
             XCTAssertEqual(SimilarPhotoGroupGeometry.previewHeight(count: 300, width: width), compact)
@@ -63,7 +66,7 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         let originalOffset = overview.contentOffset
         let covers = descendants(host.controller.view, SimilarPhotoPreviewControl.self)
         let firstGroup = covers.filter { $0.photoID.hasPrefix("TEST-browser-0-") }
-        XCTAssertEqual(firstGroup.count, 30, "The 300-photo group owns only thirty cover tiles")
+        XCTAssertEqual(firstGroup.count, 5, "Five preview slots do not truncate the 300-member group")
         XCTAssertTrue(covers.contains { $0.photoID.hasPrefix("TEST-browser-1-") },
                       "The next group is not below hundreds of expanded photo rows")
         let frames = firstGroup.map { $0.convert($0.bounds, to: host.window) }
@@ -74,7 +77,7 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         XCTAssertTrue(f.cleanup.selectedIDs.isEmpty)
         attach(try capture(host), name: "UIReview-similar-groups-overview-dark")
 
-        let wanted = f.grouping.groups[0].photos[175].id
+        let wanted = f.grouping.groups[0].photos[4].id
         let tile = try XCTUnwrap(firstGroup.first { $0.photoID == wanted })
         let source = tile.convert(tile.bounds, to: host.window)
         // Public UIControl activation uses the production closure, including
@@ -102,12 +105,12 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         let grid = try XCTUnwrap(controllers(host.controller).compactMap { $0 as? SimilarPhotoGroupGridController }.first)
         XCTAssertEqual(grid.initialScrollPhotoID, wanted)
         XCTAssertEqual(grid.collectionView.numberOfItems(inSection: 0), 300)
-        let target = try XCTUnwrap(grid.collectionView.cellForItem(at: IndexPath(item: 175, section: 0)))
+        let target = try XCTUnwrap(grid.collectionView.cellForItem(at: IndexPath(item: 4, section: 0)))
         let targetFrame = target.convert(target.bounds, to: host.window)
         let recorded = try XCTUnwrap(f.browser.targetFrame)
         XCTAssertEqual(recorded.minX, targetFrame.minX, accuracy: 1)
         XCTAssertEqual(recorded.minY, targetFrame.minY, accuracy: 1)
-        XCTAssertGreaterThan(targetFrame.width, source.width * 2)
+        XCTAssertGreaterThan(targetFrame.width, source.width, "Detail uses full viewport width, not the padded overview")
         XCTAssertTrue(grid.collectionView.convert(grid.collectionView.bounds, to: host.window).contains(targetFrame))
         XCTAssertFalse(grid.collectionView.isPrefetchingEnabled)
         XCTAssertLessThan(grid.collectionView.visibleCells.count, 300, "Cells, not just requests, are recycled")
@@ -724,14 +727,26 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         f.phase = .inactive
         try await settle(host)
         XCTAssertEqual(f.cleanup.selectionSessionID, session, "System confirmation inactivity is not background")
+        XCTAssertEqual(f.cleanup.selectedIDs, selected, "Inactive keeps committed selection, not an active gesture")
+        XCTAssertFalse(f.cleanup.canBrowse)
+        XCTAssertFalse(f.cleanup.canSelect)
+        XCTAssertTrue(detail.collectionView.isHidden)
+        XCTAssertTrue(detail.collectionView.accessibilityElementsHidden)
+        XCTAssertTrue(detail.collectionView.visibleCells.allSatisfy { $0.contentConfiguration == nil })
+        XCTAssertFalse(detail.hasActiveDisplayLink)
+        XCTAssertEqual(detail.collectionView.contentOffset, offset)
         f.phase = .background
         try await settle(host)
-        XCTAssertNil(f.browser.detailRoute)
+        XCTAssertNotNil(f.browser.detailRoute)
         XCTAssertNil(f.cleanup.selectionSessionID)
-        XCTAssertTrue(f.cleanup.groups.isEmpty)
+        XCTAssertEqual(f.cleanup.groups.map(\.id), f.grouping.groups.map(\.id))
+        XCTAssertFalse(f.cleanup.canBrowse)
+        XCTAssertFalse(f.cleanup.canSelect)
         XCTAssertTrue(f.cleanup.selectedIDs.isEmpty)
         XCTAssertFalse(detail.hasActiveDisplayLink)
-        XCTAssertTrue(detail.isShutdown)
+        XCTAssertFalse(detail.isShutdown)
+        XCTAssertTrue(detail.collectionView.isHidden)
+        XCTAssertEqual(detail.collectionView.contentOffset, offset)
         f.phase = .active
         try await settle(host)
         XCTAssertEqual(f.grouping.scans, 1, "Resume does not scan")

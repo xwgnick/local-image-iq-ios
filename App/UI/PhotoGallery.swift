@@ -105,35 +105,26 @@ struct PhotoResultsViewer: View {
 }
 
 /// Also backs the single-photo compatibility wrapper without manufacturing an
-/// IndexedPhoto. Only the selected page owns an HQ224 display-image request.
+/// IndexedPhoto. Only the selected page owns the progressive display requests.
 @MainActor
 struct PhotoGalleryViewer: View {
     let ids: [String]
     let library: PhotoLibraryClient
     let networkAllowed: Bool
     let state: AppState?
-    private let imageSource: PhotoViewerImageSource
+    @StateObject private var hd: PhotoViewerHDState
 
     private struct Request: Hashable {
         let id: String
         let networkAllowed: Bool
         let attempt: Int
-    }
 
-    private struct LoadedPhoto {
-        let request: Request
-        let photo: PhotoViewerImage
-    }
-
-    private struct FailedPhoto {
-        let request: Request
-        let issue: PhotoPreviewIssue
-    }
-
-    private struct ShareItem: Identifiable {
-        let id = UUID()
-        let snapshot: PhotoViewerSnapshot
-        let image: UIImage
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.id.utf8.elementsEqual(rhs.id.utf8) && lhs.networkAllowed == rhs.networkAllowed && lhs.attempt == rhs.attempt
+        }
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(Array(id.utf8)); hasher.combine(networkAllowed); hasher.combine(attempt)
+        }
     }
 
     private struct PhotoCheckSelection: Identifiable {
@@ -150,11 +141,7 @@ struct PhotoGalleryViewer: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedID: String
     @State private var attempt = 0
-    @State private var imageTask: Task<Void, Never>?
-    @State private var loadToken = UUID()
-    @State private var loadedPhoto: LoadedPhoto?
-    @State private var failedPhoto: FailedPhoto?
-    @State private var shareItem: ShareItem?
+    @State private var shareItem: PhotoViewerShareRendition?
     @State private var debugToolsEnabled = false
     @State private var photoCheckSelection: PhotoCheckSelection?
     @State private var previewComparisonSelection: PreviewComparisonSelection?
@@ -165,7 +152,7 @@ struct PhotoGalleryViewer: View {
         self.library = library
         self.networkAllowed = networkAllowed
         self.state = state
-        self.imageSource = imageSource ?? PhotoViewerImageSource(library: library)
+        _hd = StateObject(wrappedValue: PhotoViewerHDState(source: imageSource ?? PhotoViewerImageSource(library: library)))
         _selectedID = State(initialValue: ids.contains(initialID) ? initialID : (ids.first ?? ""))
     }
 
@@ -186,9 +173,14 @@ struct PhotoGalleryViewer: View {
 
     // A page change invalidates sharing immediately, even before the new task
     // starts or the previous PhotoKit callback observes its cancellation.
+    private var hasCurrentDisplaySelection: Bool {
+        ids.contains(where: { $0.utf8.elementsEqual(selectedID.utf8) })
+            && hd.selectedID.utf8.elementsEqual(selectedID.utf8)
+    }
+
     private var currentImage: UIImage? {
-        guard ids.contains(selectedID), let loadedPhoto, loadedPhoto.request == request else { return nil }
-        return loadedPhoto.photo.result.image
+        guard hasCurrentDisplaySelection else { return nil }
+        return hd.photo?.result.image
     }
 
     var body: some View {
@@ -213,7 +205,7 @@ struct PhotoGalleryViewer: View {
         .preferredColorScheme(.dark)
         .tint(IQStyle.accent)
         .statusBarHidden()
-        .task(id: request) { await startLoad(request) }
+        .task(id: request) { startLoad(request) }
         .onReceive(state?.$debugToolsEnabled.eraseToAnyPublisher() ?? Just(false).eraseToAnyPublisher()) { enabled in
             // A rebuilt subscription can replay the same value. Do not clear
             // AppState's published diagnostics again on a replay of user mode.
@@ -222,6 +214,7 @@ struct PhotoGalleryViewer: View {
             if !enabled { clearPhotoCheck() }
         }
         .onChange(of: selectedID) { _, _ in
+            if !hd.selectedID.utf8.elementsEqual(selectedID.utf8) { hd.stop() }
             shareItem = nil
             clearPhotoCheck()
         }
@@ -235,7 +228,7 @@ struct PhotoGalleryViewer: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 recheckAccess()
-                if loadedPhoto == nil, failedPhoto == nil, imageTask == nil { attempt += 1 }
+                if hd.photo == nil, hd.issue == nil, !hd.isWorking { attempt += 1 }
             } else {
                 clearPhotoCheck()
                 if phase == .background { cancelDisplay() }
@@ -244,11 +237,33 @@ struct PhotoGalleryViewer: View {
         .onReceive(state?.$photoLibraryEpoch.eraseToAnyPublisher() ?? Empty<UUID, Never>().eraseToAnyPublisher()) { _ in
             recheckAccess()
         }
+        .onReceive(NotificationCenter.default.publisher(for: PhotoLibraryClient.viewerDidChangeNotification, object: library)
+            .receive(on: RunLoop.main)) { _ in recheckAccess() }
+        .onChange(of: hd.phase) { _, phase in
+            if phase == .access { shareItem = nil; clearPhotoCheck() }
+        }
         .onDisappear { cancelDisplay(clearShare: false); clearPhotoCheck() }
+        .confirmationDialog("加载高清", isPresented: Binding(
+            get: { hd.consent != nil },
+            set: { if !$0 { hd.dismissCloudConfirmation() } }),
+            titleVisibility: .visible, presenting: hd.consent) { approval in
+                Button("加载这一张") {
+                    guard scenePhase == .active, hasCurrentDisplaySelection,
+                          approval.asset.snapshot.revision.id.utf8.elementsEqual(selectedID.utf8) else {
+                        hd.dismissCloudConfirmation()
+                        return
+                    }
+                    hd.confirmCloud(approval)
+                }
+                Button("取消", role: .cancel) { hd.dismissCloudConfirmation() }
+        } message: { _ in
+            Text("允许从 iCloud 下载这一张照片的高清版本，仅用于本次查看请求。不会更改全局 iCloud 或索引设置；可能使用移动数据。")
+        }
         .sheet(item: $shareItem) { item in
             // The sheet uses an immutable snapshot, never whichever UIImage
             // happens to finish loading after the Share button was pressed.
-            if item.snapshot.revision.id.utf8.elementsEqual(selectedID.utf8), isCurrent(item.snapshot) {
+            if scenePhase != .background,
+               item.snapshot.revision.id.utf8.elementsEqual(selectedID.utf8), hd.isCurrent(item.snapshot) {
                 PhotoShareSheet(image: item.image)
             } else {
                 ContentUnavailableView("照片访问权限已更改", systemImage: "lock",
@@ -297,6 +312,7 @@ struct PhotoGalleryViewer: View {
 
     private var bottomBar: some View {
         VStack(spacing: 8) {
+            hdControls
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
                     shareButton
@@ -351,7 +367,7 @@ struct PhotoGalleryViewer: View {
 
     private var shareButton: some View {
         Button(action: shareCurrentPhoto) {
-            Label("分享", systemImage: "square.and.arrow.up")
+            Label(hd.shareQuality.rawValue, systemImage: "square.and.arrow.up")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(IQStyle.accent)
                 .padding(.horizontal, 28)
@@ -361,8 +377,16 @@ struct PhotoGalleryViewer: View {
         .buttonStyle(.plain)
         .disabled(currentImage == nil)
         .opacity(currentImage == nil ? 0.4 : 1)
-        .accessibilityHint("分享当前显示的照片，不包含位置元数据")
+        .accessibilityHint("分享当前显示版本，不是原图，不包含位置元数据")
         .accessibilityIdentifier("share-photo-preview")
+    }
+
+    private var hdControls: some View {
+        PhotoViewerHDControls(phase: hd.phase, canRequestCloud: hd.canRequestCloud,
+            isCurrentSelection: hasCurrentDisplaySelection, onCancel: { hd.cancelUpgrade() }, onRequest: {
+                guard scenePhase == .active, hasCurrentDisplaySelection else { return }
+                hd.requestCloudConfirmation()
+            })
     }
 
     private var checkButton: some View {
@@ -378,7 +402,7 @@ struct PhotoGalleryViewer: View {
 
     private var hasCheckableSelection: Bool {
         guard !selectedID.isEmpty, ids.contains(selectedID) else { return false }
-        if let failedPhoto, failedPhoto.request == request, case .access = failedPhoto.issue { return false }
+        if hd.phase == .access { return false }
         return true
     }
 
@@ -417,22 +441,45 @@ struct PhotoGalleryViewer: View {
     }
 
     private func page(id: String) -> some View {
-        ZStack {
-            IQStyle.viewerBackground
-            if id == selectedID, let image = currentImage {
-                PhotoFitZoomView(image: image)
+        GeometryReader { geometry in
+            ZStack {
+                IQStyle.viewerBackground
+                if id == selectedID, let image = currentImage {
+                    // Identity is the page attempt, NOT the rendition. Upgrading
+                    // the UIImage must not recreate the zoom state.
+                    PhotoFitZoomView(image: image) { zoom in
+                        guard id == selectedID, hd.selectedID.utf8.elementsEqual(id.utf8) else { return }
+                        hd.updateDemand(viewport: geometry.size, displayScale: displayScale, zoom: zoom)
+                    }
                     .id(request)
-            } else if id == selectedID, let failedPhoto, failedPhoto.request == request {
-                failureView(failedPhoto.issue)
-            } else {
-                VStack(spacing: 12) {
-                    ProgressView().tint(IQStyle.accent)
-                    Text("正在加载照片…").font(.subheadline).foregroundStyle(IQStyle.secondary)
+                } else if id == selectedID, let issue = hd.issue {
+                    failureView(issue)
+                } else {
+                    VStack(spacing: 12) {
+                        ProgressView().tint(IQStyle.accent)
+                        Text("正在加载照片…").font(.subheadline).foregroundStyle(IQStyle.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
                 }
-                .accessibilityElement(children: .combine)
+            }
+            .task(id: ViewerViewport(width: geometry.size.width, height: geometry.size.height,
+                                    scale: displayScale, selected: id == selectedID,
+                                    ownerID: Array(hd.selectedID.utf8))) {
+                if id == selectedID, hd.selectedID.utf8.elementsEqual(id.utf8) {
+                    hd.updateViewport(geometry.size, displayScale: displayScale)
+                }
             }
         }
         .clipped()
+    }
+
+    @Environment(\.displayScale) private var displayScale
+    private struct ViewerViewport: Hashable {
+        let width: CGFloat
+        let height: CGFloat
+        let scale: CGFloat
+        let selected: Bool
+        let ownerID: [UInt8]
     }
 
     private func failureView(_ issue: PhotoPreviewIssue) -> some View {
@@ -445,7 +492,8 @@ struct PhotoGalleryViewer: View {
                     .foregroundStyle(IQStyle.accent)
                     .accessibilityHidden(true)
                 Text(issue.localizedTitle).font(.title3.weight(.semibold)).foregroundStyle(IQStyle.text)
-                Text(issue.localizedMessage(networkAllowed: networkAllowed))
+                Text(hd.phase == .access ? issue.localizedMessage(networkAllowed: false) :
+                     "暂时无法获取本地预览。可重试本地读取，或使用下方“加载高清”仅下载这一张。")
                     .font(.subheadline)
                     .foregroundStyle(IQStyle.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -471,74 +519,119 @@ struct PhotoGalleryViewer: View {
         .defaultScrollAnchor(.center)
     }
 
-    private func startLoad(_ requested: Request) async {
+    private func startLoad(_ requested: Request) {
         guard !Task.isCancelled, request == requested else { return }
-        imageTask?.cancel()
-        let token = UUID()
-        loadToken = token
-        let task = Task { @MainActor in await load(requested, token: token) }
-        imageTask = task
-        await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
-        if loadToken == token { imageTask = nil }
+        shareItem = nil
+        hd.open(id: ids.contains(requested.id) ? requested.id : "")
     }
 
     private func cancelDisplay(clearShare: Bool = true) {
-        loadToken = UUID()
-        imageTask?.cancel()
-        imageTask = nil
-        loadedPhoto = nil
+        hd.stop()
         // A presented activity sheet can cover this view. Its immutable image
         // remains owned by that sheet; only an explicit close/page clears it.
         if clearShare { shareItem = nil }
     }
 
-    private func load(_ requested: Request, token: UUID) async {
-        guard !Task.isCancelled, request == requested, loadToken == token else { return }
-        loadedPhoto = nil
-        failedPhoto = nil
-        shareItem = nil
-        guard ids.contains(requested.id) else { return }
-        do {
-            let photo = try await imageSource.load(requested.id, requested.networkAllowed)
-            try Task.checkCancellation()
-            guard request == requested, loadToken == token else { return }
-            guard photo.snapshot.revision.id.utf8.elementsEqual(requested.id.utf8) else { throw CancellationError() }
-            try imageSource.validate(photo.snapshot)
-            try Task.checkCancellation()
-            loadedPhoto = LoadedPhoto(request: requested, photo: photo)
-        } catch {
-            guard !Task.isCancelled, request == requested, loadToken == token else { return }
-            let issue: PhotoPreviewIssue = error is CancellationError ? .access : PhotoPreviewIssue(error: error)
-            failedPhoto = FailedPhoto(request: requested, issue: issue)
-        }
-    }
-
-    private func isCurrent(_ snapshot: PhotoViewerSnapshot) -> Bool {
-        do { try imageSource.validate(snapshot); return true }
-        catch { return false }
-    }
-
     private func recheckAccess() {
-        guard let loadedPhoto, !isCurrent(loadedPhoto.photo.snapshot) else { return }
-        cancelDisplay()
+        if let item = shareItem, !hd.isCurrent(item.snapshot) { shareItem = nil }
+        guard !hd.recheckAccess() else { return }
+        shareItem = nil
         clearPhotoCheck()
-        failedPhoto = FailedPhoto(request: request, issue: .access)
     }
 
     private func shareCurrentPhoto() {
-        guard let image = currentImage, let loadedPhoto else { return }
-        let snapshot = loadedPhoto.photo.snapshot
-        guard isCurrent(snapshot) else {
-            recheckAccess()
-            return
+        guard scenePhase == .active, currentImage != nil else { return }
+        shareItem = hd.makeShareRendition()
+    }
+}
+
+/// Reserve the natural size of every HD status, even with sufficient pixels.
+/// Only the overlay is conditional: eligibility must never resize the photo's
+/// GeometryReader and feed a different coverage target back into eligibility.
+@MainActor
+struct PhotoViewerHDControls: View {
+    let phase: PhotoViewerHDState.Phase
+    let canRequestCloud: Bool
+    let isCurrentSelection: Bool
+    let onCancel: () -> Void
+    let onRequest: () -> Void
+
+    private enum Status: CaseIterable, Hashable {
+        case local, cloud, cancelling, request, failed, cancelled
+
+        var isWorking: Bool { self == .local || self == .cloud || self == .cancelling }
+        var message: String? {
+            switch self {
+            case .local: return "正在读取本地高清…"
+            case .cloud: return "正在加载这一张高清…"
+            case .cancelling: return "正在取消…"
+            case .request: return nil
+            case .failed: return "未能加载高清，当前显示版本不变"
+            case .cancelled: return "已取消，当前显示版本不变"
+            }
         }
-        let rendered = PhotoShareSheet.renderedCopy(of: image)
-        // Authorization can change outside the main actor while rendering.
-        guard isCurrent(snapshot) else {
-            recheckAccess()
-            return
+    }
+
+    private var status: Status? {
+        guard isCurrentSelection else { return nil }
+        switch phase {
+        case .local: return .local
+        case .cloud: return .cloud
+        case .cancelling: return .cancelling
+        default:
+            guard canRequestCloud else { return nil }
+            return phase == .failed ? .failed : (phase == .cancelled ? .cancelled : .request)
         }
-        shareItem = ShareItem(snapshot: snapshot, image: rendered)
+    }
+
+    var body: some View {
+        ZStack {
+            ForEach(Status.allCases, id: \.self) { status in
+                row(status) {
+                    // Inert labels reserve button dimensions, not hidden live
+                    // actions. Dynamic Type and available width still apply.
+                    Text(status.isWorking ? "取消" : "加载高清")
+                        .frame(minWidth: status.isWorking ? 44 : nil, minHeight: 44)
+                }
+                .hidden()
+                .accessibilityHidden(true)
+            }
+        }
+        .overlay {
+            if let status {
+                row(status) {
+                    if status.isWorking {
+                        Button("取消", action: onCancel)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .disabled(status == .cancelling)
+                            .accessibilityIdentifier("cancel-photo-hd")
+                    } else {
+                        Button("加载高清", action: onRequest)
+                            .frame(minHeight: 44)
+                            .accessibilityHint("先确认，再仅为这一张照片允许 iCloud 下载")
+                            .accessibilityIdentifier("load-photo-hd")
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func row<Action: View>(_ status: Status, @ViewBuilder action: () -> Action) -> some View {
+        if status.isWorking {
+            HStack(spacing: 8) {
+                ProgressView().tint(IQStyle.accent)
+                Text(status.message ?? "").font(.footnote).foregroundStyle(IQStyle.secondary)
+                action()
+            }
+        } else {
+            VStack(spacing: 0) {
+                if let message = status.message {
+                    Text(message).font(.footnote).foregroundStyle(IQStyle.secondary)
+                }
+                action()
+            }
+        }
     }
 }
 
@@ -574,12 +667,19 @@ private struct PhotoCheckPreviewLabel: View {
 /// Two-finger zoom only: no horizontal drag recognizer competes with TabView.
 /// Swiping always turns the page; returning to a page starts at full-image fit.
 @MainActor
-private struct PhotoFitZoomView: View {
+struct PhotoFitZoomView: View {
     let image: UIImage
-    @State private var settledScale: CGFloat = 1
+    let onZoom: (CGFloat) -> Void
+    @StateObject private var zoomState: PhotoViewerZoomState
     @GestureState private var pinchScale: CGFloat = 1
 
-    private func bounded(_ scale: CGFloat) -> CGFloat { min(max(scale, 1), 4) }
+    init(image: UIImage, zoomState: PhotoViewerZoomState? = nil, onZoom: @escaping (CGFloat) -> Void = { _ in }) {
+        self.image = image
+        self.onZoom = onZoom
+        _zoomState = StateObject(wrappedValue: zoomState ?? PhotoViewerZoomState())
+    }
+
+    private func bounded(_ scale: CGFloat) -> CGFloat { scale.isFinite ? max(scale, 1) : zoomState.scale }
 
     var body: some View {
         GeometryReader { geometry in
@@ -587,19 +687,23 @@ private struct PhotoFitZoomView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: geometry.size.width, height: geometry.size.height)
-                .scaleEffect(bounded(settledScale * pinchScale))
+                .scaleEffect(bounded(zoomState.scale * pinchScale))
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .contentShape(Rectangle())
                 .clipped()
                 .simultaneousGesture(
                     MagnifyGesture()
                         .updating($pinchScale) { value, scale, _ in scale = value.magnification }
-                        .onEnded { value in settledScale = bounded(settledScale * value.magnification) }
+                        .onEnded { value in
+                            zoomState.magnify(by: value.magnification)
+                            onZoom(zoomState.scale)
+                        }
                 )
-                .onTapGesture(count: 2) { settledScale = 1 }
+                .onTapGesture(count: 2) { zoomState.reset(); onZoom(1) }
+                .onChange(of: geometry.size) { _, _ in onZoom(zoomState.scale) }
                 .accessibilityLabel("当前照片")
                 .accessibilityHint("双指捏合缩放，轻点两下还原缩放，左右轻扫切换照片。")
-                .accessibilityAction(named: Text("还原缩放")) { settledScale = 1 }
+                .accessibilityAction(named: Text("还原缩放")) { zoomState.reset(); onZoom(1) }
                 .accessibilityIdentifier("photo-preview-image")
         }
         .clipped()

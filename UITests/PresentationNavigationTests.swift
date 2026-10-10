@@ -469,7 +469,7 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
-    func testPhotoTextOptInDoesNotIndexOrAskPhotosPermission() throws {
+    func testPhotoTextToggleDefersWithoutPermissionAndHasNoInlineMaintenanceButton() throws {
         if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
             throw XCTSkip("Live photo text opt-in requires the real bundled models")
         }
@@ -554,14 +554,14 @@ final class PresentationNavigationTests: XCTestCase {
         expectSwitch(toggle, enabled: false)
 
         tapOptIn(true)
-        XCTAssertTrue(update.waitForExistence(timeout: 5))
-        XCTAssertTrue(update.label.contains("文字索引"))
-        XCTAssertFalse(update.isEnabled, "Opt-in alone cannot authorize Photos or start indexing")
+        expectAbsent(update)
+        XCTAssertFalse(app.progressIndicators["ocr-sync-progress"].exists,
+                   "The requested update waits for permission; it cannot invent processing progress")
         assertNoWorkOrPermissionPrompt()
 
         app.buttons["primary-cleanup-tab"].tap()
         expectAbsent(toggle)
-        XCTAssertFalse(update.exists, "The hidden search page must not expose its manual action")
+        XCTAssertFalse(update.exists, "Neither primary page exposes an inline OCR maintenance action")
         app.buttons["primary-search-tab"].tap()
         assertHomeOptIn()
         expectSwitch(toggle, enabled: true)
@@ -609,8 +609,9 @@ final class PresentationNavigationTests: XCTestCase {
         assertHomeControls()
         assertHomeOptIn()
         expectSwitch(toggle, enabled: true)
-        XCTAssertTrue(update.waitForExistence(timeout: 5))
-        XCTAssertFalse(update.isEnabled)
+        expectAbsent(update)
+        XCTAssertFalse(app.buttons["ocr-sync-open-details"].exists,
+                   "Restoring saved ON is not a new update request")
         assertNoWorkOrPermissionPrompt()
         tapOptIn(false)
         expectAbsent(update)
@@ -679,7 +680,7 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(threshold.exists, "The production cleanup threshold starts collapsed")
         XCTAssertFalse(thresholdTitle.exists)
         expectHittable(disclosure)
-        XCTAssertEqual(disclosure.label, "展开相似度调节")
+        XCTAssertEqual(disclosure.label, "展开清理设置")
         XCTAssertEqual(disclosure.value as? String, "已收起")
         let start = app.buttons["start-similar-grouping"]
 
@@ -740,14 +741,15 @@ final class PresentationNavigationTests: XCTestCase {
             thumbCenter(startValue).press(forDuration: 0.1, thenDragTo: end)
         }
 
-        XCTAssertTrue(app.staticTexts["相似度"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["清理设置"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["相似度"].exists, "Slider labels belong inside the collapsed settings")
         XCTAssertFalse(app.staticTexts["找出相近的照片，方便挑选和清理。"].exists)
         XCTAssertFalse(app.staticTexts["可手动调节组内照片相似度的严格程度。"].exists)
         assertUnreadyCleanup()
         disclosure.tap()
         expectHittable(threshold)
         expectHittable(thresholdTitle)
-        XCTAssertEqual(disclosure.label, "收起相似度调节")
+        XCTAssertEqual(disclosure.label, "收起清理设置")
         XCTAssertEqual(disclosure.value as? String, "已展开")
         XCTAssertTrue(threshold.isEnabled)
         // Existing valid saved preferences survive an upgrade; don't overwrite

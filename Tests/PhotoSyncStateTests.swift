@@ -965,31 +965,119 @@ final class PhotoSyncStateTests: XCTestCase {
         }
     }
 
-    func testOCRCanComputeAlongsideSyncButSyncCommitWaitsForOCRReadLease() async {
+    func testOCRToggleWaitsForPhotoSettlementBeforeTakingItsReadLease() async {
         let queued = SyncStateSignal()
         let access = IndexAccessCoordinator(didEnqueue: { queued.send() })
         let textGate = SyncStateSignal()
-        let front = SyncForegroundService(holds: [.text: textGate])
+        let front = SyncForegroundService(summary: syncSummary(9), holds: [.text: textGate])
         let run = SyncStateRun(result: syncResult(count: 9), commitAfterWait: true)
-        let sync = SyncStateService([run], access: access)
+        let followup = SyncStateRun(result: syncResult(count: 9))
+        let sync = SyncStateService([run, followup], access: access)
         let state = AppState(worker: front, authorizationStatus: { .authorized }, syncService: sync, indexAccess: access)
         state.start()
         await state.waitUntilIdle()
         await run.entered.wait()
         state.textSearchEnabled = true
         state.indexPhotoText()
-        await front.arrival(.text).wait()
+        state.textSearchEnabled = true
+        XCTAssertTrue(state.ocrSync.pending)
+        XCTAssertFalse(state.ocrSync.currentRunning)
+        XCTAssertEqual(front.arrival(.text).count, 0)
         XCTAssertTrue(state.photoSync.canCancel)
         run.release.send()
-        await queued.wait(3)
+        await front.arrival(.text).wait()
+        XCTAssertEqual(run.ended.count, 1, "Recognition starts only after the photo job returns.")
         XCTAssertEqual(run.cancelled.count, 0)
+        XCTAssertEqual(access.revision, 1, "The photo commit was not blocked behind the pending OCR reader.")
         XCTAssertFalse(access.isWriting)
+        XCTAssertTrue(state.ocrSync.currentRunning)
+        XCTAssertFalse(state.photoSync.canCancel)
         textGate.send()
         await state.waitUntilIdle()
+        // The existing photo readiness mechanism may request its own fresh
+        // image diff after suspension. It must not request a second OCR update.
+        await followup.entered.wait()
+        state.photoSync.cancel()
+        followup.release.send()
         await state.waitForSync()
+        XCTAssertEqual(front.arrival(.text).count, 1)
+        XCTAssertFalse(state.ocrSync.currentRunning)
         XCTAssertEqual(state.summary.indexedCount, 9)
         XCTAssertEqual(state.summary.textIndexCounts.records, 12)
         XCTAssertTrue(state.summary.textIndexStatisticsKnown)
+    }
+
+    func testOffCancelsPendingOCRWithoutCancellingPhotoSync() async {
+        let front = SyncForegroundService()
+        let run = SyncStateRun()
+        let sync = SyncStateService([run])
+        let state = AppState(worker: front, authorizationStatus: { .authorized }, syncService: sync)
+        state.start()
+        await state.waitUntilIdle()
+        await run.entered.wait()
+        state.textSearchEnabled = true
+        XCTAssertTrue(state.ocrSync.pending)
+        state.textSearchEnabled = false
+        XCTAssertFalse(state.ocrSync.pending)
+        XCTAssertEqual(run.cancelled.count, 0)
+        run.release.send()
+        await state.waitForSync()
+        await state.waitUntilIdle()
+        XCTAssertEqual(front.arrival(.text).count, 0)
+        XCTAssertEqual(state.ocrSync.phase, .cancelled)
+    }
+
+    func testOnWhilePhotoCancellationDrainsWaitsThenRunsOnce() async {
+        let front = SyncForegroundService()
+        let run = SyncStateRun()
+        let sync = SyncStateService([run])
+        let state = AppState(worker: front, authorizationStatus: { .authorized }, syncService: sync)
+        state.start()
+        await state.waitUntilIdle()
+        await run.entered.wait()
+        state.photoSync.cancel()
+        await run.cancelled.wait()
+        state.textSearchEnabled = true
+        state.textSearchEnabled = true
+        XCTAssertTrue(state.ocrSync.pending)
+        XCTAssertEqual(front.arrival(.text).count, 0)
+        run.release.send()
+        await state.waitForSync()
+        await state.waitUntilIdle()
+        XCTAssertEqual(front.arrival(.text).count, 1)
+        XCTAssertEqual(state.photoSync.phase, .cancelled)
+        state.textSearchEnabled = true
+        await state.waitUntilIdle()
+        XCTAssertEqual(front.arrival(.text).count, 1)
+    }
+
+    func testPendingOCRUsesFirstImageSyncSettlementWhenInitialIndexWasEmpty() async {
+        let textGate = SyncStateSignal()
+        let front = SyncForegroundService(summary: syncSummary(0), holds: [.text: textGate])
+        let run = SyncStateRun(result: syncResult(count: 9))
+        let sync = SyncStateService([run])
+        let state = AppState(worker: front, authorizationStatus: { .authorized }, syncService: sync)
+        state.start()
+        await state.waitUntilIdle()
+        await run.entered.wait()
+        XCTAssertEqual(state.summary.indexedCount, 0)
+        state.textSearchEnabled = true
+        XCTAssertTrue(state.ocrSync.pending)
+        XCTAssertEqual(front.arrival(.text).count, 0)
+        run.release.send()
+        await front.arrival(.text).wait()
+        XCTAssertEqual(state.summary.indexedCount, 9)
+        XCTAssertFalse(state.ocrSync.pending)
+        XCTAssertTrue(state.ocrSync.currentRunning)
+        // Cancel the held synthetic OCR before its deliberately old fixture
+        // summary can return. No subsequent fake photo diff is needed here.
+        state.enterBackground()
+        textGate.send()
+        await state.waitUntilIdle()
+        await state.waitForSync()
+        XCTAssertEqual(front.arrival(.text).count, 1)
+        XCTAssertEqual(state.summary.indexedCount, 9)
+        XCTAssertEqual(state.ocrSync.phase, .cancelled)
     }
 
     func testCancellingQueuedManualWriterDoesNotRunWorkerOrLeakLease() async throws {

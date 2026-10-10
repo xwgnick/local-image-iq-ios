@@ -4,6 +4,43 @@ import Foundation
 /// every group's members remain untouched. Dates are photo creation/capture
 /// times, never edits, index commits, or the time grouping completed.
 enum SimilarGroupPresentation {
+    enum Selection: Equatable { case none, partial, all }
+
+    struct SelectionSummary: Equatable {
+        var groupCount = 0
+        var photoCount = 0
+        var fullGroupCount = 0
+        var hiddenGroupCount = 0
+        var hiddenPhotoCount = 0
+    }
+
+    static func selection(in group: SimilarPhotoGroup, selectedIDs: Set<String>) -> Selection {
+        let count = group.photos.filter { selectedIDs.contains($0.id) }.count
+        if count == 0 { return .none }
+        return count == group.photos.count ? .all : .partial
+    }
+
+    static func selectionSummary(_ groups: [SimilarPhotoGroup], selectedIDs: Set<String>,
+                                 minimumCount: Int) -> SelectionSummary {
+        var summary = SelectionSummary()
+        for group in groups {
+            let count = group.photos.filter { selectedIDs.contains($0.id) }.count
+            guard count > 0 else { continue }
+            summary.groupCount += 1
+            summary.photoCount += count
+            if count == group.photos.count { summary.fullGroupCount += 1 }
+            if group.photos.count < minimumCount {
+                summary.hiddenGroupCount += 1
+                summary.hiddenPhotoCount += count
+            }
+        }
+        return summary
+    }
+
+    static func visibleGroups(_ groups: [SimilarPhotoGroup], minimumCount: Int) -> [SimilarPhotoGroup] {
+        groups.filter { $0.photos.count >= minimumCount }
+    }
+
     static func latestCreationTime(in group: SimilarPhotoGroup) -> TimeInterval? {
         group.photos.compactMap { photo -> TimeInterval? in
             guard let time = photo.creationTime, time.isFinite else { return nil }

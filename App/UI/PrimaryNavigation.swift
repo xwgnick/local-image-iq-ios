@@ -214,7 +214,15 @@ struct PrimaryNavigationBar: View {
     }
 
     private func tabLabel(_ item: PrimaryPage) -> some View {
-        Label(item.title, systemImage: item.symbol)
+        Label {
+            Text(item.title)
+                .foregroundStyle(page == item ? IQStyle.accent : IQStyle.secondary)
+                .primaryNavigationLabelFrame(.title(item))
+        } icon: {
+            Image(systemName: item.symbol)
+                .foregroundStyle(IQStyle.secondary)
+                .primaryNavigationLabelFrame(.icon(item))
+        }
             .labelStyle(.titleAndIcon)
             .font(.subheadline.weight(.semibold))
             // Fixed-height navigation chrome must not paint oversized glyphs
@@ -223,9 +231,6 @@ struct PrimaryNavigationBar: View {
             .lineLimit(1).truncationMode(.tail)
             .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
             .padding(.horizontal, 8)
-            .foregroundStyle(page == item ? IQStyle.accent : IQStyle.secondary)
-            .background(page == item ? IQStyle.accentSoft : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 12))
             .accessibilityLabel(item.title)
             .contentShape(Rectangle())
     }
@@ -262,5 +267,31 @@ struct PrimaryNavigationFrames: PreferenceKey {
     static var defaultValue: [PrimaryPage: CGRect] = [:]
     static func reduce(value: inout [PrimaryPage: CGRect], nextValue: () -> [PrimaryPage: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// Passive glyph bounds for same-host pixel regressions. These never affect
+/// accessibility, hit testing, selection or layout proposals.
+enum PrimaryNavigationLabelPart: Hashable {
+    case title(PrimaryPage), icon(PrimaryPage)
+}
+
+struct PrimaryNavigationLabelFrames: PreferenceKey {
+    static var defaultValue: [PrimaryNavigationLabelPart: CGRect] = [:]
+    static func reduce(value: inout [PrimaryNavigationLabelPart: CGRect],
+                       nextValue: () -> [PrimaryNavigationLabelPart: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private extension View {
+    func primaryNavigationLabelFrame(_ part: PrimaryNavigationLabelPart) -> some View {
+        background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: PrimaryNavigationLabelFrames.self,
+                                       value: [part: geometry.frame(in: .global)])
+            }
+            .allowsHitTesting(false).accessibilityHidden(true)
+        }
     }
 }

@@ -201,7 +201,7 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
         XCTAssertEqual(f.grouping.thresholds, [SimilarPhotoGroupingPolicy.defaultThreshold])
     }
 
-    func testHostedActualSheetStaysPresentedAfterGroupsAndLibraryEpochClearsGroupsWithoutDismissal() async throws {
+    func testHostedActualSheetStaysPresentedAndLibraryEpochHidesRetainedGroupsWithoutDismissal() async throws {
         let c = try await sheetFixture(empty: false)
         let host = try await mount(c)
         try assertPresented(host, c)
@@ -225,7 +225,12 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
         await c.app.waitUntilIdle()
         try await settle(host)
         XCTAssertNotEqual(c.app.photoLibraryEpoch, epoch)
-        assertUnpublished(c.fixture.state)
+        XCTAssertTrue(c.fixture.state.hasScanned)
+        XCTAssertEqual(c.fixture.state.groups.count, 1)
+        XCTAssertFalse(c.fixture.state.canBrowse)
+        XCTAssertFalse(c.fixture.state.canSelect)
+        XCTAssertTrue(c.fixture.state.selectedIDs.isEmpty)
+        XCTAssertNil(c.fixture.state.pendingDeletion)
         XCTAssertFalse(c.fixture.state.isValidating)
         XCTAssertEqual(c.fixture.state.threshold, 0.75)
         try assertPresented(host, c)
@@ -639,7 +644,8 @@ fileprivate struct CleanupPublicationRoot: View {
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white).padding(.vertical, 6)
                     .frame(maxWidth: .infinity).background(Color.black)
-                SimilarPhotoCleanupSheet(state: context.fixture.state, appState: context.app)
+                SimilarPhotoCleanupSheet(state: context.fixture.state, appState: context.app,
+                                         thumbnailContent: { _ in AnyView(Color.gray) })
             }
             .environment(\.scenePhase, .active)
             .preferredColorScheme(.dark)

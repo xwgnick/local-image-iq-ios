@@ -49,7 +49,11 @@ final class SimilarCleanupDeletionRefreshTests: XCTestCase {
         XCTAssertNotEqual(state.selectionSessionID, session)
         XCTAssertTrue(state.selectedIDs.isEmpty)
         XCTAssertNil(state.pendingDeletion)
+        XCTAssertNil(state.message, "Success must not open a blocking modal")
+        XCTAssertEqual(state.statusNotice, "已删除1张照片")
+        state.showDeletionRecovery()
         XCTAssertEqual(state.message, PhotoDeletionRecoveryNotice.success(count: 1))
+        state.dismissMessage()
         assertNoGlobalRerun(f)
         // An old queued confirmation cannot write against the new session.
         state.confirmDeletion(intent)
@@ -106,7 +110,8 @@ final class SimilarCleanupDeletionRefreshTests: XCTestCase {
         XCTAssertTrue(state.needsRegroup)
         XCTAssertTrue(state.canRetryAutomaticRefresh)
         XCTAssertFalse(state.canSelect)
-        XCTAssertTrue(state.groups.isEmpty)
+        XCTAssertEqual(state.groups.first?.photos.map(\.id), ["a", "c", "d"])
+        XCTAssertFalse(state.canBrowse, "No early display without a fresh lightweight check or full restore")
         for _ in 0..<3 {
             state.enterPage(ready: true)
             state.availabilityChanged(ready: true)

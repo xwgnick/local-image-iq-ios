@@ -3,10 +3,10 @@ import UIKit
 import ImageIQCore
 
 struct SimilarPhotoGroupRoute: Identifiable, Equatable {
-    let id = UUID()
+    var id = UUID()
     let sessionID: UUID
-    let groupID: String
-    let photoID: String
+    var groupID: String
+    var photoID: String
 }
 
 struct SimilarPhotoViewerRoute: Identifiable {
@@ -33,11 +33,13 @@ final class SimilarPhotoGroupBrowser: ObservableObject {
     @Published var comparisonGroup: SimilarPhotoGroup?
     @Published var viewer: SimilarPhotoViewerRoute?
     private(set) var targetFrame: CGRect?
+    private var detailMemberIDs: Set<String> = []
 
     func open(group: SimilarPhotoGroup, photoID: String, sessionID: UUID,
               capture: SimilarPhotoThumbnailCapture? = nil) {
         guard group.photos.contains(where: { $0.id == photoID }) else { return }
         let route = SimilarPhotoGroupRoute(sessionID: sessionID, groupID: group.id, photoID: photoID)
+        detailMemberIDs = Set(group.photos.map(\.id))
         targetFrame = nil
         comparisonGroup = nil
         viewer = nil
@@ -69,6 +71,32 @@ final class SimilarPhotoGroupBrowser: ObservableObject {
         zoomFlight = nil
         targetFrame = nil
         detailRoute = nil
+        detailMemberIDs = []
+    }
+
+    /// Drop raster-bearing covers, not the retained detail/scroll identity.
+    func hidePrivateSurfaces() {
+        viewer = nil
+        comparisonGroup = nil
+        zoomFlight = nil
+        targetFrame = nil
+    }
+
+    func reconcile(groups: [SimilarPhotoGroup], sessionID: UUID?) {
+        guard var route = detailRoute else { return }
+        guard route.sessionID == sessionID else { closeDetail(); return }
+        // Deletion maintenance may reseed the group's ID. Keep the route only
+        // when exactly one fresh group overlaps its old members (no ambiguity).
+        let matches = groups.filter { group in group.photos.contains { detailMemberIDs.contains($0.id) } }
+        guard matches.count == 1, let group = matches.first,
+              let first = group.photos.first else { closeDetail(); return }
+        route.groupID = group.id
+        if !group.photos.contains(where: { $0.id == route.photoID }) { route.photoID = first.id }
+        detailMemberIDs = Set(group.photos.map(\.id))
+        if detailRoute != route { detailRoute = route }
+        if comparisonGroup != nil { comparisonGroup = group }
+        // A viewer captures an immutable ID array; don't leave deleted IDs in it.
+        if let viewer, viewer.ids != group.photos.map(\.id) { self.viewer = nil }
     }
 
     func invalidate(sessionID: UUID?) {
@@ -103,9 +131,9 @@ struct SimilarPhotoGroupDetail: View {
     @State private var selectionMode = false
     @State private var measuredHeaderHeight: CGFloat = 0
 
-    private var current: Bool { state.selectionSessionID == route.sessionID }
+    private var current: Bool { state.browsingSessionID == route.sessionID }
     private var enabled: Bool {
-        current && !state.isGrouping && !state.isDeleting && scenePhase != .background
+        current && state.canBrowse && !state.isDeleting && scenePhase == .active
             && browser.comparisonGroup == nil && browser.viewer == nil && browser.zoomFlight == nil
     }
     private var selected: Int { group.photos.filter { state.selectedIDs.contains($0.id) }.count }
@@ -145,7 +173,7 @@ struct SimilarPhotoGroupDetail: View {
                         photos: group.photos, groupNumber: number, sessionID: route.sessionID,
                         initialPhotoID: route.photoID, selectedIDs: state.selectedIDs,
                         selectionMode: effectiveSelectionMode, isSelecting: state.isSelecting, enabled: enabled,
-                        hiddenPhotoID: browser.zoomFlight?.photoID,
+                        hiddenPhotoID: browser.zoomFlight?.photoID, contentVisible: state.canBrowse && scenePhase == .active,
                         thumbnail: thumbnail,
                         begin: { guard enabled && state.canSelect else { return nil }; return state.beginRangeSelection(groupID: group.id) },
                         finish: { token, ids in
@@ -193,18 +221,35 @@ struct SimilarPhotoGroupDetail: View {
                     .frame(minHeight: 44)
                     .disabled(!state.canSelect)
                     .accessibilityIdentifier("similar-cleanup-group-\(number)-select-group")
-                Button("清空本组") { selectWholeGroup([]) }
+                    .accessibilityHint("选择本组全部照片，不自动保留任何一张")
+                Button("清空选择") { selectWholeGroup([]) }
                     .frame(minHeight: 44)
+                    .foregroundStyle(IQStyle.secondary)
                     .disabled(!state.canSelect)
+                    .accessibilityHint("仅取消本组照片的勾选，不删除照片")
                     .accessibilityIdentifier("similar-cleanup-clear-group")
                 Button("对比", systemImage: "rectangle.split.2x1") { browser.comparisonGroup = group }
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("similar-cleanup-group-\(number)-compare")
             }
             .disabled(!enabled || state.isSelecting)
-            if state.hasPendingThresholdChange || state.needsRegroup {
-                Text("分组待更新，暂时仅供浏览。")
+            if state.hasPendingThresholdChange || state.needsRegroup || state.isRestoring || state.isGrouping {
+                Text("正在核验或更新分组，暂时仅供浏览。")
                     .font(.caption).foregroundStyle(IQStyle.secondary)
+            }
+            if let notice = state.statusNotice {
+                HStack(spacing: 8) {
+                    Text(notice).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    if notice.hasPrefix("已删除") {
+                        Button("恢复说明") { state.showDeletionRecovery() }
+                            .font(.caption).frame(minHeight: 44)
+                    }
+                    Button { state.dismissStatusNotice() } label: { Image(systemName: "xmark") }
+                        .frame(width: 44, height: 44).accessibilityLabel("关闭状态提示")
+                }
+                .foregroundStyle(IQStyle.secondary)
+                .accessibilityIdentifier("similar-cleanup-detail-status-notice")
             }
             if effectiveSelectionMode {
                 Text("横向起拖可连续勾选或取消；纵向起拖仍可滚动。仅在下方确认后删除。")
@@ -214,7 +259,7 @@ struct SimilarPhotoGroupDetail: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(IQStyle.surface)
+        .background(IQStyle.background)
     }
 
     private func selectWholeGroup(_ ids: Set<String>) {

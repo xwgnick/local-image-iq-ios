@@ -312,6 +312,101 @@ final class PhotoViewerHQTests: XCTestCase {
         withExtendedLifetime(source) { }
     }
 
+    func testHDUpgradeIsOneExactAspectFitCurrentRequestWithOnlyExplicitCloudPermission() async throws {
+        let image = try pixels(width: 900, height: 1800)
+        let target = CGSize(width: 900, height: 1800)
+        for cloud in [false, true] {
+            let requests = ViewerHQRequests(replies: [[Reply(image: image, info: [PHImageResultIsDegradedKey: false])]])
+            let result = try await upgrade(requests, target: target, cloud: cloud)
+            XCTAssertTrue(result.image === image)
+            XCTAssertEqual(result.stage, cloud ? .networkHQ : .localHQ)
+            XCTAssertEqual(requests.plans.count, 1)
+            let plan = try XCTUnwrap(requests.plans.first)
+            XCTAssertEqual(plan.size, target)
+            XCTAssertEqual(plan.mode, .aspectFit)
+            XCTAssertEqual(plan.delivery, .highQualityFormat)
+            XCTAssertEqual(plan.resize, .exact)
+            XCTAssertEqual(plan.version, .current)
+            XCTAssertEqual(plan.network, cloud)
+            XCTAssertFalse(plan.synchronous)
+        }
+    }
+
+    func testHDUpgradeReadableUndersizedLocalResultIsReturnedNotRejectedOrReplacedByFast() async throws {
+        let image = try pixels(width: 17, height: 31)
+        let requests = ViewerHQRequests(replies: [[Reply(image: image, info: [PHImageResultIsDegradedKey: true])]])
+        let result = try await upgrade(requests)
+        XCTAssertTrue(result.image === image)
+        XCTAssertEqual(result.returnedSize, CGSize(width: 17, height: 31))
+        XCTAssertEqual(result.degraded, true)
+        XCTAssertFalse(result.isSufficientForDisplay)
+        XCTAssertEqual(requests.plans.map(\.network), [false])
+        XCTAssertEqual(requests.plans.map(\.delivery), [.highQualityFormat])
+    }
+
+    func testHDCloudUpgradeWaitsForFinalAndKeepsFirstFinalAgainstDuplicates() async throws {
+        let low = try pixels(width: 17, height: 31)
+        let high = try pixels(width: 900, height: 1800)
+        let requests = ViewerHQRequests(replies: [[
+            Reply(image: low, info: [PHImageResultIsDegradedKey: true]),
+            Reply(image: high, info: [PHImageResultIsDegradedKey: false]),
+            Reply(image: low, info: [PHImageResultIsDegradedKey: false])]])
+        let result = try await upgrade(requests, cloud: true)
+        XCTAssertTrue(result.image === high)
+        XCTAssertEqual(result.degraded, false)
+        XCTAssertEqual(requests.plans.map(\.network), [true])
+    }
+
+    func testHDUpgradeMissingAndOrdinaryErrorsNeverStartAnotherRequest() async throws {
+        let errors: [Error] = [AppFailure.cloudOnly, AppFailure.permission,
+            NSError(domain: PHPhotosErrorDomain, code: 3164), NSError(domain: "SyntheticHD", code: 7)]
+        for failure in errors {
+            let requests = ViewerHQRequests(replies: [[Reply(info: [PHImageErrorKey: failure])]])
+            do { _ = try await upgrade(requests); XCTFail("Expected missing/error result") }
+            catch { }
+            XCTAssertEqual(requests.plans.count, 1)
+            XCTAssertEqual(requests.plans.map(\.network), [false])
+        }
+    }
+
+    func testHDUpgradeCancellationBeforeIDAssignmentCancelsEventualID() async throws {
+        let requests = ViewerHQRequests(replies: [[Reply(image: try pixels())]], cancelBeforeID: true)
+        let task = Task { @MainActor in try await upgrade(requests, cloud: true) }
+        do { _ = try await task.value; XCTFail("Expected cancellation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(requests.cancelledIDs, [1])
+        XCTAssertEqual(requests.plans.count, 1)
+    }
+
+    func testHDUpgradeCancellationWhileWaitingDiscardsLateFinalCallbacks() async throws {
+        let entered = expectation(description: "HD request pending")
+        let requests = ViewerHQRequests(replies: [[]], didRequest: { entered.fulfill() })
+        let task = Task { @MainActor in try await upgrade(requests, cloud: true) }
+        defer { task.cancel(); requests.clearCallbacks() }
+        await fulfillment(of: [entered], timeout: 5)
+        task.cancel()
+        requests.complete(1, Reply(image: try pixels(width: 900, height: 1800)))
+        do { _ = try await task.value; XCTFail("Late result must not publish") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(requests.cancelledIDs, [1])
+        XCTAssertEqual(requests.plans.count, 1)
+    }
+
+    func testHDUpgradePostReadValidationRejectsChangedAuthorityWithoutFallback() async throws {
+        let validation = ViewerHQValidation(rejectAt: 2)
+        let requests = ViewerHQRequests(replies: [[Reply(image: try pixels())]])
+        do { _ = try await upgrade(requests, validate: { try validation.check() }); XCTFail("Changed source must reject") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(validation.count, 2)
+        XCTAssertEqual(requests.plans.count, 1)
+    }
+
+    private func upgrade(_ requests: ViewerHQRequests, target: CGSize = CGSize(width: 900, height: 1800),
+                         cloud: Bool = false, validate: @escaping @Sendable () throws -> Void = {}) async throws -> DisplayThumbnailResult {
+        try await PhotoViewerImageLoader.upgrade(targetSize: target, cloudConsent: cloud,
+            request: { requests.request($0, $1, $2, $3) }, cancel: { requests.cancel($0) }, validate: validate)
+    }
+
     private func fixtureSnapshot() -> PhotoViewerSnapshot {
         PhotoViewerSnapshot(revision: PhotoRevision(id: "viewer", modificationTime: 10, creationTime: 5),
                             authorization: .authorized, generation: 3)

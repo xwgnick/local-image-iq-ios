@@ -9,6 +9,8 @@ struct SimilarPhotoDeletionIntent: Identifiable, Sendable {
     let sessionID: UUID
     let revisions: [PhotoRevision]
     let emptiedGroupCount: Int
+    var hiddenGroupCount: Int = 0
+    var hiddenPhotoCount: Int = 0
     var count: Int { revisions.count }
 }
 
@@ -30,7 +32,8 @@ final class SimilarPhotoCleanupState: ObservableObject {
             guard threshold != oldValue else { return }
             SimilarCleanupPreferences.save(threshold: threshold, in: preferences)
             let seen = hasEnteredPage || hasCompletedResult || groupingTask != nil
-            invalidateRead()
+            if !selectedIDs.isEmpty { statusNotice = "相似度已更改，原选择已清除。" }
+            invalidateRead(preservingBrowsing: true)
             if seen { needsRegroup = true }
             refreshPending = true
             needsAutomaticRefreshRetry = false
@@ -41,6 +44,13 @@ final class SimilarPhotoCleanupState: ObservableObject {
     @Published private(set) var resultThreshold: Float?
     @Published private(set) var groups: [SimilarPhotoGroup] = []
     @Published private(set) var displayGroups: [SimilarPhotoGroup] = []
+    @Published private(set) var minimumGroupCount = SimilarCleanupPreferences.defaultMinimumGroupCount
+    /// Navigation identity is not authority. It survives privacy hiding and a
+    /// verified restore; selectionSessionID continues to rotate on publication.
+    @Published private(set) var browsingSessionID: UUID?
+    @Published private(set) var browsingAllowed = false
+    @Published private(set) var displayActive = true
+    @Published private(set) var statusNotice: String?
     @Published private(set) var progress = SimilarPhotoGroupingProgress()
     @Published private(set) var isGrouping = false
     @Published private(set) var isRestoring = false
@@ -65,10 +75,26 @@ final class SimilarPhotoCleanupState: ObservableObject {
     @Published private(set) var pendingDeletion: SimilarPhotoDeletionIntent?
 
     var selectedCount: Int { selectedIDs.count }
+    var largestGroupCount: Int { groups.map { $0.photos.count }.max() ?? 0 }
+    var visibleGroups: [SimilarPhotoGroup] {
+        SimilarGroupPresentation.visibleGroups(displayGroups, minimumCount: minimumGroupCount)
+    }
+    var selectionSummary: SimilarGroupPresentation.SelectionSummary {
+        SimilarGroupPresentation.selectionSummary(groups, selectedIDs: selectedIDs, minimumCount: minimumGroupCount)
+    }
+    /// Production's installed provider is the shared PhotoLibraryClient; host
+    /// fixtures can supply an explicit metadata-only library without OS access.
+    var displayAccessIsReadable: Bool? { browsingAccess?.library.canReadImages }
+    var canBrowse: Bool {
+        guard displayActive, isForeground, protectedDataAvailable, displayAccessAvailable, browsingAllowed else { return false }
+        if let browsingAccess, !browsingAccess.library.canReadImages { return false }
+        if let browsingProof { return (try? browsingProof.validate()) != nil }
+        return true
+    }
     var canChangeThreshold: Bool { !isDeleting }
     var hasPendingThresholdChange: Bool { draftThreshold != threshold }
     var canUpdateResults: Bool {
-        isForeground && (!hasEnteredPage || (isPageVisible && pageReady))
+        displayActive && isForeground && protectedDataAvailable && displayAccessAvailable && (!hasEnteredPage || (isPageVisible && pageReady))
             && !isAutomaticRefreshDeferred && !isReadDraining && !isGrouping && !isRestoring && !isDeleting && !isValidatingSelection
             && (!hasScanned || needsRegroup || hasPendingThresholdChange || hasStaleIndexRevision)
     }
@@ -108,6 +134,15 @@ final class SimilarPhotoCleanupState: ObservableObject {
     private var applyingAutomaticThreshold = false
     private var observedIndexRevision: UInt64?
     private var requiresVisiblePage = false
+    private var protectedDataAvailable = true
+    private var displayAccessAvailable = true
+    private var browsingAccess: SimilarCleanupBrowsingAccess?
+    private var browsingProof: SimilarCleanupBrowsingAccess.Proof?
+    private var browsingGeneration = UUID()
+    private var browsingTask: Task<Void, Never>?
+    private var browsingTaskID: UUID?
+    private var browsingTaskGeneration: UUID?
+    private var browsingCheckPending = false
 
     private struct RangeSelectionCapture {
         let token: UUID
@@ -121,11 +156,12 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     init(grouping: any SimilarPhotoGrouping, deletion: any PhotoDeleting, preferences: UserDefaults? = nil,
-         indexAccess: IndexAccessCoordinator? = nil) {
+         indexAccess: IndexAccessCoordinator? = nil, browsingAccess: SimilarCleanupBrowsingAccess? = nil) {
         self.grouping = grouping
         self.deletion = deletion
         self.preferences = preferences
         self.indexAccess = indexAccess
+        self.browsingAccess = browsingAccess
         self.observedIndexRevision = indexAccess?.revision
         let saved = SimilarCleanupPreferences.threshold(in: preferences)
         self.threshold = saved
@@ -135,11 +171,138 @@ final class SimilarPhotoCleanupState: ObservableObject {
     deinit {
         groupingTask?.cancel()
         selectionTask?.cancel()
+        browsingTask?.cancel()
         // Never cancel mutationTask: it retains its service independently and
         // awaits the real outcome, including after this controller is released.
     }
 
     func displayNumber(for groupID: String) -> Int? { displayNumbers[groupID] }
+
+    func setMinimumGroupCount(_ count: Int) {
+        let next = SimilarCleanupPreferences.minimumGroupCount(count, largestGroup: largestGroupCount)
+        guard next != minimumGroupCount else { return }
+        minimumGroupCount = next
+        // A displayed confirmation must describe the CURRENT hidden selection.
+        // Filtering never changes selection, result authority, cache or services.
+        pendingDeletion = nil
+    }
+
+    func toggleGroupSelection(_ groupID: String) {
+        guard canSelect, let group = groups.first(where: { $0.id == groupID }),
+              let token = beginRangeSelection(groupID: groupID) else { return }
+        let all = SimilarGroupPresentation.selection(in: group, selectedIDs: selectedIDs) == .all
+        finishRangeSelection(token: token, selectedInGroup: all ? [] : Set(group.photos.map(\.id)))
+    }
+
+    /// Production installs the existing shared library; native tests can inject
+    /// a synthetic library. No replacement PhotoLibraryClient is constructed.
+    func configureBrowsingAccess(_ access: SimilarCleanupBrowsingAccess) {
+        guard browsingAccess == nil else { return }
+        browsingAccess = access
+    }
+
+    /// Separate from model/index readiness. Locks/background hide pixels while
+    /// retaining only recoverable navigation/data. Revocation clears it outright.
+    func setDisplayEnvironment(foreground: Bool, protectedDataAvailable: Bool, canRead: Bool, active: Bool = true) {
+        let wasUsable = isForeground && self.protectedDataAvailable && displayAccessAvailable
+        displayActive = active
+        self.protectedDataAvailable = protectedDataAvailable
+        displayAccessAvailable = canRead
+        if !active {
+            // Inactive is a pixel/interaction boundary, not a fake background
+            // or cancellation of a submitted system mutation. Keep committed
+            // selection and the read session, but revoke hidden UI gestures and
+            // confirmations so they cannot submit later from an old surface.
+            cancelRangeSelection()
+            pendingDeletion = nil
+        }
+        if !canRead {
+            isForeground = foreground
+            invalidateRead()
+            refreshPending = true
+            return
+        }
+        if !foreground || !protectedDataAvailable {
+            pause()
+        } else if !wasUsable {
+            resume()
+        }
+        if active { tryAutomaticEntry() }
+    }
+
+    /// A Photos epoch is not proof of revocation. Hide immediately, then check
+    /// every retained full revision freshly, independently of source-index work.
+    func photosChanged() {
+        hideBrowsing()
+        requestAutomaticRefresh()
+        requestBrowsingCheck()
+    }
+
+    private func hideBrowsing() {
+        browsingAllowed = false
+        browsingProof = nil
+        browsingGeneration = UUID()
+        browsingTask?.cancel()
+        browsingCheckPending = false
+    }
+
+    private func requestBrowsingCheck() {
+        guard !browsingAllowed, !groups.isEmpty, browsingAccess != nil else { return }
+        // Lifecycle repeats while the same check is in flight are not retries.
+        guard browsingTask == nil || browsingTaskGeneration != browsingGeneration else { return }
+        browsingCheckPending = true
+        startBrowsingCheckIfNeeded()
+    }
+
+    private func startBrowsingCheckIfNeeded() {
+        guard browsingCheckPending, browsingTask == nil, isForeground, !isDeleting,
+              protectedDataAvailable, displayAccessAvailable, let access = browsingAccess,
+              !groups.isEmpty else { return }
+        browsingCheckPending = false
+        let token = browsingGeneration
+        let taskID = UUID()
+        let expected = groups.flatMap(\.photos).map(Self.expectedPhotoRevision)
+        browsingTaskID = taskID
+        browsingTaskGeneration = token
+        browsingTask = Task { @MainActor [weak self] in
+            defer {
+                if let self, self.browsingTaskID == taskID {
+                    self.browsingTask = nil
+                    self.browsingTaskID = nil
+                    self.browsingTaskGeneration = nil
+                    self.startBrowsingCheckIfNeeded()
+                }
+            }
+            do {
+                let proof = try await access.check(expected)
+                try Task.checkCancellation()
+                guard let self, self.browsingGeneration == token, self.isForeground,
+                      self.protectedDataAvailable, self.displayAccessAvailable else { return }
+                try proof.validate()
+                self.browsingProof = proof
+                self.browsingAllowed = true // DISPLAY ONLY; result remains nil.
+            } catch {
+                guard let self, !Task.isCancelled, self.browsingGeneration == token else { return }
+                // Missing/edited/inaccessible content is never restored from old
+                // metadata. The already pending full read can publish fresh data.
+                self.clearBrowsingContent()
+            }
+        }
+    }
+
+    private func clearBrowsingContent() {
+        hideBrowsing()
+        browsingSessionID = nil
+        sessionID = nil
+        resultThreshold = nil
+        groups = []
+        displayGroups = []
+        displayNumbers = [:]
+        hasScanned = false
+        candidateCount = 0
+        staleCount = 0
+        unindexedCount = 0
+    }
 
     /// Editing is not a commit, persistence write or request to recompute. An
     /// existing result (even one finishing now) keeps its requested threshold.
@@ -164,6 +327,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
             return
         }
         pendingThreshold = draftThreshold
+        if !selectedIDs.isEmpty { statusNotice = "相似度已更改，原选择已清除。" }
         requestAutomaticRefresh()
     }
 
@@ -238,7 +402,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     func scan() {
-        guard isForeground, !isDeleting, !isAutomaticRefreshDeferred else { return }
+        guard displayActive, isForeground, protectedDataAvailable, displayAccessAvailable, !isDeleting, !isAutomaticRefreshDeferred else { return }
         refreshPending = false
         pendingThreshold = nil
         needsAutomaticRefreshRetry = false
@@ -283,7 +447,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     private var automaticReadEligible: Bool {
-        hasEnteredPage && isPageVisible && isForeground && pageReady
+        displayActive && hasEnteredPage && isPageVisible && isForeground && protectedDataAvailable && displayAccessAvailable && pageReady
             && !isAutomaticRefreshDeferred && !isDeleting && !draftNeedsCommit
     }
 
@@ -434,9 +598,13 @@ final class SimilarPhotoCleanupState: ObservableObject {
             resultIndexRevision = indexRevision
             resultThreshold = requestedThreshold
             sessionID = token
+            if browsingSessionID == nil { browsingSessionID = token }
+            hideBrowsing() // Invalidate any late lightweight check of older data.
+            browsingAllowed = true // Full existing publication gates passed.
             groups = snapshot.groups
             displayGroups = SimilarGroupPresentation.sortedGroups(snapshot.groups)
             displayNumbers = Dictionary(uniqueKeysWithValues: displayGroups.enumerated().map { ($0.element.id, $0.offset + 1) })
+            minimumGroupCount = SimilarCleanupPreferences.minimumGroupCount(minimumGroupCount, largestGroup: largestGroupCount)
             candidateCount = snapshot.candidateCount
             staleCount = snapshot.staleCount
             unindexedCount = snapshot.unindexedCount
@@ -590,7 +758,8 @@ final class SimilarPhotoCleanupState: ObservableObject {
                 id: UUID(), sessionID: sessionID, revisions: revisions,
                 emptiedGroupCount: groups.filter {
                     !$0.photos.isEmpty && $0.photos.allSatisfy { selectedIDs.contains($0.id) }
-                }.count)
+                }.count, hiddenGroupCount: selectionSummary.hiddenGroupCount,
+                hiddenPhotoCount: selectionSummary.hiddenPhotoCount)
             message = nil
         } catch { selectionAccessFailed(error: error) }
     }
@@ -609,6 +778,10 @@ final class SimilarPhotoCleanupState: ObservableObject {
         guard pending.sessionID == intent.sessionID, sessionID == intent.sessionID,
               pending.revisions == intent.revisions,
               pending.emptiedGroupCount == intent.emptiedGroupCount,
+              pending.hiddenGroupCount == intent.hiddenGroupCount,
+              pending.hiddenPhotoCount == intent.hiddenPhotoCount,
+              intent.hiddenGroupCount == selectionSummary.hiddenGroupCount,
+              intent.hiddenPhotoCount == selectionSummary.hiddenPhotoCount,
               !intent.revisions.isEmpty,
               intent.revisions == orderedSelectedPhotos.map(Self.expectedPhotoRevision),
               intent.count == selectedCount else {
@@ -625,6 +798,8 @@ final class SimilarPhotoCleanupState: ObservableObject {
 
         pendingDeletion = nil
         message = nil
+        statusNotice = nil
+        deletionNotice = nil
         isDeleting = true
         mutationTask = Task { @MainActor [weak self, deletion = self.deletion, grouping = self.grouping,
                           revisions = intent.revisions, baselineID = result.deletionBaselineID] in
@@ -637,7 +812,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
                 // successful outcome is registered, even if a Photos callback
                 // has already cleared UI access or this controller was released.
                 await grouping.confirmedDeletion(revisions: revisions, baselineID: baselineID)
-                self?.finishDeletion(message: PhotoDeletionRecoveryNotice.success(count: revisions.count))
+                self?.finishDeletion(message: PhotoDeletionRecoveryNotice.success(count: revisions.count), deleted: revisions)
             } catch {
                 let text: String
                 if error is CancellationError {
@@ -689,29 +864,35 @@ final class SimilarPhotoCleanupState: ObservableObject {
         if !needsAutomaticRefreshRetry, result != nil || isGrouping || isRestoring {
             refreshPending = true
         }
-        invalidateRead()
+        hideBrowsing()
+        invalidateRead(preservingBrowsing: true)
+        sessionID = nil // Presentation identity survives, selection authority does not.
     }
 
     func resume() {
         isForeground = true
+        requestBrowsingCheck()
         tryAutomaticEntry()
     }
+    func showDeletionRecovery() { if let deletionNotice { message = deletionNotice } }
+    func dismissStatusNotice() { statusNotice = nil }
     func dismissMessage() {
         message = nil
-        deletionNotice = nil
         failureDiagnostic = nil
         failureOperation = nil
     }
 
     /// Joins cancelled read/selection tails, replacements and independent mutation.
     func waitUntilIdle() async {
-        while groupingTask != nil || selectionTask != nil || mutationTask != nil {
+        while groupingTask != nil || selectionTask != nil || mutationTask != nil || browsingTask != nil {
             let read = groupingTask
             let selection = selectionTask
             let write = mutationTask
+            let browsing = browsingTask
             await read?.value
             await selection?.value
             await write?.value
+            await browsing?.value
         }
     }
 
@@ -720,7 +901,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     private var canSelectResult: Bool {
-        isForeground && (!hasEnteredPage || (isPageVisible && pageReady))
+        isForeground && protectedDataAvailable && displayAccessAvailable && canBrowse && (!hasEnteredPage || (isPageVisible && pageReady))
             && !isAutomaticRefreshDeferred && !isGrouping && !isRestoring && !needsRegroup && !isDeleting && result != nil
             && !hasPendingThresholdChange && indexRevisionIsCurrent(resultIndexRevision)
     }
@@ -765,7 +946,8 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     private func isCurrent(_ token: UUID) -> Bool {
-        isForeground && generation == token && (!requiresVisiblePage || (isPageVisible && pageReady))
+        isForeground && protectedDataAvailable && displayAccessAvailable && generation == token
+            && (!requiresVisiblePage || (isPageVisible && pageReady))
     }
 
     private func publishProgress(_ value: SimilarPhotoGroupingProgress, token: UUID) {
@@ -789,14 +971,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
         pendingDeletion = nil
         progress = SimilarPhotoGroupingProgress()
         if !preservingBrowsing {
-            resultThreshold = nil
-            groups = []
-            displayGroups = []
-            displayNumbers = [:]
-            hasScanned = false
-            candidateCount = 0
-            staleCount = 0
-            unindexedCount = 0
+            clearBrowsingContent()
         }
         isGrouping = false
         isRestoring = false
@@ -847,6 +1022,9 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     private func recordFailure(_ diagnostic: SimilarCleanupDiagnostic, operation: SimilarCleanupOperation) {
+        if diagnostic.code == .permissionDenied || diagnostic.code == .photoAccessChanged {
+            clearBrowsingContent()
+        }
         refreshPending = false
         needsAutomaticRefreshRetry = true
         failureDiagnostic = diagnostic
@@ -856,11 +1034,28 @@ final class SimilarPhotoCleanupState: ObservableObject {
         message = diagnostic.message(operation: operation)
     }
 
-    private func finishDeletion(message: String) {
-        // Failure is not proof of rollback, so discard stale suggestions on both
-        // outcomes. Only after the mutation completes may the pending automatic
-        // read start; its notice survives restoration and delayed source events.
-        invalidateRead()
+    private func finishDeletion(message: String, deleted: [PhotoRevision]? = nil) {
+        // Only a real success removes members locally. This is a browsing-only
+        // projection; the service's existing baseline/source validation must
+        // still complete before any new selection or deletion is admitted.
+        invalidateRead(preservingBrowsing: deleted != nil)
+        if let deleted {
+            let ids = Set(deleted.map(\.id))
+            groups = groups.compactMap { group in
+                let photos = group.photos.filter { !ids.contains($0.id) }
+                guard photos.count >= 2 else { return nil }
+                return SimilarPhotoGroup(id: group.id, photos: photos, minimumSimilarity: group.minimumSimilarity)
+            }
+            displayGroups = SimilarGroupPresentation.sortedGroups(groups)
+            displayNumbers = Dictionary(uniqueKeysWithValues: displayGroups.enumerated().map { ($0.element.id, $0.offset + 1) })
+            minimumGroupCount = SimilarCleanupPreferences.minimumGroupCount(minimumGroupCount, largestGroup: largestGroupCount)
+            candidateCount = max(0, candidateCount - deleted.count)
+            // A pre-deletion proof captured the old epoch. Recheck the retained
+            // survivors, not the now-deleted IDs; never resurrect cleared data.
+            hideBrowsing()
+            requestBrowsingCheck()
+            statusNotice = "已删除\(deleted.count)张照片"
+        }
         needsRegroup = true
         refreshPending = true
         needsAutomaticRefreshRetry = false
@@ -869,7 +1064,8 @@ final class SimilarPhotoCleanupState: ObservableObject {
         failureDiagnostic = nil
         failureOperation = nil
         deletionNotice = message
-        self.message = message
+        self.message = deleted == nil ? message : nil
+        startBrowsingCheckIfNeeded()
         tryAutomaticEntry()
     }
 

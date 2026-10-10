@@ -383,6 +383,10 @@ final class PhotoSyncPresentationTests: XCTestCase {
         let searchSession = f.app.resultSessionID
         let photosEpoch = f.app.photoLibraryEpoch
         let results = f.app.results.map(\.id)
+        let browsingLibrary = RefinementLibrary(f.grouping.groups.flatMap(\.photos).map {
+            PhotoRevision(id: $0.id, modificationTime: $0.modificationTime, creationTime: $0.creationTime)
+        })
+        f.cleanup.configureBrowsingAccess(SimilarCleanupBrowsingAccess(library: browsingLibrary))
         // Seed synthetic browsing before the root can defer cleanup for sync.
         // This uses the same no-Photos service, never a production guard override.
         f.cleanup.scan()
@@ -461,6 +465,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         await f.cleanup.waitUntilIdle()
         XCTAssertTrue(f.cleanup.hasScanned)
         XCTAssertEqual(f.cleanup.displayGroups.map(\.id), groupIDs)
+        XCTAssertTrue(f.cleanup.canBrowse, "Synthetic metadata supplies display access, not OS authorization")
         XCTAssertEqual(f.cleanup.selectionSessionID, cleanupSession)
         XCTAssertEqual(f.cleanup.selectedIDs, Set([cleanupSelected]))
         XCTAssertFalse(f.cleanup.canSelect)
@@ -493,6 +498,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertNotEqual(f.app.indexSourceEpoch, indexEpoch)
         XCTAssertEqual(f.app.photoLibraryEpoch, photosEpoch, "A source commit is not Photos access invalidation")
         XCTAssertEqual(f.cleanup.displayGroups.map(\.id), groupIDs)
+        XCTAssertTrue(f.cleanup.canBrowse, "Index-only changes retain display while revoking selection authority")
         XCTAssertEqual(f.cleanup.selectionSessionID, cleanupSession)
         XCTAssertTrue(f.cleanup.selectedIDs.isEmpty)
         XCTAssertNil(f.cleanup.pendingDeletion)
@@ -600,6 +606,8 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertFalse(f.app.photoSync.canCancel)
         XCTAssertTrue(f.app.photoSync.visible)
         XCTAssertEqual(f.grouping.thresholds.count, prepCount + 1)
+        XCTAssertEqual(browsingLibrary.unexpectedCalls, 0)
+        XCTAssertFalse(f.app.library.canReadImages, "The explicit test seam must never authorize the real Photos client")
         let calls = await service.calls
         XCTAssertEqual(calls, 1)
         // Public notification + native scope evidence, not a real keyboard tap

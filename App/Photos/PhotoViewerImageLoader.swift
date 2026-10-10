@@ -40,22 +40,30 @@ struct PhotoViewerImage: @unchecked Sendable {
 struct PhotoViewerImageSource: Sendable {
     let load: @Sendable (String, Bool) async throws -> PhotoViewerImage
     let validate: @Sendable (PhotoViewerSnapshot) throws -> Void
+    let asset: (@Sendable (String) throws -> PhotoViewerAsset)?
+    let upgrade: (@Sendable (PhotoViewerAsset, CGSize, Bool) async throws -> PhotoViewerImage)?
 
     init(library: PhotoLibraryClient) {
         load = { try await library.viewerImage(id: $0, networkAllowed: $1) }
         validate = { try library.validateViewerSnapshot($0, id: $0.revision.id) }
+        asset = { try library.viewerAsset(id: $0) }
+        upgrade = { try await library.viewerUpgrade(asset: $0, targetSize: $1, cloudConsent: $2) }
     }
 
     init(load: @escaping @Sendable (String, Bool) async throws -> PhotoViewerImage,
-         validate: @escaping @Sendable (PhotoViewerSnapshot) throws -> Void) {
+         validate: @escaping @Sendable (PhotoViewerSnapshot) throws -> Void,
+         asset: (@Sendable (String) throws -> PhotoViewerAsset)? = nil,
+         upgrade: (@Sendable (PhotoViewerAsset, CGSize, Bool) async throws -> PhotoViewerImage)? = nil) {
         self.load = load
         self.validate = validate
+        self.asset = asset
+        self.upgrade = upgrade
     }
 }
 
-/// HQ224 is the default display, not a placeholder awaiting viewport/original
-/// pixels. Reuses the existing aspect target, callback classification and request
-/// gate. No embedding policy, pixel rejection threshold or image re-encode.
+/// The existing HQ224 first-image contract remains independent of upgrades.
+/// A readable result completes immediately; the viewer publishes it BEFORE
+/// asking for any additional pixels. No embedding/index policy changes.
 enum PhotoViewerImageLoader {
     private static let ciContext = CIContext()
 
@@ -93,6 +101,33 @@ enum PhotoViewerImageLoader {
         throw AppFailure.photo("No preview is available.")
     }
 
+    /// One rendition request only. Automatic callers pass false; true belongs
+    /// exclusively to a consumed single-photo confirmation, not a global option.
+    /// Missing/error/undersized results never discard the viewer's prior image.
+    static func upgrade(targetSize: CGSize, cloudConsent: Bool,
+                        request: @escaping DisplayThumbnailLoader.Request,
+                        cancel: @escaping @Sendable (PHImageRequestID) -> Void,
+                        validate: @escaping @Sendable () throws -> Void) async throws -> DisplayThumbnailResult {
+        try Task.checkCancellation()
+        try validate()
+        guard let target = DisplayThumbnailLoader.targetSize(points: targetSize, displayScale: 1) else {
+            throw AppFailure.photo("Invalid viewer image size.")
+        }
+        let stage: DisplayThumbnailStage = cloudConsent ? .networkHQ : .localHQ
+        let delivery = try await read(stage: stage, target: target, resizeMode: .exact,
+                                      request: request, cancel: cancel)
+        try Task.checkCancellation()
+        try validate()
+        try Task.checkCancellation()
+        guard let image = delivery.image, let size = delivery.attempt.returnedSize else {
+            if delivery.needsNetwork { throw AppFailure.cloudOnly }
+            throw AppFailure.photo("No higher resolution preview is available.")
+        }
+        return DisplayThumbnailResult(image: image, stage: stage, requestedSize: target,
+            returnedSize: size, degraded: delivery.attempt.degraded,
+            attempts: [delivery.attempt], targetSize: target)
+    }
+
     private struct Delivery: @unchecked Sendable {
         let image: UIImage?
         let attempt: DisplayThumbnailAttempt
@@ -100,12 +135,13 @@ enum PhotoViewerImageLoader {
     }
 
     private static func read(stage: DisplayThumbnailStage, target: CGSize,
+                             resizeMode: PHImageRequestOptionsResizeMode = .fast,
                              request: @escaping DisplayThumbnailLoader.Request,
                              cancel: @escaping @Sendable (PHImageRequestID) -> Void) async throws -> Delivery {
         let options = PHImageRequestOptions()
         options.version = .current
         options.deliveryMode = stage == .localFast224 ? .fastFormat : .highQualityFormat
-        options.resizeMode = .fast
+        options.resizeMode = resizeMode
         options.isSynchronous = false
         options.isNetworkAccessAllowed = stage == .networkHQ
         let gate = PhotoRequestGate<Delivery>(cancelRequest: cancel)

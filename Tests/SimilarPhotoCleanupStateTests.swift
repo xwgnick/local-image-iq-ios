@@ -61,7 +61,11 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
         XCTAssertEqual(f.state.pendingDeletion?.id, intent.id)
         XCTAssertTrue(f.state.hasScanned)
         f.state.threshold = 0.98
-        assertEmpty(f.state)
+        XCTAssertTrue(f.state.hasScanned)
+        XCTAssertEqual(f.state.groups.count, 2)
+        XCTAssertTrue(f.state.selectedIDs.isEmpty)
+        XCTAssertNil(f.state.pendingDeletion)
+        XCTAssertFalse(f.state.canSelect)
         f.state.confirmDeletion(intent)
         f.state.resume()
         await f.state.waitUntilIdle()
@@ -364,7 +368,13 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
             else if mode == 1 { f.state.invalidateAccess() }
             else if mode == 2 { f.state.pause() }
             else { f.state.scan() }
-            assertEmpty(f.state)
+            if mode == 0 || mode == 2 {
+                XCTAssertEqual(f.state.groups.count, 2)
+                XCTAssertTrue(f.state.selectedIDs.isEmpty)
+                XCTAssertNil(f.state.pendingDeletion)
+                XCTAssertFalse(f.state.canSelect)
+                if mode == 2 { XCTAssertFalse(f.state.canBrowse) }
+            } else { assertEmpty(f.state) }
             f.state.resume()
             f.state.confirmDeletion(intent)
             await f.state.waitUntilIdle()
@@ -485,9 +495,14 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
         XCTAssertFalse(gate.cancelled)
         gate.open()
         await f.state.waitUntilIdle()
-        assertEmpty(f.state)
+        XCTAssertTrue(f.state.groups.isEmpty)
+        XCTAssertTrue(f.state.selectedIDs.isEmpty)
+        XCTAssertNil(f.state.pendingDeletion)
+        XCTAssertFalse(f.state.canSelect)
+        XCTAssertEqual(f.state.candidateCount, 4, "Keep non-deleted candidate metadata for maintenance")
         XCTAssertFalse(f.state.isDeleting)
-        XCTAssertEqual(f.state.message, PhotoDeletionRecoveryNotice.success(count: 5))
+        XCTAssertNil(f.state.message)
+        XCTAssertEqual(f.state.statusNotice, "已删除5张照片")
         f.state.confirmDeletion(intent)
         await f.state.waitUntilIdle()
         XCTAssertEqual(deletion.calls.count, 1)
@@ -510,10 +525,11 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
         gate.open()
         await f.state.waitUntilIdle()
         XCTAssertFalse(f.state.isDeleting)
-        let success = f.state.message
-        XCTAssertEqual(success, PhotoDeletionRecoveryNotice.success(count: 1))
+        let success = f.state.statusNotice
+        XCTAssertNil(f.state.message)
+        XCTAssertEqual(success, "已删除1张照片")
         f.state.invalidateAccess() // A second notification must retain that outcome.
-        XCTAssertEqual(f.state.message, success)
+        XCTAssertEqual(f.state.statusNotice, success)
         XCTAssertEqual(f.grouping.calls.thresholds.count, 1)
         XCTAssertEqual(f.deletion.calls.count, 1)
     }
@@ -538,7 +554,8 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
             gate.open()
             await f.state.waitUntilIdle()
             XCTAssertFalse(f.state.isDeleting)
-            XCTAssertEqual(f.state.message, PhotoDeletionRecoveryNotice.success(count: 1))
+            XCTAssertNil(f.state.message)
+            XCTAssertEqual(f.state.statusNotice, "已删除1张照片")
             f.state.resume()
             await f.state.waitUntilIdle()
             XCTAssertEqual(f.grouping.calls.thresholds.count, 1)
@@ -672,7 +689,8 @@ final class SimilarPhotoCleanupStateTests: XCTestCase {
         await mutationWaiter.value
         XCTAssertTrue(mutationFinished.isOpen)
         XCTAssertFalse(state.isDeleting)
-        XCTAssertNotNil(state.message)
+        XCTAssertNil(state.message)
+        XCTAssertNotNil(state.statusNotice)
     }
 
     // MARK: Deterministic helpers (timeouts bound tests only, never app work)

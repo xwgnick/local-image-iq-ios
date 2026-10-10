@@ -157,13 +157,19 @@ final class SimilarCleanupPresentationTests: XCTestCase {
         c.scene.phase = .background
         try await settle(host)
         await c.cleanup.waitUntilIdle()
-        assertUnscanned(c.cleanup)
+        XCTAssertEqual(c.cleanup.groups.map(\.id), c.grouping.groups.map(\.id))
+        XCTAssertFalse(c.cleanup.canBrowse)
+        XCTAssertFalse(c.cleanup.canSelect)
+        XCTAssertTrue(c.cleanup.selectedIDs.isEmpty)
+        XCTAssertNil(c.cleanup.pendingDeletion)
         c.cleanup.scan() // Background rejects even an explicit attempt.
         await c.cleanup.waitUntilIdle()
         assertServices(c, scans: 1)
         c.scene.phase = .active
         try await settle(host)
-        assertUnscanned(c.cleanup)
+        XCTAssertEqual(c.cleanup.groups.map(\.id), c.grouping.groups.map(\.id))
+        XCTAssertFalse(c.cleanup.canBrowse, "No fresh display provider in this legacy fixture")
+        XCTAssertFalse(c.cleanup.canSelect)
         assertServices(c, scans: 1)
 
         c.cleanup.scan() // Resume only permits this new explicit scan.
@@ -180,7 +186,11 @@ final class SimilarCleanupPresentationTests: XCTestCase {
         XCTAssertNotEqual(c.appState.photoLibraryEpoch, epoch)
         XCTAssertEqual(c.appState.authorization, authorization,
                        "An epoch change, even with unchanged permission, must invalidate the sheet")
-        assertUnscanned(c.cleanup)
+        XCTAssertEqual(c.cleanup.groups.map(\.id), c.grouping.groups.map(\.id))
+        XCTAssertFalse(c.cleanup.canBrowse)
+        XCTAssertFalse(c.cleanup.canSelect)
+        XCTAssertTrue(c.cleanup.selectedIDs.isEmpty)
+        XCTAssertNil(c.cleanup.pendingDeletion)
         assertServices(c, scans: 2, refreshes: 2)
 
         // An uncooperative fake read returns only when released. The sheet's
@@ -218,7 +228,7 @@ final class SimilarCleanupPresentationTests: XCTestCase {
         assertServices(c, scans: 3, refreshes: 3)
     }
 
-    // MARK: Synthetic services, genuine unauthorized thumbnail path
+    // MARK: Synthetic services/pixels; authorization remains untouched
 
     private func context(empty: Bool = false, groupSizes: [Int] = [4, 3, 2]) async throws -> SimilarCleanupReviewContext {
         let permission = PhotoLibraryClient.authorization
@@ -439,7 +449,8 @@ private struct SimilarCleanupReviewRoot: View {
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.white).padding(.vertical, 6)
                 .frame(maxWidth: .infinity).background(Color.black)
-            SimilarPhotoCleanupSheet(state: context.cleanup, appState: context.appState)
+            SimilarPhotoCleanupSheet(state: context.cleanup, appState: context.appState,
+                                     thumbnailContent: { _ in AnyView(Color.gray) })
         }
         .environment(\.scenePhase, scene.phase)
     }

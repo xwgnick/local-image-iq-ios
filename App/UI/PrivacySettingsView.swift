@@ -5,6 +5,9 @@ struct PrivacySettingsView: View {
     @ObservedObject var state: AppState
     @State private var confirmClearHistory = false
 
+    static let ocrExplanation = "可选文字搜索使用系统 Vision 在本机识别，识别文字保存在本机索引中。每次从关闭切换为开启会增量更新一次，忙碌时等待就绪；恢复已保存的开启状态、打开页面或搜索不会自动重新识别。关闭会取消等待或正在进行的文字更新，并停止文字参与搜索；已完成的文字记录保留，清除索引才会一并删除。"
+    static let cloudExplanation = "全局 iCloud 下载默认关闭。开启后，索引和普通预览可在本地资源不足时请求系统下载。单张照片的「加载高清」在你明确同意后，即使全局开关关闭，也可仅为该照片请求云端高清资源，不会开启全局下载。下载量由系统决定。语言包准备与此开关无关。Apple 系统服务的数据处理取决于其设置和隐私政策。"
+
     var body: some View {
         Form {
             Section {
@@ -27,12 +30,12 @@ struct PrivacySettingsView: View {
 
             Section("本机处理") {
                 note("搜索在本机运行，不向应用服务器上传照片或搜索内容。图片索引不保存原图或定位坐标；索引保存在受保护的本机目录，不参与备份。")
-                note("可选文字搜索使用系统 Vision 在本机识别，识别文字保存在本机索引中。关闭增强只停止参与搜索；清除索引才会一并删除文字记录。")
+                note(Self.ocrExplanation)
             }
             .listRowBackground(IQStyle.surface)
 
             Section("系统服务与分享") {
-                note("默认不允许下载 iCloud 照片。开启后，只有本地预览不可用时，应用才允许系统照片下载缺失资源；下载量由系统决定。语言包准备与此开关无关。Apple 系统服务的数据处理取决于其设置和隐私政策。")
+                note(Self.cloudExplanation)
                 note("收藏、相册操作和分享由你主动发起；相似照片清理仅删除你勾选并再次确认的照片，不自动删除或修改原图像素。系统 iCloud 照片可能将删除同步到其他设备，与预览下载开关无关。")
                 note("分享时临时生成去除位置等源元数据的 JPEG，结束后清理本机临时文件；照片画面本身仍可能包含私人信息，分享接收方可保留副本。")
             }

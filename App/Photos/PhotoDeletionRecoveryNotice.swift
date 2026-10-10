@@ -5,14 +5,16 @@
 enum PhotoDeletionRecoveryNotice {
     static let recovery = "通常会在系统“照片”的“最近删除”中保留30天，可前往那里恢复；以系统显示的剩余天数为准。提前永久删除后无法恢复。共享图库中的照片只能由添加者恢复。"
 
-    static func warning(emptiedGroupCount: Int) -> String {
+    static func warning(emptiedGroupCount: Int, hiddenGroupCount: Int = 0, hiddenPhotoCount: Int = 0) -> String {
         let sync = "启用 iCloud 照片时，删除会同步到其他设备；即使本 App 关闭网络访问，系统仍可能同步删除。"
         let fullGroup = emptiedGroupCount > 0
             ? "\n已选中\(emptiedGroupCount)个分组的全部照片，删除后这些组将不保留任何照片。" : ""
-        return sync + "\n" + recovery + fullGroup
+        let hidden = hiddenPhotoCount > 0
+            ? "\n其中\(hiddenGroupCount)组 · \(hiddenPhotoCount)张被当前筛选隐藏，也包含在本次删除中。" : ""
+        return sync + "\n" + recovery + fullGroup + hidden
     }
 
     static func success(count: Int) -> String {
-        "已确认删除\(count)张照片。\(recovery)请手动重新分组。"
+        "已确认删除\(count)张照片。\(recovery)"
     }
 }

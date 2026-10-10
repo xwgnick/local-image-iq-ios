@@ -82,7 +82,7 @@ struct ContentView: View {
                 }
                 // Always mount the observing child. AppState does not forward
                 // photoSync publications, including completion auto-hide.
-                PhotoSyncToast(state: state.photoSync,
+                IndexSyncFooter(state: state,
                                isPresented: !hasPresentedSurface && !keyboardVisible,
                                onPresentedSurfaceChanged: { syncSurfacePresented = $0 })
                     .rootBottomFrame(.syncToast)
@@ -330,11 +330,6 @@ struct ContentView: View {
     @ViewBuilder private var searchFooter: some View {
         if state.isSelectingResults {
             selectionToolbar
-        } else {
-            libraryStatus
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(IQStyle.background)
         }
     }
 
@@ -396,22 +391,7 @@ struct ContentView: View {
 
     @ViewBuilder private var translationSummary: some View {
         if state.similarPhotoID == nil, let resolution = state.completedSearchQuery {
-            if resolution.translated {
-                HStack {
-                    Spacer(minLength: 0)
-                    Menu {
-                        Button("显示译文") { displayedTranslation = resolution.effective }
-                            .accessibilityIdentifier("effective-search-query")
-                        Button("使用原文") { reexecuteSearch(original: resolution.original, useOriginal: true) }
-                            .disabled(!state.canSearch).accessibilityIdentifier("search-original")
-                    } label: {
-                        Label("本次搜索", systemImage: "ellipsis").labelStyle(.iconOnly)
-                            .frame(width: 44, height: 44).contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("本次搜索").accessibilityIdentifier("current-search-options")
-                }
-                .tint(IQStyle.accent).minimalSearchFrame(.translation)
-            } else if let notice = resolution.notice {
+            if !resolution.translated, let notice = resolution.notice {
                 HStack(spacing: 8) {
                     Text("原文搜索").font(.caption).foregroundStyle(IQStyle.secondary)
                         .lineLimit(1).accessibilityLabel("原文搜索。\(notice)")
@@ -423,19 +403,10 @@ struct ContentView: View {
                 }
                 .minimalSearchFrame(.translation)
             } else if state.chineseSearchEnabled, ChineseQueryRouter.sourceLanguage(for: resolution.original) != nil {
-                HStack {
+                if !resolution.translated {
                     Text("原文搜索").font(.caption).foregroundStyle(IQStyle.secondary).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Menu {
-                        Button("使用英文翻译") { reexecuteSearch(original: resolution.original, useOriginal: false) }
-                            .disabled(!state.canSearch).accessibilityIdentifier("search-translated")
-                    } label: {
-                        Label("本次搜索", systemImage: "ellipsis").labelStyle(.iconOnly)
-                            .frame(width: 44, height: 44).contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("本次搜索").accessibilityIdentifier("current-search-options")
+                        .minimalSearchFrame(.translation)
                 }
-                .minimalSearchFrame(.translation)
             }
         }
     }
@@ -450,6 +421,41 @@ struct ContentView: View {
                 .font(.subheadline).foregroundStyle(IQStyle.secondary)
                 .accessibilityIdentifier("search-home-subtitle").minimalSearchFrame(.subtitle)
         }.padding(.vertical, 8)
+    }
+
+    /// Secondary actions belong to the leading search icon, never the native
+    /// text-selection menu. Recheck live state so a retained UIKit action cannot
+    /// execute an obsolete translation after the draft or result changes.
+    var searchQueryActions: [SearchQueryMenuAction] {
+        guard isSearchPageAccessible, state.similarPhotoID == nil,
+              let resolution = state.completedSearchQuery,
+              state.query == resolution.original else { return [] }
+        if resolution.translated {
+            return [
+                SearchQueryMenuAction(id: "effective-search-query", title: "显示译文") {
+                    guard isSearchPageAccessible, state.similarPhotoID == nil,
+                          let current = state.completedSearchQuery, current.translated,
+                          state.query == current.original else { return }
+                    isSearchFocused = false
+                    displayedTranslation = current.effective
+                },
+                SearchQueryMenuAction(id: "search-original", title: "使用原文", enabled: state.canSearch) {
+                    guard isSearchPageAccessible, state.canSearch, state.similarPhotoID == nil,
+                          let current = state.completedSearchQuery, current.translated,
+                          state.query == current.original else { return }
+                    reexecuteSearch(original: current.original, useOriginal: true)
+                }
+            ]
+        }
+        guard state.chineseSearchEnabled,
+              ChineseQueryRouter.sourceLanguage(for: resolution.original) != nil else { return [] }
+        return [SearchQueryMenuAction(id: "search-translated", title: "使用英文翻译", enabled: state.canSearch) {
+            guard isSearchPageAccessible, state.canSearch, state.chineseSearchEnabled,
+                  state.similarPhotoID == nil, let current = state.completedSearchQuery,
+                  state.query == current.original,
+                  ChineseQueryRouter.sourceLanguage(for: current.original) != nil else { return }
+            reexecuteSearch(original: current.original, useOriginal: false)
+        }]
     }
 
     var homeSubtitle: String {
@@ -487,7 +493,8 @@ struct ContentView: View {
 
     private var searchField: some View {
         HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass").foregroundStyle(IQStyle.secondary).accessibilityHidden(true)
+            SearchQueryEditMenu(actions: searchQueryActions, tintColor: UIColor(IQStyle.secondary))
+                .frame(width: 44, height: 44)
             TextField("描述你记得的画面", text: $state.query)
                 .focused($isSearchFocused).submitLabel(.search).onSubmit(submitSearch)
                 .font(.body).autocorrectionDisabled().frame(minHeight: 44)
@@ -504,7 +511,7 @@ struct ContentView: View {
             }
             .disabled(!state.canSearch).accessibilityLabel("搜索照片").accessibilityIdentifier("search-photos")
         }
-        .padding(.leading, 16).padding(.trailing, 7).padding(.vertical, 7)
+        .padding(.leading, 4).padding(.trailing, 7).padding(.vertical, 7)
         .background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 17))
         .overlay(RoundedRectangle(cornerRadius: 17).stroke(isSearchFocused ? IQStyle.accent : IQStyle.line, lineWidth: 1))
         .id("search-anchor")
@@ -520,11 +527,12 @@ struct ContentView: View {
 
     @ViewBuilder private var searchContent: some View {
         if state.activity == .searching {
-            VStack(spacing: 14) {
-                ProgressView().controlSize(.large).tint(IQStyle.accent)
-                Text("正在查找照片…").font(.subheadline).foregroundStyle(IQStyle.secondary)
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small).tint(IQStyle.accent)
+                Text("正在查找照片…").font(.caption).foregroundStyle(IQStyle.secondary)
+                Spacer(minLength: 4)
                 Button("取消搜索") { state.cancel() }.font(.subheadline).frame(minHeight: 44)
-            }.frame(maxWidth: .infinity).padding(.vertical, 54).accessibilityIdentifier("search-loading")
+            }.frame(maxWidth: .infinity).padding(.vertical, 12).accessibilityIdentifier("search-loading")
         } else if state.errorMessage != nil {
             emptyCard(symbol: "exclamationmark.circle", title: "搜索或统计暂未就绪",
                       detail: state.canRead ? "查看图库状态后重试；此提示不代表收藏或相册操作失败。" : "请先检查照片访问权限，再重试。")

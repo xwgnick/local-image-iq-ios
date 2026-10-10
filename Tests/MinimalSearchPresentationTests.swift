@@ -7,13 +7,15 @@ import ImageIQCore
 
 /// Real native ContentView at 393/320 points, not an HTML reconstruction.
 /// Synthetic AppState authorization only; the existing controls fixture requires
-/// the real Photos client to remain unreadable. No models, image/OCR indexing,
+/// the real Photos client to remain unreadable. No models, real image/OCR indexing,
 /// permission requests, Apple translation, network, or real photo mutations.
+/// The explicit OCR-switch case uses a held, counting synthetic worker only.
 /// Snapshots are review attachments, not a claim of physical-phone acceptance.
 @MainActor
 final class MinimalSearchPresentationTests: XCTestCase {
     func testHome393And320NativeSnapshotsOverviewAndCriticalGeometry() async throws {
-        // Parent integration supplies the approved 02 PNG. A missing resource
+        // Parent integration supplies the approved hero revision; do not pin
+        // older artwork bytes while V5 is being copied. A missing resource
         // fails rather than silently capturing a generic icon or blank hero.
         let asset = try XCTUnwrap(UIImage(named: "HomeSearchHero", in: Bundle(for: AppState.self), compatibleWith: nil))
         XCTAssertGreaterThan(try XCTUnwrap(asset.cgImage).width, 0)
@@ -31,6 +33,8 @@ final class MinimalSearchPresentationTests: XCTestCase {
             try assertHome(host, measured, width: width)
             XCTAssertEqual(f.app.searchSuggestions.map(\.label), ["身份证", "猫猫追逐逗猫棒", "海边日落"])
             XCTAssertEqual(f.app.searchSuggestions[1].query, "猫猫追逐逗猫棒")
+            // Only the lower-left library-status footer is removed. The top
+            // subtitle deliberately retains its honest indexed-count message.
             XCTAssertEqual(ContentView(state: f.app).homeSubtitle, "已索引 37 张照片")
             // Compare allocated default label widths with native caption metrics.
             let traits = UITraitCollection(preferredContentSizeCategory: .large)
@@ -162,26 +166,48 @@ final class MinimalSearchPresentationTests: XCTestCase {
         assertNoWork(f)
     }
 
-    func testNativeOCRSwitchOnlyOptsInAndPreservesIndependent44PointInfoAndFilterTargets() async throws {
+    func testNativeOCRSwitchStartsOneIncrementalUpdateAndPreservesIndependent44PointTargets() async throws {
         let f = try await controlsFixture(in: self)
+        let worker = SearchRootTestWorker()
+        let app = await makeSearchRootTestApp(in: self, worker: worker, translator: MinimalNoTranslation())
         let measured = MinimalMeasurements()
-        let host = try mount(f, width: 320, measured: measured)
+        let host = try mount(f, width: 320, measured: measured, app: app)
         defer { host.close() }
         try await waitForHome(host, measured)
         let scroll = try primarySearchScrollView(in: host.controller.view)
         let toggle = try XCTUnwrap(controlsDescendants(scroll, UISwitch.self).first)
         XCTAssertEqual(toggle.transform, .identity)
+        XCTAssertEqual(worker.ocrCalls, 0, "Rendering is not opt-in")
+        XCTAssertEqual(app.summary.textIndexCounts.records, 2)
         toggle.setOn(true, animated: false)
         toggle.sendActions(for: .valueChanged)
-        try await host.wait { f.app.textSearchEnabled }
-        XCTAssertTrue(f.app.canIndexText)
-        XCTAssertNil(f.app.activity)
-        XCTAssertEqual(f.app.summary.textIndexCounts.records, 0)
+        try await host.wait { worker.ocrCalls == 1 && app.ocrSync.phase == .updating }
+        XCTAssertTrue(app.textSearchEnabled)
+        XCTAssertFalse(app.canIndexText, "A running update cannot admit another manual job")
+        XCTAssertEqual(app.activity, .indexingText)
+        XCTAssertFalse(app.summary.textIndexStatisticsKnown)
+        XCTAssertEqual(worker.ocrNetworkRequests, [false])
         XCTAssertNil(host.controller.presentedViewController)
         try assertOCR(host, measured, width: 320)
+        app.indexPhotoText() // Duplicate admission while running is suppressed.
+        XCTAssertEqual(worker.ocrCalls, 1)
+        worker.ocrGate.open()
+        await app.waitUntilIdle()
+        try await host.wait { app.ocrSync.phase == .completed }
+        XCTAssertNil(app.activity)
+        XCTAssertTrue(app.canIndexText)
+        XCTAssertTrue(app.summary.textIndexStatisticsKnown)
+        XCTAssertEqual(app.summary.textIndexCounts, TextIndexCounts(records: 3, withText: 3, reduced: 0))
+        XCTAssertEqual(app.textIndexProgress, SearchRootTestWorker.finishedOCR)
         toggle.setOn(false, animated: false)
         toggle.sendActions(for: .valueChanged)
-        try await host.wait { !f.app.textSearchEnabled }
+        try await host.wait { !app.textSearchEnabled }
+        await app.waitUntilIdle()
+        XCTAssertEqual(worker.ocrCalls, 1)
+        XCTAssertEqual(app.summary.textIndexCounts.records, 3, "OFF does not erase completed records")
+        XCTAssertFalse(app.library.canReadImages)
+        XCTAssertFalse(app.allowICloudDownload)
+        XCTAssertEqual(worker.unexpectedCalls, 0)
         assertNoWork(f)
     }
 
@@ -216,7 +242,7 @@ final class MinimalSearchPresentationTests: XCTestCase {
         assertNoWork(f)
     }
 
-    func testResultsRemainCompactAndRetainQuerySelectionScrollerAndRootReadFooter() async throws {
+    func testResultsRemainCompactAndRetainQuerySelectionScrollerAndSelectionFooter() async throws {
         let f = try await controlsFixture(in: self)
         f.app.query = "TEST retained compact result query"
         f.app.submitSearchQuery()
@@ -285,17 +311,40 @@ final class MinimalSearchPresentationTests: XCTestCase {
             let measured = MinimalMeasurements()
             let host = try mount(f, width: 320, measured: measured, app: app)
             defer { host.close() }
-            try await host.wait { measured.frames[.translation] != nil && host.tabs.count == 2 }
-            let row = try XCTUnwrap(measured.frames[.translation])
-            XCTAssertEqual(row.height, 44, accuracy: host.pixel)
-            XCTAssertGreaterThanOrEqual(row.minX + host.pixel, 20)
-            XCTAssertLessThanOrEqual(row.maxX, 300 + host.pixel)
+            try await host.wait {
+                host.tabs.count == 2 && controlsDescendants(host.controller.view, SearchQueryEditMenuButton.self)
+                    .first?.menu != nil && (installed || measured.frames[.translation] != nil)
+            }
+            let buttons = controlsDescendants(host.controller.view, SearchQueryEditMenuButton.self)
+            XCTAssertEqual(buttons.count, 1, "One leading icon menu, not a result-row ellipsis")
+            let button = try XCTUnwrap(buttons.first)
+            let field = try XCTUnwrap(controlsDescendants(host.controller.view, UITextField.self).first)
+            let iconFrame = button.convert(button.bounds, to: host.window)
+            let fieldFrame = field.convert(field.bounds, to: host.window)
+            XCTAssertEqual(iconFrame.width, 44, accuracy: host.pixel)
+            XCTAssertEqual(iconFrame.height, 44, accuracy: host.pixel)
+            XCTAssertLessThanOrEqual(iconFrame.maxX, fieldFrame.minX + host.pixel)
+            let actions = try XCTUnwrap(button.menu).children.compactMap { $0 as? UIAction }
+            XCTAssertEqual(actions.map { $0.identifier.rawValue }, installed
+                ? ["effective-search-query", "search-original"] : ["search-translated"])
+            XCTAssertEqual(button.accessibilityCustomActions?.map(\.name), installed
+                ? ["显示译文", "使用原文"] : ["使用英文翻译"])
+            if installed {
+                XCTAssertNil(measured.frames[.translation], "A successful translation has no standalone row")
+            } else {
+                let row = try XCTUnwrap(measured.frames[.translation])
+                XCTAssertEqual(row.height, 44, accuracy: host.pixel)
+                XCTAssertGreaterThanOrEqual(row.minX + host.pixel, 20)
+                XCTAssertLessThanOrEqual(row.maxX, 300 + host.pixel)
+            }
             try host.attach(to: self, name: installed
                 ? "UIReview-minimal-search-translation-menu-320"
                 : "UIReview-minimal-search-original-fallback-320")
-            // State API used by the per-search menu, not an XCUI menu tap.
-            app.query = resolution.original
-            app.search(useOriginal: true)
+            // Dispatch the actual mounted UIKit menu action, not a substitute
+            // direct AppState call and not a claim of an XCUI popup-menu tap.
+            let replay = try XCTUnwrap(actions.first { $0.identifier.rawValue == (installed ? "search-original" : "search-translated") })
+            XCTAssertFalse(replay.attributes.contains(.disabled))
+            UIControl().sendAction(replay)
             await app.waitUntilIdle()
             XCTAssertEqual(app.completedSearchQuery?.original, original)
             XCTAssertEqual(app.completedSearchQuery?.effective, original)
@@ -305,6 +354,55 @@ final class MinimalSearchPresentationTests: XCTestCase {
             XCTAssertEqual(translator.preparations, 0)
             XCTAssertNil(app.appleTranslationService)
         }
+        assertNoWork(f)
+    }
+
+    func testSearchingUsesCompactInlineRowAndKeepsNativeFieldScrollerAndFooterGeometry() async throws {
+        let f = try await controlsFixture(in: self)
+        let worker = SearchRootTestWorker()
+        let gate = SearchRootTestGate()
+        worker.searchGate = gate
+        let app = await makeSearchRootTestApp(in: self, worker: worker, translator: MinimalNoTranslation())
+        let measured = MinimalMeasurements()
+        let host = try mount(f, width: 320, measured: measured, app: app)
+        defer { host.close() }
+        try await waitForHome(host, measured)
+        let scroll = try primarySearchScrollView(in: host.controller.view)
+        let field = try XCTUnwrap(controlsDescendants(scroll, UITextField.self).first)
+        let delegate = try XCTUnwrap(field.delegate)
+        let band = try bottomFrame(host, .syncToast)
+        let nav = try bottomFrame(host, .navigation)
+        app.query = "TEST held first search"
+        app.submitSearchQuery()
+        try await host.wait {
+            worker.searches.count == 1 && app.activity == .searching
+                && measured.frames[.hero] == nil && measured.frames[.heading] == nil
+                && measured.frames[.tools] != nil
+        }
+        XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === scroll)
+        XCTAssertTrue(controlsDescendants(scroll, UITextField.self).first === field)
+        XCTAssertTrue(field.delegate === delegate)
+        XCTAssertTrue(field.isEnabled && field.isUserInteractionEnabled)
+        XCTAssertEqual(field.text, "TEST held first search")
+        XCTAssertFalse(scroll.accessibilityElementsHidden)
+        XCTAssertNil(host.controller.presentedViewController)
+        XCTAssertNil(measured.frames[.resultsHeading])
+        XCTAssertNil(measured.frames[.translation])
+        XCTAssertEqual(try bottomFrame(host, .syncToast), band)
+        XCTAssertEqual(try bottomFrame(host, .navigation), nav)
+        let tools = try XCTUnwrap(measured.frames[.tools])
+        let bottom = scroll.convert(CGPoint(x: 0, y: scroll.contentSize.height), to: host.window).y
+        // 18pt content gap + a 44pt action with 12pt vertical padding + 24pt
+        // content bottom padding. No full-page spinner or old empty-card space.
+        XCTAssertEqual(bottom - tools.maxY, 18 + 44 + 24 + 24, accuracy: host.pixel)
+        try host.attach(to: self, name: "UIReview-minimal-search-compact-loading-320")
+        gate.open()
+        await app.waitUntilIdle()
+        try await host.wait { measured.frames[.resultsHeading] != nil }
+        XCTAssertEqual(worker.searches, ["TEST held first search"])
+        XCTAssertEqual(app.totalResultCount, 37)
+        XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === scroll)
+        XCTAssertEqual(worker.ocrCalls, 0)
         assertNoWork(f)
     }
 
@@ -354,7 +452,8 @@ final class MinimalSearchPresentationTests: XCTestCase {
         let band = try bottomFrame(host, .syncToast)
         let nav = try bottomFrame(host, .navigation)
         XCTAssertEqual(band.height, 52, accuracy: host.pixel, "Sync agent owns the stable idle band")
-        XCTAssertLessThanOrEqual(usable.maxY, band.minY + host.pixel)
+        XCTAssertEqual(usable.maxY, band.minY, accuracy: host.pixel,
+                   "No indexed-count footer between home content and the reserved sync band")
         XCTAssertLessThanOrEqual(band.maxY, nav.minY + host.pixel)
         XCTAssertEqual(nav.height, 44, accuracy: host.pixel)
         for page in PrimaryPage.allCases {
@@ -372,18 +471,13 @@ final class MinimalSearchPresentationTests: XCTestCase {
     private func assertChips(_ host: ControlsNativeHost, _ measured: MinimalMeasurements, width: CGFloat) throws {
         let row = try XCTUnwrap(measured.frames[.chips])
         XCTAssertEqual(row.height, 44, accuracy: host.pixel)
-        let first = try XCTUnwrap(measured.frames[.chip(0)])
-        let middle = try XCTUnwrap(measured.frames[.chip(1)])
-        let last = try XCTUnwrap(measured.frames[.chip(2)])
-        XCTAssertEqual(first.width / 0.85, middle.width / 1.65, accuracy: host.pixel * 2)
-        XCTAssertEqual(last.width / 1.10, middle.width / 1.65, accuracy: host.pixel * 2)
         var right = row.minX
         for index in 0..<3 {
             let chip = try XCTUnwrap(measured.frames[.chip(index)])
             XCTAssertGreaterThanOrEqual(chip.width + host.pixel, 44)
             XCTAssertEqual(chip.height, 44, accuracy: host.pixel)
             XCTAssertEqual(chip.minY, row.minY, accuracy: host.pixel)
-            XCTAssertGreaterThanOrEqual(chip.minX + host.pixel, right)
+            XCTAssertEqual(chip.minX, right + (index == 0 ? 0 : 6), accuracy: host.pixel)
             XCTAssertGreaterThanOrEqual(chip.minX + host.pixel, 20)
             XCTAssertLessThanOrEqual(chip.maxX, width - 20 + host.pixel)
             right = chip.maxX

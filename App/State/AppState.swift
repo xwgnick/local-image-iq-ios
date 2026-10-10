@@ -82,7 +82,9 @@ final class AppState: ObservableObject {
             guard oldValue != textSearchEnabled else { return }
             textSearchPreferences?.set(textSearchEnabled, forKey: Self.textSearchPreferenceKey)
             searchSettingsChanged()
+            ocrSync.userChangedEnabled(textSearchEnabled)
             if !textSearchEnabled, activity == .indexingText { operationTask?.cancel() }
+            refreshOCRSyncAvailability()
         }
     }
     @Published private(set) var textIndexProgress = TextIndexProgress()
@@ -134,6 +136,7 @@ final class AppState: ObservableObject {
     let indexAccess: IndexAccessCoordinator?
     let groupingEncoders: any PhotoEncoding
     let photoSync: PhotoSyncState
+    let ocrSync: OCRSyncState
     private var syncLaunchSucceeded = false
     private var syncReadinessConfirmed = false
     private let syncService: (any PhotoSyncServicing)?
@@ -204,9 +207,11 @@ final class AppState: ObservableObject {
         }
         self.translationPreferences = translationPreferences
         self.textSearchPreferences = textSearchPreferences
-        if let saved = textSearchPreferences?.object(forKey: Self.textSearchPreferenceKey) as? Bool {
-            textSearchEnabled = saved
-        }
+        let restoredTextSearch = textSearchPreferences?.object(forKey: Self.textSearchPreferenceKey) as? Bool ?? false
+        // Initialize storage, not the user-change observer: saved ON must never
+        // enqueue recognition at cold launch, refresh, or view reconstruction.
+        _textSearchEnabled = Published(initialValue: restoredTextSearch)
+        ocrSync = OCRSyncState(enabled: restoredTextSearch)
         if let saved = translationPreferences?.object(forKey: Self.translationPreferenceKey) as? Bool {
             chineseSearchEnabled = saved
         }
@@ -221,6 +226,7 @@ final class AppState: ObservableObject {
             // A final rolled-back writer also changes source authority. Refresh
             // only that previously unreported revision, not every successful end.
             if self?.indexAccessChangedIfNeeded() == true { self?.requestSyncSummaryRefresh() }
+            self?.refreshOCRSyncAvailability()
         }
         photoSync.onCompleted = { [weak self] summary in
             self?.invalidateSyncSummaryRefresh()
@@ -389,6 +395,7 @@ final class AppState: ObservableObject {
 
     func enterBackground() {
         isForeground = false
+        ocrSync.pause()
         syncReadinessConfirmed = false
         refreshSyncAvailability()
         library.invalidateSearchSnapshot()
@@ -472,6 +479,34 @@ final class AppState: ObservableObject {
 
     func indexPhotoText() {
         guard canIndexText else { return }
+        ocrSync.requestUpdate()
+        refreshOCRSyncAvailability()
+    }
+
+    func cancelOCRSync() {
+        ocrSync.cancel()
+        // Never cancel an unrelated search, Photos mutation or manual image job
+        // merely because a text request was waiting behind it.
+        if activity == .indexingText { operationTask?.cancel() }
+    }
+
+    func retryOCRSync() {
+        guard ocrSync.canRetry else { return }
+        ocrSync.requestUpdate()
+        refreshOCRSyncAvailability()
+    }
+
+    private var photoSyncRunning: Bool {
+        photoSync.phase == .checking || photoSync.phase == .updating || photoSync.phase == .cancelling
+    }
+
+    private func refreshOCRSyncAvailability() {
+        ocrSync.updateAvailability(ready: canIndexText && !photoSyncRunning)
+        guard let run = ocrSync.takeReadyRequest() else { return }
+        beginOCRSync(run: run)
+    }
+
+    private func beginOCRSync(run: UUID) {
         invalidateDisplayedPhotos()
         textIndexProgress = TextIndexProgress()
         textIndexOperationIssue = nil
@@ -479,9 +514,9 @@ final class AppState: ObservableObject {
         // authoritative as soon as this explicit update may start changing rows.
         summary.textIndexStatisticsKnown = false
         let networkAllowed = allowICloudDownload
-        schedule(.indexingText) { [weak self, worker] token in
+        schedule(.indexingText, ocrRun: run) { [weak self, worker] token in
             let summary = try await worker.indexText(networkAllowed: networkAllowed) { [weak self] progress in
-                await self?.accept(textProgress: progress, token: token)
+                await self?.accept(textProgress: progress, token: token, ocrRun: run)
             }
             return .summary(summary, "文字索引扫描结束；已完成记录可复用，未完成项可手动重试。")
         }
@@ -732,6 +767,7 @@ final class AppState: ObservableObject {
     }
 
     func cancel() {
+        if activity == .indexingText { ocrSync.cancel() }
         operationTask?.cancel()
         // Search cancellation revokes its continuation. Cancelling an unrelated
         // diagnostic/translation task must preserve the gallery underneath it.
@@ -740,6 +776,7 @@ final class AppState: ObservableObject {
     }
 
     func clearIndex() {
+        cancelOCRSync()
         photoLibraryEpoch = UUID()
         invalidateDisplayedPhotos()
         thumbnails.clear()
@@ -777,14 +814,16 @@ final class AppState: ObservableObject {
         self.progress = progress
     }
 
-    private func accept(textProgress: TextIndexProgress, token: UUID) {
+    private func accept(textProgress: TextIndexProgress, token: UUID, ocrRun: UUID) {
         guard token == operationID, activity == .indexingText, isForeground else { return }
         self.textIndexProgress = textProgress
+        ocrSync.accept(textProgress, token: ocrRun)
     }
 
     private var syncSummaryReady: Bool {
         let blocksSync = activity == .starting || activity == .refreshing
-            || activity == .indexing || activity == .clearing
+            || activity == .indexing || activity == .clearing || activity == .indexingText
+            || ocrSync.currentRunning
         return syncLaunchSucceeded && syncReadinessConfirmed && launchPhase == .ready
             && isForeground && canRead && modelsReady && !blocksSync
     }
@@ -795,6 +834,7 @@ final class AppState: ObservableObject {
         photoSync.updateAvailability(
             ready: ready,
             networkAllowed: allowICloudDownload)
+        refreshOCRSyncAvailability()
     }
 
     @discardableResult
@@ -880,6 +920,7 @@ final class AppState: ObservableObject {
         merged.locatedCount = value.locatedCount
         merged.placesDescription = value.placesDescription
         summary = merged
+        refreshOCRSyncAvailability()
     }
 
     private enum Outcome {
@@ -908,8 +949,10 @@ final class AppState: ObservableObject {
 
     private func schedule(_ activity: Activity, timing: LaunchTimingRecorder? = nil,
                           searchMeasurement: SearchTimingRecorder? = nil,
+                          ocrRun: UUID? = nil,
                           operation: @escaping @MainActor (UUID) async throws -> Outcome) {
         let predecessor = operationTask
+        if ocrRun == nil { ocrSync.stopRunning() }
         predecessor?.cancel()
         let token = UUID()
         operationID = token
@@ -924,9 +967,16 @@ final class AppState: ObservableObject {
             // Critical: await completion, not merely cancellation, before a new job.
             await predecessor?.value
             var lease: IndexAccessCoordinator.Lease?
+            var ocrCompletion = OCRSyncState.Completion.cancelled
             // Includes final MainActor validation, summary/results publication
             // and failure handling. Releasing before the switch exposes a race.
-            defer { lease?.release() }
+            defer {
+                lease?.release()
+                if let ocrRun {
+                    self?.ocrSync.finish(token: ocrRun, completion: ocrCompletion)
+                    self?.refreshSyncAvailability()
+                }
+            }
             do {
                 try Task.checkCancellation()
                 switch activity {
@@ -936,7 +986,14 @@ final class AppState: ObservableObject {
                     await photoSync?.suspendAndWait()
                     try Task.checkCancellation()
                     lease = try await indexAccess?.acquireWrite()
-                case .starting, .refreshing, .searching, .indexingText, .checkingPhoto:
+                case .indexingText:
+                    // Admission waits for settled photo sync. Still suspend and
+                    // drain before acquiring a reader in case a fresh photo diff
+                    // was queued at settlement. Never wait holding a read lease.
+                    await photoSync?.suspendAndWait()
+                    try Task.checkCancellation()
+                    lease = try await indexAccess?.acquireRead()
+                case .starting, .refreshing, .searching, .checkingPhoto:
                     lease = try await indexAccess?.acquireRead()
                 case .preparingTranslation:
                     break
@@ -1010,9 +1067,11 @@ final class AppState: ObservableObject {
                         self.status = "Photo check complete. Your index is unchanged."
                     }
                 }
+                ocrCompletion = .completed
                 self.activity = nil
                 self.refreshSyncAvailability()
             } catch {
+                ocrCompletion = error is CancellationError || Task.isCancelled ? .cancelled : .failed
                 let searchReport = searchMeasurement?.finish(
                     error is CancellationError || Task.isCancelled ? .cancelled : .failed)
                 guard let self, self.operationID == token else { return }
@@ -1074,7 +1133,15 @@ final class AppState: ObservableObject {
     }
 
     /// Awaitable completion boundary also used by model-free state tests.
-    func waitUntilIdle() async { await operationTask?.value }
+    func waitUntilIdle() async {
+        // A deferred toggle can be admitted at the predecessor's settlement.
+        // Join that successor too, rather than reporting idle while OCR runs.
+        var token: UUID
+        repeat {
+            token = operationID
+            await operationTask?.value
+        } while token != operationID
+    }
 
     /// Separate from foreground completion; never make existing callers await
     /// the entire automatic library scan (or the completion-card display time).

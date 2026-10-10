@@ -83,7 +83,7 @@ final class SimilarCleanupControlsPresentationTests: XCTestCase {
         try await host.wait { host.controls[.slider] != nil && host.controls[.value] != nil }
         try assertCenteredValue(host)
         XCTAssertNil(host.controls[.introduction])
-        for (part, text) in [(SimilarCleanupControlPart.instruction, "相似度")] {
+        for (part, text) in [(SimilarCleanupControlPart.instruction, "清理设置")] {
             let frame = try XCTUnwrap(host.controls[part])
             let font = UIFont.preferredFont(forTextStyle: .subheadline,
                 compatibleWith: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge))

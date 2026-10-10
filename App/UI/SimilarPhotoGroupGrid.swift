@@ -4,23 +4,24 @@ import Combine
 import ImageIQCore
 
 /// Geometry is independent of Dynamic Type and member count. Only text outside
-/// the mosaic/grid grows with the user's font. Thirty is a COVER size, never a
+/// the mosaic/grid grows with the user's font. Five is a COVER size, never a
 /// selection, loading or group-membership limit.
 enum SimilarPhotoGroupGeometry {
-    static let previewColumns = 10
+    static let previewColumns = 5
     static let columns = 5
     static let gap: CGFloat = 2
     static let edge: CGFloat = 2
 
     static func previewIndices(count: Int) -> [Int] {
         guard count > 0 else { return [] }
-        let samples = min(count, 30)
-        guard samples > 1 else { return [0] }
-        return (0..<samples).map { $0 * (count - 1) / (samples - 1) }
+        return Array(0..<min(count, previewColumns))
     }
 
+    /// The fifth tile represents itself AND the members beyond the first four.
+    static func overflowCount(count: Int) -> Int { count > previewColumns ? count - (previewColumns - 1) : 0 }
+
     static func previewHeight(count: Int, width: CGFloat) -> CGFloat {
-        let rows = (min(max(0, count), 30) + previewColumns - 1) / previewColumns
+        let rows = count > 0 ? 1 : 0
         guard rows > 0 else { return 0 }
         let side = max(0, (width - CGFloat(previewColumns - 1) * gap) / CGFloat(previewColumns))
         return CGFloat(rows) * side + CGFloat(rows - 1) * gap
@@ -499,6 +500,7 @@ struct SimilarPhotoGroupGrid: UIViewControllerRepresentable {
     let isSelecting: Bool
     let enabled: Bool
     let hiddenPhotoID: String?
+    var contentVisible: Bool = true
     let thumbnail: (IndexedPhoto) -> AnyView
     let begin: () -> UUID?
     let finish: (UUID, Set<String>) -> Void
@@ -571,27 +573,55 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
         collectionView.panGestureRecognizer.require(toFail: rangePan)
         linkTarget.owner = self
         NotificationCenter.default.addObserver(self, selector: #selector(backgrounded),
+                               name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(backgrounded),
                                                name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(backgrounded),
+                               name: UIApplication.protectedDataWillBecomeUnavailableNotification, object: nil)
+        collectionView.isHidden = configuration?.contentVisible == false
+        collectionView.accessibilityElementsHidden = configuration?.contentVisible == false
         updateGestureAvailability()
     }
 
     func configure(_ next: SimilarPhotoGroupGrid) {
         let replaced = configuration?.sessionID != next.sessionID
-            || configuration?.photos.map(\.id) != next.photos.map(\.id)
+        let membersChanged = configuration?.photos.map(\.id) != next.photos.map(\.id)
+        let survivingIDs = membersChanged ? Set(next.photos.map(\.id)) : []
+        // Preserve the actual viewport anchor when deletion changes indices.
+        let anchor = !replaced && membersChanged && isViewLoaded
+            ? collectionView.indexPathsForVisibleItems.sorted().first(where: { index in
+                guard let old = configuration, old.photos.indices.contains(index.item) else { return false }
+                return survivingIDs.contains(old.photos[index.item].id)
+            }).flatMap { index -> (String, CGFloat)? in
+                guard let old = configuration, old.photos.indices.contains(index.item),
+                      let frame = collectionView.layoutAttributesForItem(at: index)?.frame else { return nil }
+                return (old.photos[index.item].id, frame.minY - collectionView.contentOffset.y)
+            } : nil
         if replaced {
             cancelInteraction()
             initialScrollPending = true
             initialTargetReported = false
         }
         configuration = next
-        if !next.enabled || !next.selectionMode { cancelInteraction() }
+        if !next.enabled || !next.selectionMode || !next.contentVisible { cancelInteraction() }
         if token != nil && !next.isSelecting {
             // The state publishes selectedIDs before it lowers isSelecting.
             // Do not remove the local preview on finger-up / async submission.
             discardPreview()
         }
         guard isViewLoaded else { return }
-        if replaced { collectionView.reloadData(); view.setNeedsLayout() }
+        collectionView.isHidden = !next.contentVisible
+        collectionView.accessibilityElementsHidden = !next.contentVisible
+        if replaced || membersChanged {
+            collectionView.reloadData()
+            collectionView.layoutIfNeeded()
+            if let anchor, let index = next.photos.firstIndex(where: { $0.id == anchor.0 }),
+               let frame = collectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame {
+                let maximum = max(0, collectionView.contentSize.height - collectionView.bounds.height)
+                collectionView.contentOffset.y = min(maximum, max(0, frame.minY - anchor.1))
+            }
+            view.setNeedsLayout()
+        }
         refreshVisibleCells()
         updateGestureAvailability()
     }
@@ -652,6 +682,11 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
     }
     private func configureCell(_ cell: UICollectionViewCell, at index: IndexPath) {
         guard let configuration, configuration.photos.indices.contains(index.item) else { return }
+        guard configuration.contentVisible else {
+            cell.contentConfiguration = nil // Release/cancel thumbnail hosts, keep the collection/offset.
+            cell.isAccessibilityElement = false
+            return
+        }
         let photo = configuration.photos[index.item]
         let selected = displayedSelection.contains(photo.id)
         cell.contentConfiguration = UIHostingConfiguration {
@@ -692,7 +727,7 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
         activateItem(at: indexPath.item)
     }
     func activateItem(at index: Int) {
-        guard let configuration, configuration.enabled, !configuration.isSelecting,
+        guard let configuration, configuration.contentVisible, configuration.enabled, !configuration.isSelecting,
               configuration.photos.indices.contains(index), !isShutdown else { return }
         let id = configuration.photos[index].id
         if configuration.selectionMode { configuration.toggle(id) }
@@ -701,7 +736,7 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
 
     static func acceptsHorizontalStart(_ velocity: CGPoint) -> Bool { abs(velocity.x) > abs(velocity.y) }
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard gestureRecognizer === rangePan, let configuration, configuration.enabled,
+        guard gestureRecognizer === rangePan, let configuration, configuration.contentVisible, configuration.enabled,
               configuration.selectionMode, !configuration.isSelecting, !isShutdown,
               Self.acceptsHorizontalStart(rangePan.velocity(in: collectionView)) else { return false }
         let translation = rangePan.translation(in: collectionView)
@@ -736,7 +771,7 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
 
     @discardableResult
     func beginInteraction(at index: Int) -> Bool {
-        guard let configuration, !isShutdown, configuration.enabled, configuration.selectionMode,
+        guard let configuration, configuration.contentVisible, !isShutdown, configuration.enabled, configuration.selectionMode,
               !configuration.isSelecting, token == nil, configuration.photos.indices.contains(index),
               let range = SimilarPhotoRangeSelection(photoIDs: configuration.photos.map(\.id),
                   selectedIDs: configuration.selectedIDs.intersection(configuration.photos.map(\.id)),
@@ -822,10 +857,24 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
     private func updateGestureAvailability() {
         guard isViewLoaded else { return }
         let enabled = !isShutdown && configuration?.enabled == true && configuration?.selectionMode == true
+            && configuration?.contentVisible == true
             && ((configuration?.isSelecting == false && token == nil) || range != nil)
         if rangePan.isEnabled != enabled { rangePan.isEnabled = enabled }
     }
-    @objc private func backgrounded() { suspendInteraction() }
+    @objc private func backgrounded() {
+        // Prevent late cell/layout callbacks from rebuilding raster hosts before
+        // the parent's next privacy update. A fresh visible configuration owns
+        // resumption; native notifications never grant display by themselves.
+        configuration?.contentVisible = false
+        suspendInteraction()
+        guard isViewLoaded else { return }
+        collectionView.isHidden = true
+        collectionView.accessibilityElementsHidden = true
+        for cell in collectionView.visibleCells {
+            cell.contentConfiguration = nil
+            cell.isAccessibilityElement = false
+        }
+    }
     func suspendInteraction() { cancelInteraction(); if isViewLoaded { rangePan.isEnabled = false } }
     override func viewWillDisappear(_ animated: Bool) { super.viewWillDisappear(animated); cancelInteraction() }
     override func viewDidAppear(_ animated: Bool) {
