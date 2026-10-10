@@ -1334,10 +1334,17 @@ final class PresentationNavigationTests: XCTestCase {
 
     private func expectAbsent(_ element: XCUIElement, onFailure: (() -> Void)? = nil,
                               file: StaticString = #filePath, line: UInt = #line) {
-        let absent = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
-        let result = XCTWaiter.wait(for: [absent], timeout: 5)
-        if result != .completed { onFailure?() }
-        XCTAssertEqual(result, .completed, file: file, line: line)
+        let result = StrictAbsenceProbe.observe(element)
+        print("STRICT-AX-ABSENCE \(result.description)")
+        if !result.passed {
+            onFailure?()
+            let evidence = XCTAttachment(string: "\(result.description)\nELEMENT\n\(element.debugDescription)\nTREE\n\(app.debugDescription)")
+            evidence.name = "Strict-absence-failed-native-query"
+            evidence.lifetime = .keepAlways
+            add(evidence)
+            attach("strict-absence-failure")
+        }
+        XCTAssertTrue(result.passed, result.description, file: file, line: line)
     }
 
     private func expectHittable(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
