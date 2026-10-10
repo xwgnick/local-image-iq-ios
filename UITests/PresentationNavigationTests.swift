@@ -480,11 +480,17 @@ final class PresentationNavigationTests: XCTestCase {
         let update = app.buttons["index-photo-text"]
         let done = app.buttons["close-settings"]
         let libraryDone = app.buttons["close-library"]
+        let cancelWaiting = app.buttons["pause-text-index"]
+        let textStatus = app.staticTexts["text-index-status"]
+        let syncDetails = app.buttons["ocr-sync-open-details"]
 
-        func assertNoWorkOrPermissionPrompt() {
-            XCTAssertFalse(app.buttons["pause-text-index"].exists)
+        func assertNoWorkOrPermissionPrompt(allowWaitingCancellation: Bool = false) {
+            // Library also uses this stop control for a never-admitted request.
+            // Its presence in that waiting state is not evidence of OCR work.
+            if !allowWaitingCancellation { XCTAssertFalse(cancelWaiting.exists) }
             XCTAssertFalse(app.buttons["stop-indexing"].exists)
             XCTAssertFalse(app.progressIndicators["文字索引进度"].exists)
+            XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "ocr-sync-progress").firstMatch.exists)
             XCTAssertFalse(app.alerts.firstMatch.exists)
             XCTAssertFalse(springboard.alerts.firstMatch.exists)
         }
@@ -555,6 +561,9 @@ final class PresentationNavigationTests: XCTestCase {
 
         tapOptIn(true)
         expectAbsent(update)
+        expectHittable(syncDetails)
+        XCTAssertEqual(syncDetails.label, "文字索引等待更新")
+        expectHittable(app.buttons["cancel-ocr-sync"])
         XCTAssertFalse(app.progressIndicators["ocr-sync-progress"].exists,
                    "The requested update waits for permission; it cannot invent processing progress")
         assertNoWorkOrPermissionPrompt()
@@ -565,6 +574,8 @@ final class PresentationNavigationTests: XCTestCase {
         app.buttons["primary-search-tab"].tap()
         assertHomeOptIn()
         expectSwitch(toggle, enabled: true)
+        expectHittable(syncDetails)
+        XCTAssertEqual(syncDetails.label, "文字索引等待更新", "Switching pages must preserve the single waiting request")
         app.buttons["open-settings"].tap()
         expectHittable(done)
         assertSettingsPrimary()
@@ -573,8 +584,10 @@ final class PresentationNavigationTests: XCTestCase {
         openSettingsPage("settings-privacy", title: "隐私与关于")
         let localPrivacy = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "可选文字搜索使用系统 Vision")).firstMatch
         scrollTo(localPrivacy, in: try sheetForm())
-        XCTAssertTrue(localPrivacy.label.contains("关闭增强只停止参与搜索"))
-        XCTAssertTrue(localPrivacy.label.contains("清除索引才会一并删除文字记录"))
+        for fragment in ["每次从关闭切换为开启会增量更新一次", "恢复已保存的开启状态、打开页面或搜索不会自动重新识别",
+                         "关闭会取消等待或正在进行的文字更新", "并停止文字参与搜索", "已完成的文字记录保留", "清除索引才会一并删除"] {
+            XCTAssertTrue(localPrivacy.label.contains(fragment), "Missing OCR privacy contract: \(fragment)")
+        }
         assertNoWorkOrPermissionPrompt()
         back(from: "隐私与关于", to: "设置")
         assertSettingsPrimary()
@@ -587,20 +600,47 @@ final class PresentationNavigationTests: XCTestCase {
         openLibraryPage("library-text-index", title: "文本索引")
         var form = try sheetForm()
         XCTAssertFalse(toggle.exists, "Management never duplicates the primary opt-in")
-        scrollTo(update, in: form, allowDisabled: true)
-        XCTAssertFalse(update.isEnabled)
+        scrollTo(textStatus, in: form)
+        XCTAssertEqual(textStatus.label, "文字索引等待更新")
+        let waitingDetail = app.staticTexts["text-index-status-detail"]
+        scrollTo(waitingDetail, in: form)
+        XCTAssertTrue(waitingDetail.label.contains("照片权限和图片索引就绪后更新一次"))
+        XCTAssertTrue(waitingDetail.label.contains("不会自动请求权限"))
+        expectAbsent(update)
+        scrollTo(cancelWaiting, in: form)
+        XCTAssertTrue(cancelWaiting.isEnabled)
+        XCTAssertEqual(cancelWaiting.label, "取消文字索引更新")
+        assertNoWorkOrPermissionPrompt(allowWaitingCancellation: true)
         // Check production privacy text via the real XCUI tree, not in-process
         // SwiftUI AX or a copied presentation fixture. Match stable fragments.
         let privacy = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "识别文字仅保存在本机")).firstMatch
         scrollTo(privacy, in: form)
-        for fragment in ["不参与备份", "不代表当前有权限搜索", "关闭增强不会删除", "清除索引会一起删除"] {
+        for fragment in ["不参与备份", "不代表当前有权限搜索", "关闭增强会取消等待或正在进行的更新",
+                         "已完成的文字记录保留", "清除索引会一起删除"] {
             XCTAssertTrue(privacy.label.contains(fragment))
         }
+        assertNoWorkOrPermissionPrompt(allowWaitingCancellation: true)
+        // Explicitly cancel the pending intent before inspecting manual
+        // maintenance. Waiting exposes a stop action, not a disabled update.
+        scrollTo(cancelWaiting, in: form, swipeUp: false)
+        cancelWaiting.tap()
+        expectAbsent(cancelWaiting)
+        let cancelled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "文字更新已取消"), object: textStatus)
+        XCTAssertEqual(XCTWaiter.wait(for: [cancelled], timeout: 5), .completed)
+        scrollTo(update, in: form, allowDisabled: true)
+        XCTAssertEqual(update.label, "重试文字索引")
+        XCTAssertFalse(update.isEnabled, "Cancellation cannot grant Photos permission or index readiness")
         assertNoWorkOrPermissionPrompt()
         back(from: "文本索引", to: "我的图库")
         assertLibraryPrimary()
         libraryDone.tap()
         expectAbsent(libraryDone)
+        assertHomeOptIn()
+        expectSwitch(toggle, enabled: true)
+        expectHittable(syncDetails)
+        XCTAssertEqual(syncDetails.label, "文字更新已取消", "Cancelling the request preserves the ON preference")
+        expectAbsent(app.buttons["cancel-ocr-sync"])
 
         // ON is a real persisted preference, unlike session-only debug tools.
         // Relaunch through the unchanged full-model readiness/Photos-reset helper.
@@ -612,6 +652,7 @@ final class PresentationNavigationTests: XCTestCase {
         expectAbsent(update)
         XCTAssertFalse(app.buttons["ocr-sync-open-details"].exists,
                    "Restoring saved ON is not a new update request")
+        expectAbsent(app.buttons["cancel-ocr-sync"])
         assertNoWorkOrPermissionPrompt()
         tapOptIn(false)
         expectAbsent(update)
@@ -625,9 +666,12 @@ final class PresentationNavigationTests: XCTestCase {
         form = try sheetForm()
         XCTAssertFalse(toggle.exists)
         scrollTo(update, in: form, allowDisabled: true)
+        XCTAssertEqual(update.label, "更新文字索引")
         XCTAssertFalse(update.isEnabled)
         scrollTo(privacy, in: form)
-        XCTAssertTrue(privacy.label.contains("关闭增强不会删除"))
+        XCTAssertTrue(privacy.label.contains("关闭增强会取消等待或正在进行的更新"))
+        XCTAssertTrue(privacy.label.contains("已完成的文字记录保留"))
+        XCTAssertTrue(privacy.label.contains("清除索引会一起删除"))
         assertNoWorkOrPermissionPrompt()
         back(from: "文本索引", to: "我的图库")
         openLibraryPage("library-photo-access", title: "照片访问")
@@ -869,25 +913,55 @@ final class PresentationNavigationTests: XCTestCase {
         defer { app.launchEnvironment.removeValue(forKey: "IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE") }
         launch()
         app.buttons["primary-cleanup-tab"].tap()
-        let cover = app.buttons["similar-cleanup-group-1-photo-176"]
+        // previewIndices now returns 0..<5, not 30 evenly spaced samples.
+        // The fifth (+296) cover opens photo 5 of the unchanged 300-photo group.
+        let cover = app.buttons["similar-cleanup-group-1-photo-5"]
         expectHittable(cover)
+        XCTAssertEqual(cover.label, "第1组，另有296张，查看全部300张")
         cover.tap()
         let grid = app.collectionViews["similar-cleanup-five-column-grid"]
         expectHittable(grid)
         func photo(_ number: Int) -> XCUIElement {
             app.descendants(matching: .any).matching(identifier: "similar-cleanup-detail-photo-\(number)").firstMatch
         }
-        let target = photo(176)
-        expectHittable(target)
-        XCTAssertTrue(grid.frame.contains(target.frame), "The tapped overview sample must be positioned in the detail")
+        let opened = photo(5)
+        expectHittable(opened)
+        XCTAssertTrue(grid.frame.contains(opened.frame), "The tapped overview cover must be positioned in the detail")
+        XCTAssertEqual(opened.value as? String, "未勾选")
         XCTAssertFalse(app.buttons["prepare-similar-deletion"].exists, "Opening never selects a photo")
         let mode = app.buttons["similar-cleanup-selection-mode"]
         expectHittable(mode)
         mode.tap()
+        XCTAssertEqual(mode.label, "完成选择")
+        let target = photo(176)
+        // Reach the original mid-list row with real vertical touches, not a
+        // fixture route override. Slow held drags avoid flinging past the row.
+        // The test-only traversal budget is the fixture's 300 / 5 rows.
+        for _ in 0..<(300 / 5) {
+            let viewport = grid.frame
+            if target.exists && target.isHittable {
+                let frame = target.frame
+                // Leave a row at either edge, including room for the footer
+                // that appears after the three-photo selection commits.
+                if viewport.insetBy(dx: 0, dy: frame.height).contains(frame) { break }
+            }
+            let origin = grid.coordinate(withNormalizedOffset: .zero)
+            origin.withOffset(CGVector(dx: viewport.width / 2, dy: viewport.height * 0.8)).press(forDuration: 0.05,
+                thenDragTo: origin.withOffset(CGVector(dx: viewport.width / 2, dy: viewport.height * 0.4)),
+                withVelocity: .slow, thenHoldForDuration: 0.1)
+        }
+        expectHittable(target)
+        XCTAssertTrue(grid.frame.contains(target.frame), "Photo 176 must remain reachable beyond the five covers")
+        XCTAssertFalse(opened.exists && opened.isHittable, "Exercise the middle of the full group, not the first preview row")
+        XCTAssertEqual(target.value as? String, "未勾选")
+        XCTAssertFalse(app.buttons["prepare-similar-deletion"].exists, "Vertical scrolling must not select photos")
         let first = photo(177)
         let last = photo(179)
         expectHittable(first)
         expectHittable(last)
+        XCTAssertTrue(grid.frame.contains(first.frame))
+        XCTAssertTrue(grid.frame.contains(last.frame))
+        XCTAssertEqual(first.frame.midY, last.frame.midY, accuracy: 1)
         XCTAssertGreaterThan(first.frame.minX, grid.frame.minX + grid.frame.width / 5)
         // Real coordinate touch injection. This is not controller.beginInteraction
         // or an accessibility callback pretending to test gesture arbitration.
@@ -895,7 +969,7 @@ final class PresentationNavigationTests: XCTestCase {
             thenDragTo: last.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
             withVelocity: .slow, thenHoldForDuration: 0.1)
         let status = app.staticTexts["similar-cleanup-selection-status"]
-        let committed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "已选3张"), object: status)
+        let committed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "已选1组 · 3张"), object: status)
         XCTAssertEqual(XCTWaiter.wait(for: [committed], timeout: 5), .completed)
         XCTAssertEqual(photo(177).value as? String, "已勾选待删除")
         XCTAssertEqual(photo(178).value as? String, "已勾选待删除")
@@ -905,18 +979,25 @@ final class PresentationNavigationTests: XCTestCase {
         let delete = app.buttons["prepare-similar-deletion"]
         expectHittable(delete)
         XCTAssertEqual(delete.label, "删除3张") // Never activate or confirm deletion.
+        let beforeShortDrag = target.frame
         let root = app.coordinate(withNormalizedOffset: .zero)
         let edge = root.withOffset(CGVector(dx: 1, dy: first.frame.midY))
         let short = root.withOffset(CGVector(dx: 60, dy: first.frame.midY))
         edge.press(forDuration: 0.05, thenDragTo: short, withVelocity: .slow, thenHoldForDuration: 0.3)
         expectHittable(grid)
+        expectHittable(target)
+        XCTAssertEqual(target.frame.minX, beforeShortDrag.minX, accuracy: 1)
+        XCTAssertEqual(target.frame.minY, beforeShortDrag.minY, accuracy: 1)
+        XCTAssertEqual(status.label, "已选1组 · 3张")
         XCTAssertEqual(delete.label, "删除3张")
         XCTAssertEqual(photo(176).value as? String, "未勾选", "Edge motion must not start a range on the first column")
+        for number in 177...179 { XCTAssertEqual(photo(number).value as? String, "已勾选待删除") }
         let end = root.withOffset(CGVector(dx: app.frame.width * 0.8, dy: first.frame.midY))
         edge.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
         expectAbsent(grid)
         expectAbsent(app.buttons["similar-cleanup-all-groups"])
         expectHittable(cover)
+        XCTAssertEqual(status.label, "已选1组 · 3张")
         XCTAssertEqual(delete.label, "删除3张", "The same selection footer remains on the overview")
         XCTAssertTrue(app.buttons["primary-cleanup-tab"].isSelected)
         XCTAssertFalse(app.textFields["photo-query"].exists)
@@ -1148,17 +1229,34 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertTrue(correctValue, "Both expansions must preserve the actual 60% location weight")
     }
 
-    private func assertSettingsDebugOff(in form: XCUIElement) {
-        XCTAssertTrue(app.navigationBars["高级"].exists)
-        assertNoBatchControls()
-        scrollTo(debugToggle, in: form, swipeUp: false, expectingAbsent: settingsDebugElements)
-        XCTAssertEqual(app.switches.matching(identifier: "show-debug-tools").count, 1)
-        expectSwitch(debugToggle, enabled: false)
+    private func assertSettingsDebugOff(in form: XCUIElement,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.navigationBars["高级"].exists, file: file, line: line)
+        assertNoBatchControls(file: file, line: line)
+        scrollTo(debugToggle, in: form, swipeUp: false, expectingAbsent: settingsDebugElements, file: file, line: line)
+        XCTAssertEqual(app.switches.matching(identifier: "show-debug-tools").count, 1, file: file, line: line)
+        expectSwitch(debugToggle, enabled: false, file: file, line: line)
+        let beforeSwipe = "toggle value=\(String(describing: debugToggle.value)), frame=\(debugToggle.frame); form=\(form.frame)"
         form.swipeUp()
-        for element in settingsDebugElements { expectAbsent(element) }
-        XCTAssertFalse(app.switches["reference-search-enabled"].exists)
-        XCTAssertFalse(app.buttons["debug-search-timing"].exists)
-        assertNoBatchControls()
+        for element in settingsDebugElements {
+            expectAbsent(element, onFailure: {
+                // full1's trace records a timeout, but no returned exists value
+                // or node tree. Preserve evidence before the strict failure;
+                // do not toggle, scroll again, hide a node or extend the wait.
+                let failedNode = element.exists ? element.debugDescription : "Absent when failure evidence was captured"
+                let toggleNode = self.debugToggle.exists ? self.debugToggle.debugDescription : "Debug toggle absent"
+                let evidence = XCTAttachment(string:
+                    "BEFORE SWIPE\n\(beforeSwipe)\nFAILED QUERY\n\(failedNode)\nTOGGLE AFTER SWIPE\n\(toggleNode)\nTREE\n\(self.app.debugDescription)")
+                evidence.name = "Settings-debug-off-after-swipe-accessibility"
+                evidence.lifetime = .keepAlways
+                self.add(evidence)
+                self.attach("settings-debug-off-after-swipe-failure")
+            }, file: file, line: line)
+        }
+        expectSwitch(debugToggle, enabled: false, file: file, line: line)
+        XCTAssertFalse(app.switches["reference-search-enabled"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["debug-search-timing"].exists, file: file, line: line)
+        assertNoBatchControls(file: file, line: line)
     }
 
     private func assertUserLibrary() throws {
@@ -1234,9 +1332,12 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(app.alerts.firstMatch.exists, file: file, line: line)
     }
 
-    private func expectAbsent(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+    private func expectAbsent(_ element: XCUIElement, onFailure: (() -> Void)? = nil,
+                              file: StaticString = #filePath, line: UInt = #line) {
         let absent = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [absent], timeout: 5), .completed, file: file, line: line)
+        let result = XCTWaiter.wait(for: [absent], timeout: 5)
+        if result != .completed { onFailure?() }
+        XCTAssertEqual(result, .completed, file: file, line: line)
     }
 
     private func expectHittable(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {

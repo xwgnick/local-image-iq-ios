@@ -302,12 +302,32 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
         let deletion = CleanupPublicationDeletion()
         let state = SimilarPhotoCleanupState(grouping: grouping, deletion: deletion)
         addTeardownBlock { @MainActor in
+            let retainedGroupIDs = state.groups.map(\.id)
+            let retainedMembers = state.groups.map { $0.photos.map(\.id) }
+            let retainedDisplayIDs = state.displayGroups.map(\.id)
+            let browsingSession = state.browsingSessionID
             // Even failed expectations must open every condition before joining.
             plans.forEach { $0.gate.release() }
             state.pause()
+            // Background is a visibility/authority boundary, not deletion of
+            // completed data. Assert immediate revocation and retention after
+            // draining so a late validator cannot silently publish new groups.
+            XCTAssertFalse(state.canBrowse)
+            XCTAssertFalse(state.canSelect)
+            XCTAssertNil(state.selectionSessionID)
+            XCTAssertTrue(state.selectedIDs.isEmpty)
+            XCTAssertNil(state.pendingDeletion)
             await state.waitUntilIdle()
             XCTAssertFalse(state.isValidating)
-            XCTAssertTrue(state.groups.isEmpty)
+            XCTAssertFalse(state.canBrowse)
+            XCTAssertFalse(state.canSelect)
+            XCTAssertNil(state.selectionSessionID)
+            XCTAssertTrue(state.selectedIDs.isEmpty)
+            XCTAssertNil(state.pendingDeletion)
+            XCTAssertEqual(state.groups.map(\.id), retainedGroupIDs)
+            XCTAssertEqual(state.groups.map { $0.photos.map(\.id) }, retainedMembers)
+            XCTAssertEqual(state.displayGroups.map(\.id), retainedDisplayIDs)
+            XCTAssertEqual(state.browsingSessionID, browsingSession)
             XCTAssertEqual(deletion.calls, 0)
         }
         return CleanupPublicationFixture(state: state, grouping: grouping, deletion: deletion)
@@ -340,6 +360,10 @@ final class SimilarCleanupPublicationStateTests: XCTestCase {
         XCTAssertEqual(state.candidateCount, 0, file: file, line: line)
         XCTAssertEqual(state.staleCount, 0, file: file, line: line)
         XCTAssertEqual(state.unindexedCount, 0, file: file, line: line)
+        XCTAssertFalse(state.canBrowse, file: file, line: line)
+        XCTAssertFalse(state.canSelect, file: file, line: line)
+        XCTAssertNil(state.browsingSessionID, file: file, line: line)
+        XCTAssertNil(state.selectionSessionID, file: file, line: line)
         XCTAssertTrue(state.selectedIDs.isEmpty, file: file, line: line)
         XCTAssertNil(state.pendingDeletion, file: file, line: line)
         XCTAssertFalse(state.isDeleting, file: file, line: line)

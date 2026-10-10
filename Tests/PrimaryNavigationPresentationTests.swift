@@ -39,6 +39,30 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         assertNoSideEffects(c)
     }
 
+    func testUnreadableSyntheticBrowsingSourceBlocksGroupingDespiteAppReadiness() async throws {
+        let c = try await context()
+        c.browsingLibrary.revoke()
+        let host = try await mountContent(c)
+        defer { host.close() }
+        c.navigation.select(.cleanup)
+        try await settle(host)
+        await c.cleanup.waitUntilIdle()
+        try await settle(host)
+        XCTAssertTrue(c.state.canRead && c.state.modelsReady, "App readiness is not browsing authority")
+        XCTAssertEqual(c.cleanup.displayAccessIsReadable, false)
+        XCTAssertTrue(c.grouping.restores.isEmpty)
+        XCTAssertTrue(c.grouping.thresholds.isEmpty)
+        XCTAssertFalse(c.cleanup.hasScanned)
+        XCTAssertTrue(c.cleanup.groups.isEmpty)
+        XCTAssertFalse(c.cleanup.canBrowse)
+        XCTAssertFalse(c.cleanup.canSelect)
+        XCTAssertNil(c.cleanup.browsingSessionID)
+        XCTAssertNil(c.cleanup.selectionSessionID)
+        XCTAssertTrue(c.cleanup.selectedIDs.isEmpty)
+        XCTAssertNil(c.cleanup.pendingDeletion)
+        assertNoSideEffects(c)
+    }
+
     func testEmbeddedFirstReadyEntryGroupsOnceAndTabReturnReusesSelection() async throws {
         let c = try await context()
         let host = try await mountContent(c)
@@ -57,6 +81,9 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         XCTAssertTrue(descendants(host.controller.view, of: UISlider.self).isEmpty,
                   "Production cleanup starts with its threshold disclosure collapsed")
         try capture(host, name: "main-navigation-cleanup-dark")
+        XCTAssertTrue(c.cleanup.canBrowse)
+        XCTAssertTrue(c.cleanup.canSelect)
+        let browsingSession = try XCTUnwrap(c.cleanup.browsingSessionID)
         let session = try XCTUnwrap(c.cleanup.selectionSessionID)
         let group = try XCTUnwrap(c.cleanup.groups.first)
         let selectedID = try XCTUnwrap(group.photos.first?.id)
@@ -73,6 +100,7 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         c.navigation.select(.cleanup)
         try await settle(host)
         await c.cleanup.waitUntilIdle()
+        XCTAssertEqual(c.cleanup.browsingSessionID, browsingSession)
         XCTAssertEqual(c.cleanup.selectionSessionID, session)
         XCTAssertEqual(c.cleanup.selectedIDs, Set([selectedID]))
         XCTAssertEqual(c.grouping.restores.count, 1)
@@ -310,9 +338,16 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
         let state = AppState(worker: worker, authorizationStatus: { .authorized },
                              queryTranslator: NavigationReviewTranslator())
         let grouping = NavigationReviewGrouping(photos: worker.hits.map(\.photo))
-        let cleanup = SimilarPhotoCleanupState(grouping: grouping, deletion: NavigationReviewDeletion(), preferences: nil)
+        // App readiness must not stand in for Photos display authority. Supply
+        // only synthetic full revisions before the real root installs its default.
+        let browsingLibrary = RefinementLibrary(grouping.groups.flatMap(\.photos).map {
+            PhotoRevision(id: $0.id, modificationTime: $0.modificationTime, creationTime: $0.creationTime)
+        })
+        let cleanup = SimilarPhotoCleanupState(grouping: grouping, deletion: NavigationReviewDeletion(), preferences: nil,
+            browsingAccess: SimilarCleanupBrowsingAccess(library: browsingLibrary))
         let c = NavigationReviewContext(state: state, worker: worker, grouping: grouping,
-                                        cleanup: cleanup, navigation: PrimaryNavigationPresentation())
+                                        cleanup: cleanup, browsingLibrary: browsingLibrary,
+                                        navigation: PrimaryNavigationPresentation())
         addTeardownBlock { @MainActor in
             worker.gate?.release()
             cleanup.leavePage()
@@ -324,10 +359,12 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
             XCTAssertEqual(PhotoLibraryClient.authorization, permission)
             XCTAssertFalse(PhotoLibraryClient.canRead)
             XCTAssertEqual(worker.unexpectedCalls, 0)
+            XCTAssertEqual(browsingLibrary.unexpectedCalls, 0, "Browsing must not enumerate, request pixels or resolve places")
         }
         state.refresh()
         await state.waitUntilIdle()
         XCTAssertTrue(state.modelsReady && state.canRead)
+        XCTAssertEqual(cleanup.displayAccessIsReadable, true)
         XCTAssertFalse(state.library.canReadImages, "Synthetic readiness never authorizes the real Photos client")
         XCTAssertNil(state.appleTranslationService)
         return c
@@ -335,6 +372,7 @@ final class PrimaryNavigationPresentationTests: XCTestCase {
 
     private func assertNoSideEffects(_ c: NavigationReviewContext) {
         XCTAssertEqual(c.worker.unexpectedCalls, 0)
+        XCTAssertEqual(c.browsingLibrary.unexpectedCalls, 0)
         XCTAssertFalse(PhotoLibraryClient.canRead)
         XCTAssertFalse(c.state.allowICloudDownload)
         XCTAssertFalse(c.state.library.canReadImages)
@@ -487,6 +525,7 @@ private struct NavigationReviewContext {
     let worker: NavigationReviewWorker
     let grouping: NavigationReviewGrouping
     let cleanup: SimilarPhotoCleanupState
+    let browsingLibrary: RefinementLibrary
     let navigation: PrimaryNavigationPresentation
 }
 

@@ -285,9 +285,17 @@ final class PresentationTests: XCTestCase {
 
     func testManualIndexExplanationCoversNewEditedDeletedAndInaccessiblePhotos() {
         let explanation = LibrarySheet.manualIndexExplanation
-        XCTAssertTrue(explanation.contains("图片索引在应用前台就绪时自动更新"))
+        XCTAssertTrue(explanation.contains("图片索引在应用前台就绪时自动更新，也可在这里手动更新。"),
+                      "Image indexing must describe both foreground automatic updates and the manual alternative")
         XCTAssertTrue(explanation.contains("手动更新会等待自动同步停止，不是重新开启自动同步"))
-        XCTAssertTrue(explanation.contains("文字索引仍需单独手动建立"))
+        XCTAssertTrue(explanation.contains("文字搜索每次从关闭切换为开启会增量更新一次"),
+                      "Each explicit OCR OFF-to-ON transition requests one incremental update")
+        XCTAssertTrue(explanation.contains("恢复已保存的开启状态不会自动运行"),
+                      "Restoring the saved OCR preference must not be described as starting work")
+        XCTAssertTrue(explanation.contains("也可在「\(LibrarySheet.Route.textIndex.title)」中手动更新或重试"),
+                      "Manual OCR maintenance belongs to the separate library destination, not an inline home button")
+        XCTAssertFalse(explanation.contains("文字索引仍需单独手动建立"),
+                       "The retired manual-only OCR instruction must not return alongside the automatic opt-in copy")
         XCTAssertTrue(explanation.contains("搜索会排除已删除或不可访问的照片"))
         XCTAssertTrue(explanation.contains("本机保存的索引数不代表当前可搜索数量"))
         XCTAssertTrue(explanation.contains("请保持应用在前台，已完成的记录会保留"))

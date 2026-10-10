@@ -111,6 +111,9 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         XCTAssertTrue(c.state.isSelectingResults)
         XCTAssertEqual(c.state.selectedResultIDs, Set([first]))
         attachSearchGeometry(c, host: host, scroll: scroll, boundary: boundary, phase: "hidden")
+        XCTAssertTrue(c.cleanup.canBrowse)
+        XCTAssertTrue(c.cleanup.canSelect)
+        let cleanupBrowsingSession = try XCTUnwrap(c.cleanup.browsingSessionID)
         let cleanupSession = try XCTUnwrap(c.cleanup.selectionSessionID)
         let photo = try XCTUnwrap(c.cleanup.groups.first?.photos.first)
         c.cleanup.toggleSelection(photo.id)
@@ -151,6 +154,7 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         XCTAssertEqual(pages.map(\.count), returnedPageCounts)
         XCTAssertTrue(c.state.isSelectingResults)
         XCTAssertEqual(c.state.selectedResultIDs, Set([first]))
+        XCTAssertEqual(c.cleanup.browsingSessionID, cleanupBrowsingSession)
         XCTAssertEqual(c.cleanup.selectionSessionID, cleanupSession)
         XCTAssertEqual(c.cleanup.selectedIDs, Set([photo.id]))
         attachSearchGeometry(c, host: host, scroll: scroll, boundary: boundary, phase: "hidden-again")
@@ -171,8 +175,11 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         let anchor = try XCTUnwrap(descendants(host.controller.view, PrimaryPageAccessibilityAnchorView.self).first)
         let nav = try navigation(containing: anchor, in: host)
         let group = try XCTUnwrap(c.cleanup.groups.first)
-        let session = try XCTUnwrap(c.cleanup.selectionSessionID)
-        browser.open(group: group, photoID: group.photos[0].id, sessionID: session)
+        let browsingSession = try XCTUnwrap(c.cleanup.browsingSessionID)
+        let selectionSession = try XCTUnwrap(c.cleanup.selectionSessionID)
+        // A detail route follows display identity, not the separately revocable
+        // selection/deletion authority. Ordinary tab return preserves both.
+        browser.open(group: group, photoID: group.photos[0].id, sessionID: browsingSession)
         try await requireLayout(host) {
             !self.controllers(host.controller).compactMap { $0 as? SimilarPhotoGroupGridController }.isEmpty
         }
@@ -192,7 +199,8 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         XCTAssertFalse(nav.view.accessibilityElementsHidden)
         XCTAssertTrue(controllers(host.controller).contains { $0 === grid })
         XCTAssertEqual(browser.detailRoute, route)
-        XCTAssertEqual(c.cleanup.selectionSessionID, session)
+        XCTAssertEqual(c.cleanup.browsingSessionID, browsingSession)
+        XCTAssertEqual(c.cleanup.selectionSessionID, selectionSession)
         XCTAssertEqual(c.grouping.scans, 1)
     }
 
@@ -494,15 +502,24 @@ final class PrimaryPageAccessibilityTests: XCTestCase {
         let state = AppState(worker: worker, authorizationStatus: { ready ? .authorized : .notDetermined },
                              queryTranslator: PrimaryAXTranslator())
         let grouping = PrimaryAXGrouping(photos: worker.hits.map(\.photo))
-        let cleanup = SimilarPhotoCleanupState(grouping: grouping, deletion: PrimaryAXNoPhotos(), preferences: nil)
+        // Keep the real Photos client unreadable while supplying the cleanup
+        // page's distinct metadata-only display source, just as the sync fixture does.
+        let browsingLibrary = RefinementLibrary(grouping.groups.flatMap(\.photos).map {
+            PhotoRevision(id: $0.id, modificationTime: $0.modificationTime, creationTime: $0.creationTime)
+        })
+        let cleanup = SimilarPhotoCleanupState(grouping: grouping, deletion: PrimaryAXNoPhotos(), preferences: nil,
+            browsingAccess: SimilarCleanupBrowsingAccess(library: browsingLibrary))
         addTeardownBlock { @MainActor in
             cleanup.leavePage(); cleanup.pause(); state.enterBackground()
             await cleanup.waitUntilIdle(); await state.waitUntilIdle()
             state.thumbnails.clear()
             XCTAssertEqual(PhotoLibraryClient.authorization, authorization)
             XCTAssertFalse(PhotoLibraryClient.canRead)
+            XCTAssertEqual(browsingLibrary.unexpectedCalls, 0, "Browsing must not enumerate, request pixels or resolve places")
         }
         if ready { state.refresh(); await state.waitUntilIdle(); XCTAssertTrue(state.modelsReady) }
+        XCTAssertEqual(cleanup.displayAccessIsReadable, true)
+        XCTAssertFalse(state.library.canReadImages, "Synthetic display readiness never authorizes real Photos")
         return PrimaryAXContext(state: state, worker: worker, grouping: grouping,
                                 cleanup: cleanup, navigation: PrimaryNavigationPresentation())
     }
