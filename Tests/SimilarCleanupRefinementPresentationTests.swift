@@ -5,7 +5,10 @@ import XCTest
 
 private struct CompactGroupRowSize: PreferenceKey {
     static let defaultValue = CGSize.zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        value = CGSize(width: max(value.width, next.width), height: max(value.height, next.height))
+    }
 }
 
 /// Native-host geometry/identity tests using only synthetic colors/metadata.
@@ -14,6 +17,14 @@ private struct CompactGroupRowSize: PreferenceKey {
 final class SimilarCleanupRefinementPresentationTests: XCTestCase {
     private final class CompactGroupRowMeasurement {
         var size: CGSize = .zero
+    }
+
+    func testRowMeasurementDefaultFromUnmeasuredSiblingsIsAnIdentity() {
+        let measured = CGSize(width: 320, height: 120)
+        var value = CompactGroupRowSize.defaultValue
+        CompactGroupRowSize.reduce(value: &value) { measured }
+        CompactGroupRowSize.reduce(value: &value) { CompactGroupRowSize.defaultValue }
+        XCTAssertEqual(value, measured, "An unmeasured sibling must not erase the row's geometry")
     }
 
     func testOverviewRowIsCompactWithoutShrinkingFivePreviewsOrLargeText() async throws {

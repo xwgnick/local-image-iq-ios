@@ -336,7 +336,7 @@ final class ControlsNativeHost {
         }
         let ready = XCTNSPredicateExpectation(predicate: predicate, object: nil)
         guard await XCTWaiter.fulfillment(of: [ready], timeout: 5) == .completed else {
-            XCTFail("Missing native layout/publication milestone", file: file, line: line)
+            XCTFail("Missing native layout/publication milestone; window=\(window.bounds), key=\(window.isKeyWindow), hidden=\(window.isHidden), root=\(controller.view.bounds), installed=\(controller.view.window != nil), children=\(controller.view.subviews.count)", file: file, line: line)
             throw ControlsPresentationFailure.layout
         }
         try await settle()

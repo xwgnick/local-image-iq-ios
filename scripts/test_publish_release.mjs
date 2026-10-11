@@ -462,7 +462,8 @@ test('success: stream/verify ALL payload + manifest, then publish prerelease, ne
   assert.equal(delivery.assets.length, 8); assert.ok(delivery.assets.every(a => a.name !== 'delivery.json'));
   const provenance = JSON.parse([...mock.assets.values()].find(a => a.name === 'provenance.json').data.toString());
   assert.equal(provenance.redistributionApproved, false);
-  assert.match(mock.release.body, /^Public CI release delivery:/);
+  assert.equal(mock.release.name, `片刻寻 · ${result.release.tag} · SUCCESS`);
+  assert.match(mock.release.body, /^片刻寻－AI搜照片与相似清理\n凭记忆线索找照片，挑选清理相似画面\n\nPublic CI release delivery:/);
   assert.match(mock.release.body, /does not grant third-party redistribution approval; legal review remains pending/);
   assert.ok(f.logs.some(line => line.startsWith('Public CI release delivery:')));
   for (const asset of result.assets) {

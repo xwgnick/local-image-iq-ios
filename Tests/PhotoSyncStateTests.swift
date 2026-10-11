@@ -9,6 +9,40 @@ import ImageIQCore
 /// Photos assets, model loads, storage writes, polling or timing-based ordering.
 @MainActor
 final class PhotoSyncStateTests: XCTestCase {
+    func testBatchDeletionOfFifteenDoesNotRestartForUnrelatedPhotoKitNotifications() async {
+        let initial = SyncStateRun(result: syncResult(count: 35, encoded: 0))
+        let removal = PhotoSyncProgress(phase: .updating, total: 0, removed: 15)
+        let deletion = SyncStateRun(initial: removal,
+            result: PhotoSyncResult(summary: syncSummary(20), progress: removal))
+        let service = SyncStateService([initial, deletion])
+        let state = makeState(service)
+        state.updateAvailability(ready: true, networkAllowed: false)
+        await initial.entered.wait()
+        initial.release.send()
+        await state.waitUntilIdle()
+
+        func notify(hasImageDetails: Bool) {
+            if PhotoLibraryClient.shouldNotifyImageChange(hasSnapshot: true,
+                authorizationChanged: false, hasChangeDetails: hasImageDetails) { state.libraryChanged() }
+        }
+        notify(hasImageDetails: true)
+        await deletion.entered.wait()
+        let runningPhase = state.phase
+        for _ in 0..<30 { notify(hasImageDetails: false) }
+        XCTAssertEqual(state.phase, runningPhase)
+        XCTAssertEqual(deletion.cancelled.count, 0)
+        deletion.release.send()
+        await state.waitUntilIdle()
+        XCTAssertEqual(state.phase, .completed)
+        XCTAssertEqual(state.progress.removed, 15)
+        for _ in 0..<30 { notify(hasImageDetails: false) }
+        await state.waitUntilIdle()
+        let calls = await service.calls
+        XCTAssertEqual(calls, 2, "Initial sync plus the real deletion, never repeated completion popups")
+        XCTAssertEqual(state.phase, .completed)
+        XCTAssertEqual(state.progress.removed, 15)
+    }
+
     func testDisabledStateCannotStartEvenWithFakeReadiness() async {
         let state = PhotoSyncState()
         state.updateAvailability(ready: true, networkAllowed: true)

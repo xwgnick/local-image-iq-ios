@@ -333,7 +333,8 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
                 XCTAssertTrue(selected.canCapture)
                 XCTAssertEqual(readiness.loadedCallbackCount, 1, "Selection must not reload the thumbnail")
                 let selectionMark = try XCTUnwrap(selected.subviews.compactMap { $0 as? UIImageView }.last)
-                XCTAssertEqual(selectionMark.isHidden, !f.selected)
+                XCTAssertFalse(selectionMark.isHidden, "Selection mode also shows the empty circle")
+                XCTAssertEqual(selected.accessibilityValue, f.selected ? "已勾选待删除" : "未勾选")
                 XCTAssertFalse(selectionMark.isUserInteractionEnabled)
                 XCTAssertTrue(selectionMark.accessibilityElementsHidden)
                 XCTAssertTrue(selected.subviews.last === selectionMark, "The UIKit badge must stay above the thumbnail")
@@ -356,7 +357,7 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
                 XCTAssertTrue(repeated.readiness === readiness)
                 XCTAssertTrue(repeated.canCapture)
                 XCTAssertEqual(readiness.loadedCallbackCount, 1)
-                XCTAssertEqual(selectionMark.isHidden, !f.selected)
+                XCTAssertFalse(selectionMark.isHidden)
                 XCTAssertTrue(nativeImage.image === renderedImage)
                 XCTAssertTrue(hasRedCenter(try XCTUnwrap(repeated.capture()).image))
                 XCTAssertEqual(f.provider.plans.count, step + 1,
@@ -711,7 +712,9 @@ final class SimilarPhotoGroupBrowserTests: XCTestCase {
         try await settle(host)
         XCTAssertEqual(detail.collectionView.contentOffset, offset)
         XCTAssertEqual(f.cleanup.selectedIDs, selected)
-        detail.activateItem(at: 175)
+        // Shared selection mode makes taps select. Exercise the gallery route
+        // directly here: this test covers modal lifecycle with retained choices.
+        f.browser.viewPhoto(group.photos[175].id, in: group)
         XCTAssertEqual(f.browser.viewer?.id, group.photos[175].id)
         try await waitForCover(host, present: true)
         // The genuine viewer shows unauthorized placeholders in this host. This
@@ -1038,6 +1041,7 @@ private struct BrowserPreviewRoot: View {
         let photo = fixture.photo
         SimilarPhotoLoadedPreviewTile(photo: photo, cache: fixture.cache, networkAllowed: fixture.networkAllowed,
             label: "TEST preview", identifier: "TEST-preview", selected: fixture.selected, enabled: true,
+            selectionMode: true,
             open: { fixture.browser.open(group: fixture.group, photoID: photo.id, sessionID: fixture.session, capture: $0) })
             .frame(width: fixture.size.width, height: fixture.size.height)
             .environment(\.displayScale, fixture.scale)

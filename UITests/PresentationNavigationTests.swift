@@ -959,6 +959,52 @@ final class PresentationNavigationTests: XCTestCase {
         assertNoWorkOrPrompt()
     }
 
+    func testCleanupOverviewSelectionAndHeldPreviewsUseSharedMode() throws {
+        app.launchEnvironment["IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE"] = "1"
+        defer { app.launchEnvironment.removeValue(forKey: "IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE") }
+        launch()
+        app.buttons["primary-cleanup-tab"].tap()
+        let first = app.buttons["similar-cleanup-group-1-photo-1"]
+        let second = app.buttons["similar-cleanup-group-1-photo-2"]
+        let overflow = app.buttons["similar-cleanup-group-1-photo-5"]
+        let all = app.buttons["similar-cleanup-group-1-select-group"]
+        let mode = app.buttons["similar-cleanup-overview-selection-mode"]
+        expectHittable(first)
+        XCTAssertFalse(all.exists)
+        first.press(forDuration: 0.6)
+        expectHittable(first)
+        XCTAssertFalse(app.collectionViews["similar-cleanup-five-column-grid"].exists)
+        mode.tap()
+        expectHittable(all)
+        XCTAssertEqual(mode.label, "清空所有组并退出选择")
+        first.tap()
+        let selected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "已勾选待删除"), object: first)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        second.press(forDuration: 0.6)
+        XCTAssertEqual(second.value as? String, "未勾选")
+        XCTAssertEqual(first.value as? String, "已勾选待删除")
+        overflow.press(forDuration: 0.6)
+        XCTAssertFalse(app.collectionViews["similar-cleanup-five-column-grid"].exists)
+        overflow.tap()
+        expectHittable(app.collectionViews["similar-cleanup-five-column-grid"])
+        let detailMode = app.buttons["similar-cleanup-selection-mode"]
+        XCTAssertEqual(detailMode.label, "清空所有组并退出选择")
+        let detailPhoto = app.descendants(matching: .any)
+            .matching(identifier: "similar-cleanup-detail-photo-2").firstMatch
+        expectHittable(detailPhoto)
+        detailPhoto.press(forDuration: 0.6)
+        XCTAssertEqual(detailPhoto.value as? String, "未勾选")
+        detailMode.tap()
+        XCTAssertEqual(detailMode.label, "选择")
+        XCTAssertFalse(app.buttons["prepare-similar-deletion"].exists)
+        app.buttons["similar-cleanup-all-groups"].tap()
+        expectHittable(first)
+        XCTAssertEqual(first.value as? String, "未勾选")
+        XCTAssertEqual(mode.label, "选择")
+        XCTAssertFalse(all.exists)
+    }
+
     func testPhysicalCleanupEdgeReturnCancelsShortDragAndPreservesMidGridRangeSelection() throws {
         app.launchEnvironment["IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE"] = "1"
         defer { app.launchEnvironment.removeValue(forKey: "IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE") }

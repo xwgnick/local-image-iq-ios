@@ -286,7 +286,8 @@ function draftURL(release) {
 }
 
 function description(run, flags, boundary) {
-  return `Public CI release delivery: ${flags.status}; device=${flags.device}; models=${flags.models}.\n` +
+  return `片刻寻－AI搜照片与相似清理\n凭记忆线索找照片，挑选清理相似画面\n\n` +
+    `Public CI release delivery: ${flags.status}; device=${flags.device}; models=${flags.models}.\n` +
     `Run: ${run.url}\nCommit: ${run.sha}\nError/validation boundary: ${boundary}.\n` +
     'Unsigned builds require local re-signing. No Apple credentials, private photos, or physical-device validation ' +
     'are supplied by this release. Public availability does not grant third-party redistribution approval; legal review remains pending. ' +
@@ -362,7 +363,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env,
       boundary = 'publication'; release.state = 'unknown';
       const published = await client.json(`/releases/${release.id}`, { method: 'PATCH', body: {
         tag_name: run.tag, target_commitish: run.sha,
-        draft: false, prerelease: true, make_latest: 'false', name: `CI ${run.tag} SUCCESS`,
+        draft: false, prerelease: true, make_latest: 'false', name: `片刻寻 · ${run.tag} · SUCCESS`,
         body: description(run, flags, 'all delivery assets verified; upstream status supplied by workflow'),
       } });
       checkRelease(published, run, release.id, false);
