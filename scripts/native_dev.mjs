@@ -30,7 +30,7 @@ export function makeArgs(selectors, simulator, buildOnly) {
     'CODE_SIGNING_ALLOWED=NO', 'IMAGEIQ_REQUIRE_MODELS=0', 'IMAGEIQ_TEST_ALL_COMPUTE_UNITS=0'];
 }
 
-// Xcode 16's test-results schema uses spaced node types, not TestCase/TestSuite.
+// Xcode's test-results schema uses spaced node types, not TestCase/TestSuite.
 // Public schema/example: https://qiita.com/irgaly/items/1221133786bbb76d9ba2
 // This is a supported-shape contract, not evidence of a local Xcode 16.4 run.
 const bundleTypes = new Set(['Unit test bundle', 'UI test bundle']);
@@ -38,6 +38,7 @@ const nodeTypes = new Set([
   'Test Plan', ...bundleTypes, 'Test Suite', 'Test Case', 'Device',
   'Test Plan Configuration', 'Arguments', 'Repetition', 'Test Case Run',
   'Failure Message', 'Source Code Reference', 'Attachment', 'Expression', 'Test Value',
+  'Runtime Warning',
 ]);
 const caseResults = new Set(['Passed', 'Failed', 'Skipped']);
 const withoutEmptyParentheses = value => typeof value === 'string' ? value.replace(/\(\)$/, '') : value;
@@ -47,6 +48,7 @@ const exactOrPathSuffix = (value, suffix) => typeof value === 'string'
 export function validateTestResults(summary, tree, selectors) {
   selectors = parseSelectors(selectors.join('\n'));
   const errors = [];
+  const warnings = [];
   const counts = {};
   for (const key of ['totalTestCount', 'passedTests', 'failedTests', 'skippedTests']) {
     const value = summary?.[key];
@@ -70,6 +72,14 @@ export function validateTestResults(summary, tree, selectors) {
       if (!nodeTypes.has(node.nodeType)) errors.push(`Unsupported nodeType ${JSON.stringify(node.nodeType)} at ${label}.`);
       if (node.children !== undefined && !Array.isArray(node.children)) {
         errors.push(`Unknown test tree shape: children must be an array at ${label}.`);
+      }
+      if (node.nodeType === 'Runtime Warning') {
+        warnings.push({ name: node.name ?? '(unnamed)',
+          test: ancestors.findLast(parent => parent.nodeType === 'Test Case')?.nodeIdentifier ?? null });
+        if (Array.isArray(node.children) && node.children.length) {
+          errors.push(`Unsupported Runtime Warning children at ${label}.`);
+        }
+        continue;
       }
       // Traverse only structural children, at any depth; never scan metadata or log strings.
       const childHasCase = walk(Array.isArray(node.children) ? node.children : [], [...ancestors, node]);
@@ -118,7 +128,7 @@ export function validateTestResults(summary, tree, selectors) {
     else if (!executedTests) errors.push(`Requested selector has no executed (Passed/Failed) tests: ${selector}.`);
     return { selector, matchedSuites: matchedSuites.length, passedTests, failedTests, skippedTests, executedTests };
   });
-  return { status: errors.length ? 'failed' : 'passed', counts, selections, errors };
+  return { status: errors.length ? 'failed' : 'passed', counts, selections, errors, warnings };
 }
 
 export function runNativeChecks(selectors, simulator, buildOnly, {
@@ -157,6 +167,7 @@ export function runNativeChecks(selectors, simulator, buildOnly, {
     const validation = validateTestResults(reports.summary, reports.tests, selectors);
     report.counts = validation.counts;
     report.selections = validation.selections;
+    report.warnings = validation.warnings;
     report.errors.push(...validation.errors);
     if (!report.errors.length) { report.status = 'passed'; report.testsValidated = true; }
   } else {

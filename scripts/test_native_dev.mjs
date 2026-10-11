@@ -67,6 +67,20 @@ test('documented spaced types validate a class and an exact XCTest method', () =
   assert.deepEqual(report.counts, summary());
   assert.deepEqual(report.selections.map(s => [s.matchedSuites, s.executedTests, s.passedTests]), [[1, 1, 1], [1, 1, 1]]);
 });
+test('Xcode26 runtime-warning leaves remain explicit diagnostics, never executed test cases', () => {
+  const warning = { nodeType: 'Runtime Warning', name: 'Multiple Runtime Warnings' };
+  const test = { ...testCase(), children: [warning] };
+  const report = validate(tree(bundle(UNIT, [suite('Foo', [test])])));
+  assert.equal(report.status, 'passed');
+  assert.equal(report.selections[0].executedTests, 1);
+  assert.deepEqual(report.warnings, [{ name: warning.name, test: 'Foo/testOne()' }]);
+  reject(tree(bundle(UNIT, [suite('Foo', [{ ...warning, name: 'testOne()', result: 'Passed' }])])),
+    undefined, undefined, /No passed Test Case leaf/);
+  reject(tree(bundle(UNIT, [suite('Foo', [{ ...warning, children: [testCase()] }])])),
+    undefined, undefined, /Unsupported Runtime Warning children/);
+  reject(tree(bundle(UNIT, [suite('Foo', [{ ...test, result: 'Failed' }])])),
+    undefined, undefined, /Test Case failed/);
+});
 test('synthetic defaults require executed cases in all four requested suites', () => {
   const selectors = parseSelectors();
   const nodes = tree(bundle(UNIT, selectors.map(s => suite(s.split('/')[1]))));

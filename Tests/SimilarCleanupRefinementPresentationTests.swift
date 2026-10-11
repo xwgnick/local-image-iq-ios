@@ -34,11 +34,10 @@ final class SimilarCleanupRefinementPresentationTests: XCTestCase {
         let group = try XCTUnwrap(f.cleanup.groups.first)
         for width in [CGFloat(320), CGFloat(393)] {
             for type in [DynamicTypeSize.large, .accessibility5] {
-                let sheet = SimilarPhotoCleanupSheet(state: f.cleanup, appState: f.app,
-                    thumbnailContent: { _ in AnyView(Color.orange) })
                 let measured = CompactGroupRowMeasurement()
                 let content = VStack(spacing: 0) {
-                    sheet.groupRow(group, number: 1)
+                    SimilarPhotoCleanupGroupRow(group: group, number: 1, state: f.cleanup, browser: f.browser,
+                        preview: { _, _ in Color.orange }, open: {})
                         .fixedSize(horizontal: false, vertical: true)
                         .background {
                             GeometryReader { geometry in

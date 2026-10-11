@@ -560,52 +560,10 @@ struct SimilarPhotoCleanupSheet: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    func groupRow(_ group: SimilarPhotoGroup, number: Int) -> some View {
-        let indices = SimilarPhotoGroupGeometry.previewIndices(count: group.photos.count)
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                Button {
-                    if let first = group.photos.first { open(group, photoID: first.id) }
-                } label: {
-                    HStack {
-                        Text("第\(number)组 · \(group.photos.count)张").font(.subheadline.weight(.medium))
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Image(systemName: "chevron.right").foregroundStyle(IQStyle.secondary)
-                    }.frame(minHeight: 44).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).disabled(!state.canBrowse || state.isDeleting || state.isSelecting)
-                .accessibilityIdentifier("similar-cleanup-group-\(number)-header")
-                .accessibilityHint("打开本组全部照片，定位第一张，不改变选择")
-                if browser.selectionMode {
-                    Button("全选") {
-                        guard let token = state.beginRangeSelection(groupID: group.id) else { return }
-                        state.finishRangeSelection(token: token, selectedInGroup: Set(group.photos.map(\.id)))
-                    }
-                    .frame(minWidth: 44, minHeight: 44)
-                    .disabled(!state.canSelect)
-                    .accessibilityIdentifier("similar-cleanup-group-\(number)-select-group")
-                    .accessibilityHint("选择本组全部照片，包括折叠照片，不自动留一张")
-                }
-            }
-            SimilarPhotoMosaicLayout {
-                ForEach(indices, id: \.self) { index in
-                    let photo = group.photos[index]
-                    previewTile(photo, in: group, number: number, index: index)
-                        .overlay {
-                            if index == 4, group.photos.count > 5 {
-                                ZStack {
-                                    Color.black.opacity(0.5)
-                                    Text("+\(SimilarPhotoGroupGeometry.overflowCount(count: group.photos.count))")
-                                        .font(.headline).foregroundStyle(.white)
-                                }.allowsHitTesting(false).accessibilityHidden(true)
-                            }
-                        }
-                }
-            }
-            .clipped()
-            Rectangle().fill(IQStyle.line).frame(height: 0.5).padding(.top, 4)
-        }
+    private func groupRow(_ group: SimilarPhotoGroup, number: Int) -> some View {
+        SimilarPhotoCleanupGroupRow(group: group, number: number, state: state, browser: browser,
+            preview: { photo, index in previewTile(photo, in: group, number: number, index: index) },
+            open: { if let first = group.photos.first { open(group, photoID: first.id) } })
     }
 
     @ViewBuilder
@@ -694,6 +652,60 @@ struct SimilarPhotoCleanupSheet: View {
         showsConfirmation = false
         state.cancelRangeSelection()
         state.invalidateAccess()
+    }
+}
+
+@MainActor
+struct SimilarPhotoCleanupGroupRow<Preview: View>: View {
+    let group: SimilarPhotoGroup
+    let number: Int
+    @ObservedObject var state: SimilarPhotoCleanupState
+    @ObservedObject var browser: SimilarPhotoGroupBrowser
+    let preview: (IndexedPhoto, Int) -> Preview
+    let open: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Button(action: open) {
+                    HStack {
+                        Text("第\(number)组 · \(group.photos.count)张").font(.subheadline.weight(.medium))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Image(systemName: "chevron.right").foregroundStyle(IQStyle.secondary)
+                    }.frame(minHeight: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).disabled(!state.canBrowse || state.isDeleting || state.isSelecting)
+                .accessibilityIdentifier("similar-cleanup-group-\(number)-header")
+                .accessibilityHint("打开本组全部照片，定位第一张，不改变选择")
+                if browser.selectionMode {
+                    Button("全选") {
+                        guard let token = state.beginRangeSelection(groupID: group.id) else { return }
+                        state.finishRangeSelection(token: token, selectedInGroup: Set(group.photos.map(\.id)))
+                    }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .disabled(!state.canSelect)
+                    .accessibilityIdentifier("similar-cleanup-group-\(number)-select-group")
+                    .accessibilityHint("选择本组全部照片，包括折叠照片，不自动留一张")
+                }
+            }
+            SimilarPhotoMosaicLayout {
+                ForEach(SimilarPhotoGroupGeometry.previewIndices(count: group.photos.count), id: \.self) { index in
+                    preview(group.photos[index], index)
+                        .overlay {
+                            if index == 4, group.photos.count > 5 {
+                                ZStack {
+                                    Color.black.opacity(0.5)
+                                    Text("+\(SimilarPhotoGroupGeometry.overflowCount(count: group.photos.count))")
+                                        .font(.headline).foregroundStyle(.white)
+                                }.allowsHitTesting(false).accessibilityHidden(true)
+                            }
+                        }
+                }
+            }
+            .clipped()
+            Rectangle().fill(IQStyle.line).frame(height: 0.5).padding(.top, 4)
+        }
     }
 }
 
