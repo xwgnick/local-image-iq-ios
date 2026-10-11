@@ -7,6 +7,33 @@ import XCTest
 /// No actual gestures, personal images, PhotoKit mutations or timing claims.
 @MainActor
 final class SimilarCleanupRefinementPresentationTests: XCTestCase {
+    func testOverviewRowIsCompactWithoutShrinkingFivePreviewsOrLargeText() async throws {
+        let f = try await controlsFixture(in: self, sizes: [6])
+        f.cleanup.scan()
+        await f.cleanup.waitUntilIdle()
+        let group = try XCTUnwrap(f.cleanup.groups.first)
+        for width in [CGFloat(320), CGFloat(393)] {
+            for type in [DynamicTypeSize.large, .accessibility5] {
+                let sheet = SimilarPhotoCleanupSheet(state: f.cleanup, appState: f.app,
+                    thumbnailContent: { _ in AnyView(Color.orange) })
+                let host = try ControlsNativeHost(
+                    content: AnyView(sheet.groupRow(group, number: 1)),
+                    size: CGSize(width: width, height: 852), dynamicType: type)
+                defer { host.close() }
+                try await host.settle()
+                let size = host.controller.sizeThatFits(in: CGSize(width: width, height: 852))
+                let previewHeight = SimilarPhotoGroupGeometry.previewHeight(count: 5, width: width)
+                XCTAssertEqual(SimilarPhotoGroupGeometry.previewIndices(count: 6).count, 5)
+                XCTAssertGreaterThanOrEqual(size.height, 44 + previewHeight + 12.5 - host.pixel)
+                if type == .large {
+                    XCTAssertLessThanOrEqual(size.height, 44 + previewHeight + 12.5 + host.pixel,
+                        "Row must contain only its 44pt header, full-size previews and 12.5pt spacing/divider")
+                }
+                try host.attach(to: self, name: "UIReview-compact-group-\(Int(width))-\(type)")
+            }
+        }
+    }
+
     func testTwoSlidersUseSavedSimilarityAndActualGroupBoundWithoutRecompute() async throws {
         let f = try await controlsFixture(in: self, sizes: [6, 4])
         f.cleanup.scan()

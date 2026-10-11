@@ -278,6 +278,20 @@ final class OCRLibraryPresentationTests: XCTestCase {
         XCTAssertFalse(c.state.allowICloudDownload)
     }
 
+    func testPrivacySummariesKeepMaterialBoundariesAlongsideFullDetails() {
+        XCTAssertTrue(PrivacySettingsView.localSummary.contains("不上传至应用服务器"))
+        XCTAssertTrue(PrivacySettingsView.localSummary.contains("搜索记录保存在本机"))
+        XCTAssertTrue(PrivacySettingsView.localSummary.contains("关闭 OCR 不会删除已有文字索引"))
+        XCTAssertTrue(PrivacySettingsView.cloudSummary.contains("默认关闭"))
+        XCTAssertTrue(PrivacySettingsView.cloudSummary.contains("同意后仅下载当前照片"))
+        XCTAssertTrue(PrivacySettingsView.cloudSummary.contains("Apple"))
+        XCTAssertTrue(PrivacySettingsView.sharingSummary.contains("勾选并确认"))
+        XCTAssertTrue(PrivacySettingsView.sharingSummary.contains("同步到其他设备"))
+        XCTAssertTrue(PrivacySettingsView.sharingSummary.contains("接收方可保留副本"))
+        XCTAssertTrue(PrivacySettingsView.ocrExplanation.contains("清除索引才会一并删除"))
+        XCTAssertTrue(PrivacySettingsView.cloudExplanation.contains("不会开启全局下载"))
+    }
+
     func testCoveredFooterStaysBlankAndDoesNotOverlapLibraryFormDuringQueuedAndRunningOCR() async throws {
         let c = try await context()
         c.state.enterBackground()

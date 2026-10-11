@@ -377,9 +377,11 @@ struct SimilarPhotoCleanupSheet: View {
                 if state.hasScanned { summary }
                 // Keep group geometry alive behind the privacy cover so the
                 // ScrollView's offset survives; previewTile releases its pixels.
-                ForEach(state.visibleGroups) { group in
-                    if let number = state.displayNumber(for: group.id) {
-                        groupCard(group, number: number)
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(state.visibleGroups) { group in
+                        if let number = state.displayNumber(for: group.id) {
+                            groupRow(group, number: number)
+                        }
                     }
                 }
             }
@@ -519,10 +521,10 @@ struct SimilarPhotoCleanupSheet: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func groupCard(_ group: SimilarPhotoGroup, number: Int) -> some View {
+    func groupRow(_ group: SimilarPhotoGroup, number: Int) -> some View {
         let indices = SimilarPhotoGroupGeometry.previewIndices(count: group.photos.count)
         let selection = SimilarGroupPresentation.selection(in: group, selectedIDs: state.selectedIDs)
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Button { state.toggleGroupSelection(group.id) } label: {
                     Image(systemName: selection == .all ? "checkmark.circle.fill" : selection == .partial ? "minus.circle.fill" : "circle")
@@ -563,7 +565,7 @@ struct SimilarPhotoCleanupSheet: View {
                 }
             }
             .clipped()
-            Rectangle().fill(IQStyle.line).frame(height: 0.5).padding(.top, 12)
+            Rectangle().fill(IQStyle.line).frame(height: 0.5).padding(.top, 4)
         }
     }
 

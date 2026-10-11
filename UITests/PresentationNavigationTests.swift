@@ -469,6 +469,35 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
+    func testPrivacyDetailsStartCollapsedAndExpandWithoutStartingWork() throws {
+        launch()
+        app.buttons["open-settings"].tap()
+        expectHittable(app.buttons["close-settings"])
+        openSettingsPage("settings-privacy", title: "隐私与关于")
+        let form = try sheetForm()
+        let localDetails = app.descendants(matching: .any).matching(identifier: "privacy-local-details").firstMatch
+        let systemDetails = app.descendants(matching: .any).matching(identifier: "privacy-system-details").firstMatch
+        let localText = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "可选文字搜索使用系统 Vision")).firstMatch
+        let systemText = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "全局 iCloud 下载默认关闭")).firstMatch
+        expectAbsent(localText)
+        expectAbsent(systemText)
+        scrollTo(localDetails, in: form)
+        localDetails.tap()
+        scrollTo(localText, in: form)
+        XCTAssertTrue(localText.label.contains("已完成的文字记录保留"))
+        scrollTo(localDetails, in: form)
+        localDetails.tap()
+        expectAbsent(localText)
+        scrollTo(systemDetails, in: form)
+        systemDetails.tap()
+        scrollTo(systemText, in: form)
+        XCTAssertTrue(systemText.label.contains("不会开启全局下载"))
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertFalse(app.buttons["stop-indexing"].exists)
+        XCTAssertFalse(app.buttons["pause-text-index"].exists)
+        attach("UIReview-privacy-layered-details")
+    }
+
     func testPhotoTextToggleDefersWithoutPermissionAndHasNoInlineMaintenanceButton() throws {
         if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
             throw XCTSkip("Live photo text opt-in requires the real bundled models")
@@ -582,6 +611,9 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertFalse(toggle.exists, "Settings must not duplicate the home OCR opt-in")
         XCTAssertFalse(update.exists, "Text index management now belongs to Library, not Settings")
         openSettingsPage("settings-privacy", title: "隐私与关于")
+        let localDetails = app.descendants(matching: .any).matching(identifier: "privacy-local-details").firstMatch
+        scrollTo(localDetails, in: try sheetForm())
+        localDetails.tap()
         let localPrivacy = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "可选文字搜索使用系统 Vision")).firstMatch
         scrollTo(localPrivacy, in: try sheetForm())
         for fragment in ["每次从关闭切换为开启会增量更新一次", "恢复已保存的开启状态、打开页面或搜索不会自动重新识别",
