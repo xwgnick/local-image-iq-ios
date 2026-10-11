@@ -136,6 +136,8 @@ struct SimilarPhotoLoadedPreviewTile: View {
     let identifier: String
     let selected: Bool
     let enabled: Bool
+    var selectionMode = false
+    var hold: (String?) -> Void = { _ in }
     let open: (SimilarPhotoThumbnailCapture?) -> Void
     @Environment(\.displayScale) private var displayScale
 
@@ -145,7 +147,7 @@ struct SimilarPhotoLoadedPreviewTile: View {
                 request: SimilarPhotoPreviewRequest(photo: photo, cache: cache, size: geometry.size,
                     displayScale: displayScale, networkAllowed: networkAllowed),
                 cache: cache, label: label, identifier: identifier, selected: selected,
-                enabled: enabled, open: open)
+                enabled: enabled, selectionMode: selectionMode, hold: hold, open: open)
                 .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .clipped()
@@ -161,6 +163,8 @@ struct SimilarPhotoNativePreviewTile: UIViewRepresentable {
     let identifier: String
     let selected: Bool
     let enabled: Bool
+    var selectionMode = false
+    var hold: (String?) -> Void = { _ in }
     let open: (SimilarPhotoThumbnailCapture?) -> Void
 
     func makeUIView(context: Context) -> SimilarPhotoPreviewControl { SimilarPhotoPreviewControl() }
@@ -169,11 +173,13 @@ struct SimilarPhotoNativePreviewTile: UIViewRepresentable {
         // These inputs always update, even when the pixel request is unchanged.
         view.photoID = photoID
         view.isEnabled = enabled
+        view.selectionMode = selectionMode
+        view.hold.present = hold
+        view.accessibilityHint = selectionMode ? "轻点切换待删除选择；按住临时看大图" : "打开本组并定位这张照片；按住临时看大图"
         view.accessibilityLabel = label
         view.accessibilityIdentifier = identifier
         view.accessibilityValue = selected ? "已勾选待删除" : "未勾选"
         view.accessibilityTraits = selected ? [.button, .selected] : [.button]
-        view.accessibilityHint = "打开本组并定位这张照片，不改变选择"
         view.open = open
         view.configureNative(request: request, cache: cache, selected: selected)
     }
@@ -196,6 +202,8 @@ struct SimilarPhotoPreviewTile: UIViewRepresentable {
     // Injected synthetic content remains on the existing hosting path.
     var canCapture = true
     var readiness: SimilarPhotoPreviewReadiness? = nil
+    var selectionMode = false
+    var hold: (String?) -> Void = { _ in }
     let open: (SimilarPhotoThumbnailCapture?) -> Void
 
     func makeUIView(context: Context) -> SimilarPhotoPreviewControl { SimilarPhotoPreviewControl() }
@@ -204,11 +212,13 @@ struct SimilarPhotoPreviewTile: UIViewRepresentable {
         view.photoID = photoID
         view.bindReadiness(readiness, fallback: canCapture)
         view.isEnabled = enabled
+        view.selectionMode = selectionMode
+        view.hold.present = hold
+        view.accessibilityHint = selectionMode ? "轻点切换待删除选择；按住临时看大图" : "打开本组并定位这张照片；按住临时看大图"
         view.accessibilityLabel = label
         view.accessibilityIdentifier = identifier
         view.accessibilityValue = selected ? "已勾选待删除" : "未勾选"
         view.accessibilityTraits = selected ? [.button, .selected] : [.button]
-        view.accessibilityHint = "打开本组并定位这张照片，不改变选择"
         view.open = open
         view.configure(content: content, selected: selected,
                        contentIdentity: readiness.map { ObjectIdentifier($0) })
@@ -225,9 +235,15 @@ final class SimilarPhotoPreviewControl: UIControl {
     var canCapture = false
     private(set) var readiness: SimilarPhotoPreviewReadiness?
     var open: ((SimilarPhotoThumbnailCapture?) -> Void)?
+    var selectionMode = false
+    let hold = SimilarPhotoHoldInteraction()
+    override var isEnabled: Bool {
+        didSet { if !isEnabled { hold.end() } }
+    }
     private var hosted: (UIView & UIContentView)?
     private var contentIdentity: ObjectIdentifier?
     private let selectionMark = UIImageView()
+    var showsSelectionMark: Bool { !selectionMark.isHidden }
     private let nativeImageView = UIImageView()
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
     private let issueImageView = UIImageView()
@@ -272,6 +288,11 @@ final class SimilarPhotoPreviewControl: UIControl {
         selectionMark.accessibilityElementsHidden = true
         addSubview(selectionMark)
         addTarget(self, action: #selector(activate), for: .touchUpInside)
+        hold.photoAtPoint = { [weak self] _ in
+            guard let self, self.isEnabled, self.window != nil else { return nil }
+            return self.photoID
+        }
+        hold.attach(to: self)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit { nativeTask?.cancel() }
@@ -288,7 +309,7 @@ final class SimilarPhotoPreviewControl: UIControl {
     }
 
     func configureNative(request: SimilarPhotoPreviewRequest?, cache: PhotoThumbnailCache, selected: Bool) {
-        selectionMark.isHidden = !selected
+        updateSelectionMark(selected: selected)
         let changedContent = !usesNativeContent
         usesNativeContent = true
         hosted?.removeFromSuperview()
@@ -358,6 +379,7 @@ final class SimilarPhotoPreviewControl: UIControl {
     }
 
     func dismantlePreview() {
+        hold.end()
         cancelNativeWork()
         open = nil
     }
@@ -365,7 +387,7 @@ final class SimilarPhotoPreviewControl: UIControl {
     func configure(content: AnyView, selected: Bool, contentIdentity: ObjectIdentifier? = nil) {
         // Selection is UIKit-only: rebuilding a hosting configuration can
         // restart the thumbnail task even when its request has not changed.
-        selectionMark.isHidden = !selected
+        updateSelectionMark(selected: selected)
         if hosted == nil || contentIdentity == nil || self.contentIdentity != contentIdentity {
             // Nil identity keeps injected synthetic content updatable.
             let configuration = UIHostingConfiguration {
@@ -381,6 +403,14 @@ final class SimilarPhotoPreviewControl: UIControl {
             }
             self.contentIdentity = contentIdentity
         }
+        setNeedsLayout()
+    }
+
+    func updateSelectionMark(selected: Bool) {
+        selectionMark.isHidden = !selectionMode
+        selectionMark.image = UIImage(systemName: selected ? "checkmark.circle.fill" : "circle",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold))
+        selectionMark.tintColor = selected ? UIColor(IQStyle.accent) : .white
         setNeedsLayout()
     }
 
@@ -449,7 +479,7 @@ final class SimilarPhotoPreviewControl: UIControl {
         return SimilarPhotoThumbnailCapture(photoID: capturedID, image: image, frame: convert(capturedBounds, to: window))
     }
 
-    @objc private func activate() { guard isEnabled else { return }; open?(capture()) }
+    @objc private func activate() { guard isEnabled, hold.activePhotoID == nil else { return }; open?(capture()) }
     override func accessibilityActivate() -> Bool { guard isEnabled else { return false }; activate(); return true }
 }
 
@@ -507,6 +537,7 @@ struct SimilarPhotoGroupGrid: UIViewControllerRepresentable {
     let cancel: () -> Void
     let toggle: (String) -> Void
     let browse: (String) -> Void
+    var hold: (String?) -> Void = { _ in }
     let initialTarget: (String, CGRect) -> Void
 
     func makeUIViewController(context: Context) -> SimilarPhotoGroupGridController {
@@ -544,6 +575,7 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
     private(set) var awaitingValidation = false
     private var displayLink: CADisplayLink?
     private let linkTarget = SimilarPhotoDisplayLinkTarget()
+    let hold = SimilarPhotoHoldInteraction()
     private var fingerInViewport: CGPoint?
     private var initialScrollPending = true
     private var initialTargetReported = false
@@ -571,6 +603,15 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
         // The horizontal-start recognizer fails immediately for a vertical
         // start, allowing native inertial scrolling instead of stealing it.
         collectionView.panGestureRecognizer.require(toFail: rangePan)
+        hold.photoAtPoint = { [weak self] point in
+            guard let self, let configuration = self.configuration,
+                  configuration.enabled, configuration.contentVisible, !configuration.isSelecting,
+                  !self.isShutdown, let index = self.collectionView.indexPathForItem(at: point)?.item,
+                  configuration.photos.indices.contains(index) else { return nil }
+            return configuration.photos[index].id
+        }
+        hold.present = { [weak self] id in self?.configuration?.hold(id) }
+        hold.attach(to: collectionView)
         linkTarget.owner = self
         NotificationCenter.default.addObserver(self, selector: #selector(backgrounded),
                                name: UIApplication.willResignActiveNotification, object: nil)
@@ -598,11 +639,13 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
                 return (old.photos[index.item].id, frame.minY - collectionView.contentOffset.y)
             } : nil
         if replaced {
+            hold.end()
             cancelInteraction()
             initialScrollPending = true
             initialTargetReported = false
         }
         configuration = next
+        if !next.enabled || !next.contentVisible { hold.end() }
         if !next.enabled || !next.selectionMode || !next.contentVisible { cancelInteraction() }
         if token != nil && !next.isSelecting {
             // The state publishes selectedIDs before it lowers isSelecting.
@@ -728,6 +771,7 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
     }
     func activateItem(at index: Int) {
         guard let configuration, configuration.contentVisible, configuration.enabled, !configuration.isSelecting,
+              hold.activePhotoID == nil,
               configuration.photos.indices.contains(index), !isShutdown else { return }
         let id = configuration.photos[index].id
         if configuration.selectionMode { configuration.toggle(id) }
@@ -875,8 +919,8 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
             cell.isAccessibilityElement = false
         }
     }
-    func suspendInteraction() { cancelInteraction(); if isViewLoaded { rangePan.isEnabled = false } }
-    override func viewWillDisappear(_ animated: Bool) { super.viewWillDisappear(animated); cancelInteraction() }
+    func suspendInteraction() { hold.end(); cancelInteraction(); if isViewLoaded { rangePan.isEnabled = false } }
+    override func viewWillDisappear(_ animated: Bool) { super.viewWillDisappear(animated); hold.end(); cancelInteraction() }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         updateGestureAvailability()
@@ -886,6 +930,7 @@ final class SimilarPhotoGroupGridController: UIViewController, UICollectionViewD
     }
     func shutdown() {
         guard !isShutdown else { return }
+        hold.end()
         isShutdown = true
         cancelInteraction()
         if isViewLoaded { rangePan.isEnabled = false; collectionView.removeGestureRecognizer(rangePan) }

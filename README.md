@@ -1,3 +1,41 @@
+# 片刻寻 · Native iOS
+
+商店名称：**片刻寻－AI搜照片与相似清理**。副标题：**凭记忆线索找照片，挑选清理相似画面**。品牌文案：**找到想看的，留下值得的。**
+
+0.16.0 / build40 正在开发与验证，尚未交付。桌面名称改为“片刻寻”；为保留升级兼容性，Bundle ID、内部工程名、存储目录与数据格式标识继续沿用 `LocalImageIQ` 系列名称。旧版下载链接和历史验证记录不改名。
+
+本次清理交互：概览与组内共用选择模式，默认无勾选圈；进入选择后各组才出现全选，概览无总体全选和对比；× 清空所有组并退出。普通预览支持滑选，+N 不参与选择；按住照片临时看大图、松手关闭。仍须明确确认才提交删除，不自动留一张。原生验证及多组删除同步问题的修复验证尚待完成。
+
+## 0.15.1 / build39 当前已交付
+
+**App Store 工程准备进行中，尚未产生新的上架／交付版本。**工具链、隐私清单、第三方声明及未部署的政策／支持草稿见 [准备与核查记录](docs/APP_STORE_PREPARATION.md)。不改变下方 build39 的已交付状态，也不代表已完成备案、正式签名或许可最终确认。
+
+**build39 已交付，真机验收待正常使用确认。**清理组间距20→4pt、行内间距8→4pt、分隔线上留白12→4pt；五张预览和44pt操作区域不变。“隐私与关于”改为简短摘要＋可展开详情，重要风险和原详细说明保留。默认搜索建议未变。
+
+[下载build39 IPA](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-38124762817-1/LocalImageIQ-0.15.1-build39-iphoneos-unsigned.ipa) · [本地已核验包](build/device-download/38124762817/LocalImageIQ-0.15.1-build39-iphoneos-unsigned.ipa)。
+源码`1c7a47de8470afbe9ce8b1e57320e6187edbe6b7`；3次定点（前两次失败）＋1次完整验证成功。Core79通过；App2058＝2057通过＋1既有SQLite跳过；UI19＝18通过＋1永久键盘跳过；零失败。真实模型8项计入App。整包1,420,433,520 bytes，SHA-256 `5aa159eefc6519d8f79687d69001ec1907ef217db324e387a11c5e83ef50cfb0`，完整下载和全量CRC通过。仍沿用原Sideloadly账号／有效Bundle ID覆盖安装，不卸载、清库或为升级重建索引。
+
+## 以下为 build38 历史交付
+
+**DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**全部获批清理／查看改版与追加三项已进入同一包。源码 **`782765fcfdea08b136f5aa5378b0c1258d01441f`**；[第三次完整验证SUCCESS](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38054261362)，本阶段7次定点＋3次完整，前两次完整失败保留记录。
+
+**[下载0.15.0／build38 IPA](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-38054261362-1/LocalImageIQ-0.15.0-build38-iphoneos-unsigned.ipa)** · [本地已核验包](build/device-download/38054261362/LocalImageIQ-0.15.0-build38-iphoneos-unsigned.ipa)。沿用原Sideloadly账号／原有效Bundle ID覆盖安装，不卸载、清库、重授权或为升级重建索引。
+
+- 首页获批缎面V5；移除左下角索引计数（上方原有摘要保留），最近查询框按文字宽度分配，底栏仅选中文字变色。B02系统图标／启动页不变。
+- OCR关→开自动请求一次增量更新，共享底部进度提示；移除搜索页文字索引更新按钮。保存的开启状态恢复不自动重跑，忙时延后，关掉可取消。
+- 清理设置双滑杆＋info、无厚卡片分组、整组多选与明确删除警示、隐藏已选数量、“清空选择”。保留浏览身份与删除资格分离，减少返回／删除后重复整页等待；真实来源改变仍需重算／撤权。
+- 移除结果页省略号，原文／译文纠错在搜索框放大镜次级菜单。首搜缓存编码／写盘移出结果返回关键路径，不承诺手机所有首次等待消失。
+- 保留HQ224/Fast预览，自动尝试本地屏幕／缩放高清；单张iCloud明确许可，取消／失败留图，分享区分预览与高清而非原图。
+
+最终Core79通过；App2056＝2055通过＋1既有SQLite模拟器跳过；UI18＝17通过＋1永久键盘跳过，零失败。真实模型8项计入App。IPA **1,420,430,690 bytes**，完整下载SHA-256 **`c8448a137b24289bd7e58476b7f381003694d6706f73892fd872abbd86500e2c`**，全量CRC通过。
+
+完整功能、10次验证账本、原生拼图及未验证真机边界见[build38记录](docs/CLEANUP_REFINEMENT_BUILD38.md)；安装见[Windows安装说明](docs/WINDOWS_IPHONE_INSTALL.md)。仍未做私人Photos删除、真机iCloud或性能验收。
+
+## 完整历史 README（截至 build37，以下原文保留）
+以下“当前／原文菜单／OCR／HQ224”等属于对应历史版本，现行交付以上方build38为准。
+
+---
+
 # Local Image IQ · Native iOS — 0.14.0 / build 37 当前交付
 
 **DELIVERED／PASS-PACKAGE／PERMANENT SINGLE-TEST EXCEPTION／PENDING-DEVICE。**已交付用户批准的V5全部12项及追加的最近3条搜索；不是诊断专用包。最终源码 **`1933f61a42340793097e0d7c5439f7b3112cc4e3`**；[run 37943428136／job 113863394567](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37943428136/job/113863394567) **第二次完整验证SUCCESS**，本阶段共**6次定点＋2次完整**，不隐去失败与夹具迭代。

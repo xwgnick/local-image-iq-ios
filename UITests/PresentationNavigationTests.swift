@@ -983,7 +983,7 @@ final class PresentationNavigationTests: XCTestCase {
         let mode = app.buttons["similar-cleanup-selection-mode"]
         expectHittable(mode)
         mode.tap()
-        XCTAssertEqual(mode.label, "完成选择")
+        XCTAssertEqual(mode.label, "清空所有组并退出选择")
         let target = photo(176)
         // Reach the original mid-list row with real vertical touches, not a
         // fixture route override. Slow held drags avoid flinging past the row.
@@ -1005,7 +1005,7 @@ final class PresentationNavigationTests: XCTestCase {
         XCTAssertTrue(grid.frame.contains(target.frame), "Photo 176 must remain reachable beyond the five covers")
         XCTAssertFalse(opened.exists && opened.isHittable, "Exercise the middle of the full group, not the first preview row")
         XCTAssertEqual(target.value as? String, "未勾选")
-        XCTAssertFalse(app.buttons["prepare-similar-deletion"].exists, "Vertical scrolling must not select photos")
+        XCTAssertFalse(app.buttons["prepare-similar-deletion"].isEnabled, "Vertical scrolling must not select photos")
         let first = photo(177)
         let last = photo(179)
         expectHittable(first)

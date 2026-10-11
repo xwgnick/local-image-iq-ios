@@ -32,6 +32,8 @@ final class SimilarPhotoGroupBrowser: ObservableObject {
     @Published private(set) var zoomFlight: SimilarPhotoZoomFlight?
     @Published var comparisonGroup: SimilarPhotoGroup?
     @Published var viewer: SimilarPhotoViewerRoute?
+    @Published var selectionMode = false
+    @Published var heldPhotoID: String?
     private(set) var targetFrame: CGRect?
     private var detailMemberIDs: Set<String> = []
 
@@ -66,6 +68,7 @@ final class SimilarPhotoGroupBrowser: ObservableObject {
     }
 
     func closeDetail() {
+        heldPhotoID = nil
         viewer = nil
         comparisonGroup = nil
         zoomFlight = nil
@@ -76,6 +79,7 @@ final class SimilarPhotoGroupBrowser: ObservableObject {
 
     /// Drop raster-bearing covers, not the retained detail/scroll identity.
     func hidePrivateSurfaces() {
+        heldPhotoID = nil
         viewer = nil
         comparisonGroup = nil
         zoomFlight = nil
@@ -128,7 +132,6 @@ struct SimilarPhotoGroupDetail: View {
     let thumbnail: (IndexedPhoto) -> AnyView
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var selectionMode = false
     @State private var measuredHeaderHeight: CGFloat = 0
 
     private var current: Bool { state.browsingSessionID == route.sessionID }
@@ -142,7 +145,7 @@ struct SimilarPhotoGroupDetail: View {
     private var selectionAvailable: Bool {
         state.canSelect || (state.isSelecting && !state.hasPendingThresholdChange && !state.needsRegroup)
     }
-    private var effectiveSelectionMode: Bool { selectionMode && selectionAvailable }
+    private var effectiveSelectionMode: Bool { browser.selectionMode && selectionAvailable }
 
     var body: some View {
         GeometryReader { geometry in
@@ -183,6 +186,7 @@ struct SimilarPhotoGroupDetail: View {
                         cancel: { if current { state.cancelRangeSelection() } },
                         toggle: { id in if enabled && state.canSelect { state.toggleSelection(id) } },
                         browse: { id in if enabled && !state.isSelecting { browser.viewPhoto(id, in: group) } },
+                        hold: { id in browser.heldPhotoID = id },
                         initialTarget: { id, frame in browser.didLayoutTarget(routeID: route.id, photoID: id, frame: frame) }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -191,7 +195,7 @@ struct SimilarPhotoGroupDetail: View {
         }
         .background(IQStyle.background)
         .onChange(of: selectionAvailable) { _, available in
-            if !available { selectionMode = false }
+            if !available { browser.selectionMode = false }
         }
     }
 
@@ -205,30 +209,31 @@ struct SimilarPhotoGroupDetail: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Button(effectiveSelectionMode ? "完成选择" : "选择") {
+                Button {
                     state.cancelRangeSelection()
-                    selectionMode.toggle()
+                    if browser.selectionMode { state.clearSelection() }
+                    browser.selectionMode.toggle()
+                } label: {
+                    if browser.selectionMode { Image(systemName: "xmark") }
+                    else { Text("选择") }
                 }
                 .frame(minHeight: 44)
-                .disabled(!enabled || !state.canSelect)
+                .disabled(!enabled || (!browser.selectionMode && !state.canSelect))
+                .accessibilityLabel(browser.selectionMode ? "清空所有组并退出选择" : "选择")
                 .accessibilityIdentifier("similar-cleanup-selection-mode")
             }
             let layout = dynamicTypeSize.isAccessibilitySize
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
                 : AnyLayout(HStackLayout(spacing: 16))
             layout {
-                Button("全选本组") { selectWholeGroup(Set(group.photos.map(\.id))) }
-                    .frame(minHeight: 44)
-                    .disabled(!state.canSelect)
-                    .accessibilityIdentifier("similar-cleanup-group-\(number)-select-group")
-                    .accessibilityHint("选择本组全部照片，不自动保留任何一张")
-                Button("清空选择") { selectWholeGroup([]) }
-                    .frame(minHeight: 44)
-                    .foregroundStyle(IQStyle.secondary)
-                    .disabled(!state.canSelect)
-                    .accessibilityHint("仅取消本组照片的勾选，不删除照片")
-                    .accessibilityIdentifier("similar-cleanup-clear-group")
-                Button("对比", systemImage: "rectangle.split.2x1") { browser.comparisonGroup = group }
+                if effectiveSelectionMode {
+                    Button("全选本组") { selectWholeGroup(Set(group.photos.map(\.id))) }
+                        .frame(minHeight: 44)
+                        .disabled(!state.canSelect)
+                        .accessibilityIdentifier("similar-cleanup-group-\(number)-select-group")
+                        .accessibilityHint("选择本组全部照片，不自动保留任何一张")
+                }
+                Button("并排对比", systemImage: "rectangle.split.2x1") { browser.comparisonGroup = group }
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("similar-cleanup-group-\(number)-compare")
             }
@@ -255,6 +260,8 @@ struct SimilarPhotoGroupDetail: View {
                 Text("横向起拖可连续勾选或取消；纵向起拖仍可滚动。仅在下方确认后删除。")
                     .font(.caption).foregroundStyle(IQStyle.secondary)
             }
+            Text("按住照片临时看大图，松手收起。")
+                .font(.caption).foregroundStyle(IQStyle.secondary)
         }
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 16)

@@ -133,6 +133,12 @@ struct SimilarPhotoCleanupSheet: View {
                                         completion: browser.finishZoom)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
+                if contentVisible, let id = browser.heldPhotoID,
+                   let photo = state.groups.lazy.flatMap(\.photos).first(where: { $0.id == id }) {
+                    SimilarPhotoHoldPreview(photo: photo, appState: appState,
+                        imageSource: comparisonImageSource ?? SimilarComparisonImageSource(library: appState.library))
+                        .id(id)
+                }
             }
             .opacity(contentVisible ? 1 : 0)
             .allowsHitTesting(contentVisible)
@@ -168,6 +174,21 @@ struct SimilarPhotoCleanupSheet: View {
             .toolbarBackground(IQStyle.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
+                if isPageAccessible && browser.detailRoute == nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            state.cancelRangeSelection()
+                            if browser.selectionMode { state.clearSelection() }
+                            browser.selectionMode.toggle()
+                        } label: {
+                            if browser.selectionMode { Image(systemName: "xmark") }
+                            else { Text("选择") }
+                        }
+                        .disabled(state.isDeleting || (!browser.selectionMode && !state.canSelect))
+                        .accessibilityLabel(browser.selectionMode ? "清空所有组并退出选择" : "选择")
+                        .accessibilityIdentifier("similar-cleanup-overview-selection-mode")
+                    }
+                }
                 if embedded && isPageAccessible && browser.detailRoute == nil {
                     ToolbarItem(placement: .topBarLeading) {
                         PrimaryLibraryButton(canRead: appState.canRead, action: openLibrary)
@@ -205,7 +226,7 @@ struct SimilarPhotoCleanupSheet: View {
                     .padding(16)
                     .background(IQStyle.surface)
                     .accessibilityElement(children: .combine)
-                } else if contentVisible && (state.selectedCount > 0 || state.isSelecting) {
+                } else if contentVisible && (browser.selectionMode || state.selectedCount > 0 || state.isSelecting) {
                     selectionToolbar
                 }
             }
@@ -257,12 +278,18 @@ struct SimilarPhotoCleanupSheet: View {
         }
         .onChange(of: state.browsingSessionID) { _, session in browser.invalidate(sessionID: session) }
         .onChange(of: state.selectionSessionID) { _, _ in
+            browser.selectionMode = false
+            browser.heldPhotoID = nil
             browser.reconcile(groups: state.groups, sessionID: state.browsingSessionID)
+        }
+        .onChange(of: state.selectedCount, initial: true) { _, count in
+            if count > 0 { browser.selectionMode = true }
         }
         .onChange(of: state.canBrowse) { _, allowed in
             if !allowed { browser.hidePrivateSurfaces(); showsConfirmation = false }
         }
         .onChange(of: browser.detailRoute?.id) { _, _ in
+            browser.heldPhotoID = nil
             backTranslation = 0
             state.cancelRangeSelection()
         }
@@ -387,6 +414,18 @@ struct SimilarPhotoCleanupSheet: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                SimilarPhotoOverviewSelection(sessionID: state.selectionSessionID,
+                    photoIDs: state.overviewSelectionIDs, selectedIDs: state.selectedIDs,
+                    enabled: browser.detailRoute == nil && browser.selectionMode && isPageAccessible
+                        && (state.canSelect || state.isSelecting) && !state.isDeleting
+                        && !state.hasPendingThresholdChange && !state.needsRegroup,
+                    isSelecting: state.isSelecting, begin: { state.beginOverviewRangeSelection() },
+                    finish: { state.finishRangeSelection(token: $0, selectedInGroup: $1) },
+                    cancel: { state.cancelRangeSelection() })
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+            }
             .accessibilityHidden(!isPageAccessible || browser.detailRoute != nil)
         }
         .accessibilityIdentifier("similar-cleanup-scroll")
@@ -523,18 +562,8 @@ struct SimilarPhotoCleanupSheet: View {
 
     func groupRow(_ group: SimilarPhotoGroup, number: Int) -> some View {
         let indices = SimilarPhotoGroupGeometry.previewIndices(count: group.photos.count)
-        let selection = SimilarGroupPresentation.selection(in: group, selectedIDs: state.selectedIDs)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
-                Button { state.toggleGroupSelection(group.id) } label: {
-                    Image(systemName: selection == .all ? "checkmark.circle.fill" : selection == .partial ? "minus.circle.fill" : "circle")
-                        .font(.system(size: 22)).frame(width: 44, height: 44)
-                }
-                .buttonStyle(.plain).disabled(!state.canSelect)
-                .accessibilityLabel("第\(number)组选择")
-                .accessibilityValue(selection == .all ? "全部选中" : selection == .partial ? "部分选中" : "未选中")
-                .accessibilityHint(selection == .all ? "取消本组全部勾选，不删除照片" : "选择本组全部照片，不自动留一张")
-                .accessibilityIdentifier("similar-cleanup-group-\(number)-checkbox")
                 Button {
                     if let first = group.photos.first { open(group, photoID: first.id) }
                 } label: {
@@ -548,6 +577,16 @@ struct SimilarPhotoCleanupSheet: View {
                 .buttonStyle(.plain).disabled(!state.canBrowse || state.isDeleting || state.isSelecting)
                 .accessibilityIdentifier("similar-cleanup-group-\(number)-header")
                 .accessibilityHint("打开本组全部照片，定位第一张，不改变选择")
+                if browser.selectionMode {
+                    Button("全选") {
+                        guard let token = state.beginRangeSelection(groupID: group.id) else { return }
+                        state.finishRangeSelection(token: token, selectedInGroup: Set(group.photos.map(\.id)))
+                    }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .disabled(!state.canSelect)
+                    .accessibilityIdentifier("similar-cleanup-group-\(number)-select-group")
+                    .accessibilityHint("选择本组全部照片，包括折叠照片，不自动留一张")
+                }
             }
             SimilarPhotoMosaicLayout {
                 ForEach(indices, id: \.self) { index in
@@ -577,17 +616,23 @@ struct SimilarPhotoCleanupSheet: View {
         let identifier = "similar-cleanup-group-\(number)-photo-\(index + 1)"
         let selected = state.selectedIDs.contains(photo.id)
         let enabled = state.canBrowse && !state.isDeleting && !state.isSelecting
+        let overflow = index == 4 && group.photos.count > 5
+        let selects = browser.selectionMode && !overflow
+        let activate: (SimilarPhotoThumbnailCapture?) -> Void = { capture in
+            if selects { state.toggleSelection(photo.id) }
+            else { open(group, photoID: photo.id, capture: capture) }
+        }
         if scenePhase != .active || !protectedDataAvailable || !state.canBrowse {
             Color.clear
         } else if let thumbnailContent {
             SimilarPhotoPreviewTile(photoID: photo.id, label: label, identifier: identifier,
                 selected: selected, enabled: enabled, content: thumbnailContent(photo),
-                open: { capture in open(group, photoID: photo.id, capture: capture) })
+                selectionMode: selects, hold: { browser.heldPhotoID = $0 }, open: activate)
         } else {
             SimilarPhotoLoadedPreviewTile(photo: photo, cache: appState.thumbnails,
                 networkAllowed: appState.allowICloudDownload, label: label, identifier: identifier,
                 selected: selected, enabled: enabled,
-                open: { capture in open(group, photoID: photo.id, capture: capture) })
+                selectionMode: selects, hold: { browser.heldPhotoID = $0 }, open: activate)
         }
     }
 
@@ -615,11 +660,6 @@ struct SimilarPhotoCleanupSheet: View {
                         .accessibilityIdentifier("similar-cleanup-hidden-selection")
                 }
             }.fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
-            Button("清空全部选择") { state.cancelRangeSelection(); state.clearSelection() }
-                .frame(minHeight: 44)
-                .font(.footnote).foregroundStyle(IQStyle.secondary)
-                .disabled(state.isDeleting)
-                .accessibilityIdentifier("similar-cleanup-clear-all")
             Button("删除\(state.selectedCount)张", role: .destructive) {
                 guard canDelete else { return }
                 state.prepareDeletion()

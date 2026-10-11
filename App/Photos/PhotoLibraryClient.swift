@@ -94,6 +94,8 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
     private let manager = PHImageManager.default()
     private let callbackLock = NSLock()
     private var changeHandler: (@Sendable () -> Void)?
+    private var observedImages: PHFetchResult<PHAsset>?
+    private var observedAuthorization: PHAuthorizationStatus?
     private let searchCache = PhotoSearchSnapshotCache<SearchFetch>()
 
     /// PHFetchResult is an immutable PhotoKit snapshot, shared for enumeration
@@ -121,7 +123,7 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
         // Invalidate full/limited transitions even when registration stays true.
         // Do not invalidate an ordinary refresh with unchanged authorization.
         searchCache.synchronizeObservation(isRegistered: wasObserving && access.canRead, access: access)
-        guard wasObserving != access.canRead else { return }
+        guard wasObserving != access.canRead else { updateObservedImages(); return }
         if access.canRead {
             // Warm reuse is allowed only AFTER actual registration completes.
             PHPhotoLibrary.shared().register(self)
@@ -131,6 +133,18 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
         } else {
             PHPhotoLibrary.shared().unregisterChangeObserver(self)
         }
+        updateObservedImages()
+    }
+
+    @MainActor
+    private func updateObservedImages() {
+        callbackLock.lock()
+        defer { callbackLock.unlock() }
+        let authorization = Self.authorization
+        guard observedAuthorization != authorization || (observedImages == nil && Self.canRead) else { return }
+        observedAuthorization = authorization
+        observedImages = authorization == .authorized || authorization == .limited
+            ? PHAsset.fetchAssets(with: .image, options: Self.searchFetchOptions()) : nil
     }
 
     func observe(_ handler: @escaping @Sendable () -> Void) {
@@ -140,9 +154,17 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
     }
 
     func photoLibraryDidChange(_ changeInstance: PHChange) {
-        // Synchronous invalidation precedes notification, even for unrelated
-        // changes. Rebuild sorted revisions lazily from the updated fetch result,
-        // not a new whole-library fetch. No claim of per-row incremental work.
+        callbackLock.lock()
+        let authorization = Self.authorization
+        let details = observedImages.flatMap { changeInstance.changeDetails(for: $0) }
+        let relevant = Self.shouldNotifyImageChange(hasSnapshot: observedImages != nil,
+            authorizationChanged: observedAuthorization != authorization, hasChangeDetails: details != nil)
+        if let details { observedImages = details.fetchResultAfterChanges }
+        callbackLock.unlock()
+        guard relevant else { return }
+        // PhotoKit also reports album/video/unrelated changes. Those must not
+        // cancel/restart image sync and its completion card. Relevant events
+        // still invalidate synchronously before any UI/worker notification.
         searchCache.libraryDidChange { source in
             guard let details = changeInstance.changeDetails(for: source.result) else { return source }
             return SearchFetch(result: details.fetchResultAfterChanges)
@@ -152,6 +174,10 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
         let callback = changeHandler
         callbackLock.unlock()
         callback?()
+    }
+
+    static func shouldNotifyImageChange(hasSnapshot: Bool, authorizationChanged: Bool, hasChangeDetails: Bool) -> Bool {
+        !hasSnapshot || authorizationChanged || hasChangeDetails
     }
 
     static var authorization: PHAuthorizationStatus { PHPhotoLibrary.authorizationStatus(for: .readWrite) }

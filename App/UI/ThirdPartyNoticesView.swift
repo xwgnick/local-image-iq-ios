@@ -8,7 +8,7 @@ enum ThirdPartyNotices {
             throw ReadError.missingResource
         }
         let text = try String(contentsOf: url, encoding: .utf8)
-        guard text.hasPrefix("Local Image IQ - Third-party notices"), text.contains("Apache License") else {
+        guard text.hasPrefix("片刻寻 - Third-party notices"), text.contains("Apache License") else {
             throw ReadError.invalidContent
         }
         return text

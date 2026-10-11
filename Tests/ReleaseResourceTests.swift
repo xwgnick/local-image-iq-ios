@@ -2,6 +2,13 @@ import XCTest
 @testable import LocalImageIQ
 
 final class ReleaseResourceTests: XCTestCase {
+    func testChineseBrandPreservesInstallAndDataIdentity() {
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "片刻寻")
+        XCTAssertEqual(Bundle.main.bundleIdentifier, "com.example.localimageiq")
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String, "0.16.0")
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String, "40")
+    }
+
     func testAppPrivacyManifestDeclaresOnlyActualLocalUses() throws {
         let url = try XCTUnwrap(Bundle.main.url(forResource: "PrivacyInfo", withExtension: "xcprivacy"))
         let data = try Data(contentsOf: url)

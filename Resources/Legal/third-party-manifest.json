@@ -151,7 +151,7 @@
       ]
     }
   ],
-  "noticesSHA256": "1f25d1186bc43f2de98c9b5b97e0c4dfd1ab8e002a61863cb3d7104622db8783",
+  "noticesSHA256": "6c05927ff6793fb270290afad2fe1f02874c612cec6fe2d25fcfe8fc1720e4c9",
   "sourceAttributionSHA256": "3f7d49ca7c38b9b7f24a341b006b92899c4d7210cd825cb9344bf09b451f9f12",
   "reviewStatus": "License texts and attribution packaged; upstream CHN/ADM1 provenance remains unresolved. Not legal clearance."
 }

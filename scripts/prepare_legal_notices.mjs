@@ -17,7 +17,7 @@ export function checkedRevision(directory) {
 
 export function renderNotices(dependencies, contents, pillow, places, apache) {
   const sections = [
-    'Local Image IQ - Third-party notices',
+    '片刻寻 - Third-party notices',
     'These licenses apply to the named third-party components, not to the app as a whole. ' +
       'No endorsement by their authors is implied.',
     'SigLIP 2 model and tokenizer\n' +

@@ -148,7 +148,6 @@ final class SimilarPhotoCleanupState: ObservableObject {
         let token: UUID
         let sessionID: UUID
         let generation: UUID
-        let groupID: String
         let photoIDs: [String]
         let members: Set<String>
         let baseSelectedIDs: Set<String>
@@ -654,11 +653,26 @@ final class SimilarPhotoCleanupState: ObservableObject {
     /// Captures committed state only. Hover/drag updates stay in the pure UI
     /// model; this entry performs only an epoch check, never a PhotoKit batch.
     func beginRangeSelection(groupID: String) -> UUID? {
+        guard let group = groups.first(where: { $0.id == groupID }) else { return nil }
+        return beginRangeSelection(photoIDs: group.photos.map(\.id))
+    }
+
+    func beginOverviewRangeSelection() -> UUID? {
+        beginRangeSelection(photoIDs: overviewSelectionIDs)
+    }
+
+    var overviewSelectionIDs: [String] {
+        visibleGroups.flatMap { group in
+            Array(group.photos.prefix(group.photos.count > 5 ? 4 : 5)).map(\.id)
+        }
+    }
+
+    private func beginRangeSelection(photoIDs: [String]) -> UUID? {
         let lease = indexAccess?.tryRead()
         guard indexAccess == nil || lease != nil else { return nil }
         defer { lease?.release() }
         guard canSelect, let result, let sessionID,
-              let group = groups.first(where: { $0.id == groupID }) else { return nil }
+              !photoIDs.isEmpty else { return nil }
         do {
             try result.validatePublicationEpoch()
         } catch {
@@ -666,16 +680,15 @@ final class SimilarPhotoCleanupState: ObservableObject {
             return nil
         }
         let token = UUID()
-        let ids = group.photos.map(\.id)
         rangeSelection = RangeSelectionCapture(token: token, sessionID: sessionID,
-            generation: generation, groupID: groupID, photoIDs: ids, members: Set(ids),
+            generation: generation, photoIDs: photoIDs, members: Set(photoIDs),
             baseSelectedIDs: selectedIDs, result: result)
         pendingDeletion = nil
         isSelecting = true
         return token
     }
 
-    /// EXACT desired membership inside the captured group, not a toggle list.
+    /// EXACT desired membership inside the captured scope, not a toggle list.
     /// Reject foreign IDs rather than silently selecting them or filtering them.
     /// All additions AND removals are validated together off MainActor, then
     /// published once behind the result's cheap synchronous epoch fence.
