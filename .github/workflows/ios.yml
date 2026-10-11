@@ -15,6 +15,10 @@ on:
         description: "After tests, build an unsigned arm64 iPhone IPA for local re-signing (requires include_models)"
         type: boolean
         default: false
+      publish_release:
+        description: "Publish validated assets to a GitHub Release; disable for engineering validation only"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -31,6 +35,7 @@ jobs:
       contents: write
       actions: read
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       IMAGEIQ_REQUIRE_MODELS: ${{ inputs.include_models && '1' || '0' }}
       IMAGEIQ_TEST_ALL_COMPUTE_UNITS: ${{ inputs.all_compute_units && '1' || '0' }}
     steps:
@@ -47,7 +52,7 @@ jobs:
       - name: Inspect build tools
         run: |
           uname -m
-          xcodebuild -version
+          node scripts/check_release.mjs --toolchain
           swift --version
           python --version
       - name: Validate device build selection
@@ -58,13 +63,15 @@ jobs:
         run: |
           node scripts/check_project.mjs --self-test
           node scripts/check_project.mjs
+          node scripts/check_release.mjs --source
           node scripts/check_places.mjs --self-test
           node scripts/check_places.mjs
           node scripts/package_device.mjs --self-test
-          node --test scripts/test_publish_release.mjs
+          node --test scripts/test_publish_release.mjs scripts/test_release.mjs
           python scripts/test_static.py
           python scripts/test_branding.py
           plutil -lint App/Info.plist
+          plutil -lint App/PrivacyInfo.xcprivacy
           swift test --package-path Packages/ImageIQCore
       - name: Generate and validate required public offline Places pack
         # Unconditional: include_models=false still ships the four-country pack.
@@ -95,16 +102,23 @@ jobs:
           # UI regression tests need the software keyboard, not a host keyboard.
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
           xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
-          node --input-type=module -e 'import fs from "node:fs"; const d=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/available-devices.json","utf8")); const all=Object.entries(d.devices).filter(([runtime])=>runtime.includes("iOS")).flatMap(([,v])=>v); const phone=all.find(x=>x.isAvailable&&x.name.startsWith("iPhone")); if(!phone)throw Error("No installed iPhone simulator; inspect the runner image"); fs.appendFileSync(process.env.GITHUB_ENV,"SIMULATOR_ID="+phone.udid+"\n");'
+          node scripts/check_release.mjs --simulator "$RUNNER_TEMP/available-devices.json"
+      - name: Verify resolved dependency licenses before compiling
+        run: |
+          xcodebuild -resolvePackageDependencies -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
+            -clonedSourcePackagesDirPath build/SourcePackages
+          node scripts/prepare_legal_notices.mjs build/SourcePackages/checkouts --check
       - name: Build and test (unsigned simulator only)
         run: |
           xcodebuild test -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -derivedDataPath build/DerivedData -resultBundlePath build/TestResults.xcresult \
+            -clonedSourcePackagesDirPath build/SourcePackages -disableAutomaticPackageResolution \
             CODE_SIGNING_ALLOWED=NO \
             IMAGEIQ_REQUIRE_MODELS="$IMAGEIQ_REQUIRE_MODELS" \
             IMAGEIQ_TEST_ALL_COMPUTE_UNITS="$IMAGEIQ_TEST_ALL_COMPUTE_UNITS"
           node scripts/check_places.mjs --app-dir build/DerivedData/Build/Products/Debug-iphonesimulator/LocalImageIQ.app
+          node scripts/check_release.mjs --app-dir build/DerivedData/Build/Products/Debug-iphonesimulator/LocalImageIQ.app
       - name: Package simulator app (not an installable iPhone IPA)
         if: ${{ !inputs.build_device_ipa }}
         run: |
@@ -121,6 +135,7 @@ jobs:
         if: inputs.build_device_ipa
         run: |
           xcodebuild build -project LocalImageIQ.xcodeproj -target LocalImageIQ \
+            -clonedSourcePackagesDirPath build/SourcePackages -disableAutomaticPackageResolution \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             SYMROOT="$PWD/build/DeviceProducts" OBJROOT="$PWD/build/DeviceIntermediates" \
             ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
@@ -143,7 +158,7 @@ jobs:
             if [ -f "$report" ]; then cp "$report" build/release-evidence/; fi
           done
       - name: Upload verified assets to this public repository Release
-        if: always()
+        if: ${{ always() && inputs.publish_release }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           UPSTREAM_STATUS: ${{ job.status }}
@@ -153,10 +168,28 @@ jobs:
           status=failure
           if [ "$UPSTREAM_STATUS" = "success" ]; then status=success; fi
           node scripts/publish_release.mjs --status "$status" --device "$BUILD_DEVICE" --models "$INCLUDE_MODELS"
+      - name: Keep validation evidence without publishing an app
+        if: ${{ always() && !inputs.publish_release }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-preparation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/release-evidence
+            build/device/device-build.json
+            build/device/SHA256SUMS.txt
+            LocalImageIQ.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          if-no-files-found: error
       - name: Summarize validation boundary
         if: always()
+        env:
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
         run: |
           echo '### Native iOS milestone' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Build/test assets are delivered through this public repository Release. This run does not sign, upload to TestFlight, grant third-party licenses, or prove physical-iPhone performance.' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$PUBLISH_RELEASE" = "true" ]; then
+            echo 'Build/test assets are delivered through this public repository Release.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Engineering validation only: evidence is retained as an artifact, no app or Release is published.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo 'This run does not sign, upload to TestFlight, grant third-party licenses, or prove physical-iPhone performance.' >> "$GITHUB_STEP_SUMMARY"
           echo "Models requested: $IMAGEIQ_REQUIRE_MODELS. Model-free tests skip generated numerical parity; read xcresult for actual test outcomes." >> "$GITHUB_STEP_SUMMARY"
           echo 'All runs require the pinned CHN/FRA/DEU/NLD ADM1/ADM2 Places pack and bundled manifest. Check step outcomes; coverage is historical administrative boundaries, not global addresses or a phone-speed measurement.' >> "$GITHUB_STEP_SUMMARY"

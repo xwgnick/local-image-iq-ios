@@ -498,6 +498,25 @@ final class PresentationNavigationTests: XCTestCase {
         attach("UIReview-privacy-layered-details")
     }
 
+    func testThirdPartyNoticesOpenLocallyAndReturnToPrivacy() throws {
+        launch()
+        app.buttons["open-settings"].tap()
+        expectHittable(app.buttons["close-settings"])
+        openSettingsPage("settings-privacy", title: "隐私与关于")
+        let link = app.buttons["privacy-third-party-notices"]
+        scrollTo(link, in: try sheetForm())
+        link.tap()
+        let content = app.staticTexts["third-party-notices-content"]
+        XCTAssertTrue(content.waitForExistence(timeout: 10))
+        XCTAssertTrue(content.label.contains("SigLIP 2"))
+        XCTAssertTrue(content.label.contains("Pillow 11.1.0"))
+        XCTAssertFalse(app.descendants(matching: .any)["third-party-notices-error"].exists)
+        XCTAssertFalse(app.buttons["stop-indexing"].exists)
+        attach("UIReview-third-party-notices")
+        back(from: "第三方声明", to: "隐私与关于")
+        XCTAssertFalse(content.exists)
+    }
+
     func testPhotoTextToggleDefersWithoutPermissionAndHasNoInlineMaintenanceButton() throws {
         if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
             throw XCTSkip("Live photo text opt-in requires the real bundled models")

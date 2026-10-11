@@ -24,7 +24,7 @@ jobs:
     if: github.event.repository.private == false && github.repository == 'xwgnick/local-image-iq-ios'
     runs-on: macos-15
     env:
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       IMAGEIQ_REQUIRE_MODELS: '0'
       IMAGEIQ_TEST_ALL_COMPUTE_UNITS: '0'
       IMAGEIQ_DEV_TESTS: ${{ inputs.tests }}
@@ -33,25 +33,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Select and verify preinstalled Xcode 16.4
-        run: |
-          if [ ! -d "$DEVELOPER_DIR" ]; then
-            echo '::error::Xcode 16.4 is not preinstalled on this runner; no installation or fallback will be attempted.'
-            exit 1
-          fi
-          xcode_version="$(xcodebuild -version)"
-          printf '%s\n' "$xcode_version"
-          printf '%s\n' "$xcode_version" | grep -Eq '^Xcode 16\.4$'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Select and verify preinstalled Xcode 26.3
+        run: node scripts/check_release.mjs --toolchain
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           architecture: arm64
       - name: Validate selectors and inspect toolchain
         run: |
-          node --test scripts/test_native_dev.mjs
+          node --test scripts/test_native_dev.mjs scripts/test_release.mjs
           node scripts/native_dev.mjs --validate
           uname -m
           swift --version
@@ -61,16 +54,25 @@ jobs:
           python scripts/build_places.py --download
           node scripts/check_places.mjs --pack-dir Resources/Places
           node scripts/check_project.mjs
+          node scripts/check_release.mjs --source
           plutil -lint App/Info.plist
+          plutil -lint App/PrivacyInfo.xcprivacy
       - name: Generate native project and select simulator
         run: |
           command -v xcodegen >/dev/null || brew install xcodegen
           xcodegen generate --spec project.yml
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
           xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
-          node --input-type=module -e 'import fs from "node:fs"; const d=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/available-devices.json","utf8")); const all=Object.entries(d.devices).filter(([runtime])=>runtime.includes("iOS")).flatMap(([,v])=>v); const phone=all.find(x=>x.isAvailable&&x.name.startsWith("iPhone")); if(!phone)throw Error("No available iPhone simulator"); fs.appendFileSync(process.env.GITHUB_ENV,"SIMULATOR_ID="+phone.udid+"\n");'
+          node scripts/check_release.mjs --simulator "$RUNNER_TEMP/available-devices.json"
+      - name: Verify resolved dependency licenses before compiling
+        run: |
+          xcodebuild -resolvePackageDependencies -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
+            -clonedSourcePackagesDirPath build/SourcePackages
+          node scripts/prepare_legal_notices.mjs build/SourcePackages/checkouts --check
       - name: Compile and validate requested native tests (or compile only)
         run: node scripts/native_dev.mjs
+      - name: Validate actual app privacy and legal resources
+        run: node scripts/check_release.mjs --app-dir build/DevDerivedData/Build/Products/Debug-iphonesimulator/LocalImageIQ.app
       - name: Record development-only result
         if: always()
         run: |

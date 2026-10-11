@@ -325,10 +325,9 @@ test('build-only never reads stale xcresults or asserts tests, and clearly repor
 });
 test('workflow pins Xcode by environment, checks version, and uploads evidence without re-extraction', () => {
   const workflow = fs.readFileSync(new URL('../.github/workflows/ios-dev.yml', import.meta.url), 'utf8');
-  assert.match(workflow, /DEVELOPER_DIR: \/Applications\/Xcode_16\.4\.app\/Contents\/Developer/);
-  assert.ok(workflow.includes('[ ! -d "$DEVELOPER_DIR" ]'));
-  assert.ok(workflow.includes("grep -Eq '^Xcode 16\\.4$'"));
-  assert.ok(workflow.indexOf('Select and verify preinstalled Xcode 16.4') < workflow.indexOf('Validate selectors and inspect toolchain'));
+  assert.match(workflow, /DEVELOPER_DIR: \/Applications\/Xcode_26\.3\.app\/Contents\/Developer/);
+  assert.ok(workflow.includes('node scripts/check_release.mjs --toolchain'));
+  assert.ok(workflow.indexOf('Select and verify preinstalled Xcode 26.3') < workflow.indexOf('Validate selectors and inspect toolchain'));
   assert.doesNotMatch(workflow, /xcode-select|xcresulttool|continue-on-error|actions\/cache/);
   assert.match(workflow, /Record development-only result\s+if: always\(\)/);
   assert.match(workflow, /actions\/upload-artifact@v4\s+if: always\(\)/);

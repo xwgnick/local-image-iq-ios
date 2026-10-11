@@ -55,6 +55,12 @@ struct PrivacySettingsView: View {
 
             Section("关于") {
                 LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
+                NavigationLink {
+                    ThirdPartyNoticesView()
+                } label: {
+                    Text("第三方声明")
+                }
+                .accessibilityIdentifier("privacy-third-party-notices")
             }
             .listRowBackground(IQStyle.surface)
         }

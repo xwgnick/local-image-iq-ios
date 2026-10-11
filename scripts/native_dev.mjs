@@ -25,6 +25,7 @@ export function makeArgs(selectors, simulator, buildOnly) {
   if (!/^[a-fA-F0-9-]+$/.test(simulator ?? '')) throw Error('Invalid simulator ID.');
   return [buildOnly ? 'build-for-testing' : 'test', '-project', 'LocalImageIQ.xcodeproj', '-scheme', 'LocalImageIQ',
     '-destination', `platform=iOS Simulator,id=${simulator}`, '-derivedDataPath', 'build/DevDerivedData',
+    '-clonedSourcePackagesDirPath', 'build/SourcePackages', '-disableAutomaticPackageResolution',
     ...(!buildOnly ? ['-resultBundlePath', 'build/DevTests.xcresult', ...selectors.map(s => `-only-testing:${s}`)] : []),
     'CODE_SIGNING_ALLOWED=NO', 'IMAGEIQ_REQUIRE_MODELS=0', 'IMAGEIQ_TEST_ALL_COMPUTE_UNITS=0'];
 }
