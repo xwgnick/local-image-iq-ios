@@ -7,6 +7,10 @@ import XCTest
 /// No actual gestures, personal images, PhotoKit mutations or timing claims.
 @MainActor
 final class SimilarCleanupRefinementPresentationTests: XCTestCase {
+    private final class CompactGroupRowMeasurement {
+        var size: CGSize = .zero
+    }
+
     func testOverviewRowIsCompactWithoutShrinkingFivePreviewsOrLargeText() async throws {
         let f = try await controlsFixture(in: self, sizes: [6])
         f.cleanup.scan()
@@ -44,10 +48,6 @@ final class SimilarCleanupRefinementPresentationTests: XCTestCase {
                         "Row must contain only its 44pt header, full-size previews and 12.5pt spacing/divider")
                 }
 
-                @MainActor
-                private final class CompactGroupRowMeasurement {
-                    var size: CGSize = .zero
-                }
                 try host.attach(to: self, name: "UIReview-compact-group-\(Int(width))-\(type)")
             }
         }

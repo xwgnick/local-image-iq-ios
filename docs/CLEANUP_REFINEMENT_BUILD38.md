@@ -40,6 +40,10 @@ Follow-up build39 native validation:
   includes host space rather than measuring the row itself. It now observes
   the actual fixed-height row geometry, keeping the same header/preview/spacing
   thresholds and large-text coverage. Production spacing and privacy unchanged.
+- Targeted2 run38124112946/job114424769830, source
+  `d20b54238fddbc5dc26ec015491d2876dc0dd02f`: FAILED at test compilation,
+  no executed-test pass or IPA. The test measurement helper was inserted in
+  a local scope with a private modifier; moved to XCTestCase type scope.
 
 - Approved V5 homepage artwork only; system B02 AppIcon and launch assets unchanged.
 - Remove lower-left indexed-count footer; keep counts available in Library and the existing upper home subtitle.
