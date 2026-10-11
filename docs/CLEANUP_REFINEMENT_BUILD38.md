@@ -29,6 +29,18 @@ Local source changes, **not included in the delivered build38 IPA**:
 
 ### Delivered build38 scope
 
+Follow-up build39 native validation:
+
+- Targeted1 run38123466637/job114422822269, source
+  `94f8b7f79b2cea1bd419f23bdd466a647e4673fb`: FAILED, no IPA.
+  Compilation passed. OCR11 and recent-query16 passed; refinement6 had two
+  assertion failures in the new compact-row method. App33 methods in37.030s
+  (wall44.573s). The new privacy disclosure UI method passed in52.445s.
+  The sizing test used the whole hosting controller's fitting height, which
+  includes host space rather than measuring the row itself. It now observes
+  the actual fixed-height row geometry, keeping the same header/preview/spacing
+  thresholds and large-text coverage. Production spacing and privacy unchanged.
+
 - Approved V5 homepage artwork only; system B02 AppIcon and launch assets unchanged.
 - Remove lower-left indexed-count footer; keep counts available in Library and the existing upper home subtitle.
 - Recent query chips use measured text widths, compress only when the single row cannot fit; full stored/action/accessibility query remains unchanged.

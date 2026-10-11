@@ -16,18 +16,37 @@ final class SimilarCleanupRefinementPresentationTests: XCTestCase {
             for type in [DynamicTypeSize.large, .accessibility5] {
                 let sheet = SimilarPhotoCleanupSheet(state: f.cleanup, appState: f.app,
                     thumbnailContent: { _ in AnyView(Color.orange) })
+                let measured = CompactGroupRowMeasurement()
+                let content = VStack(spacing: 0) {
+                    sheet.groupRow(group, number: 1)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear
+                                    .onAppear { measured.size = geometry.size }
+                                    .onChange(of: geometry.size) { measured.size = $0 }
+                            }
+                        }
+                    Spacer(minLength: 0)
+                }
                 let host = try ControlsNativeHost(
-                    content: AnyView(sheet.groupRow(group, number: 1)),
+                    content: AnyView(content),
                     size: CGSize(width: width, height: 852), dynamicType: type)
                 defer { host.close() }
-                try await host.settle()
-                let size = host.controller.sizeThatFits(in: CGSize(width: width, height: 852))
+                try await host.wait { measured.size.height > 0 }
+                let size = measured.size
+                XCTAssertEqual(size.width, width, accuracy: host.pixel)
                 let previewHeight = SimilarPhotoGroupGeometry.previewHeight(count: 5, width: width)
                 XCTAssertEqual(SimilarPhotoGroupGeometry.previewIndices(count: 6).count, 5)
                 XCTAssertGreaterThanOrEqual(size.height, 44 + previewHeight + 12.5 - host.pixel)
                 if type == .large {
                     XCTAssertLessThanOrEqual(size.height, 44 + previewHeight + 12.5 + host.pixel,
                         "Row must contain only its 44pt header, full-size previews and 12.5pt spacing/divider")
+                }
+
+                @MainActor
+                private final class CompactGroupRowMeasurement {
+                    var size: CGSize = .zero
                 }
                 try host.attach(to: self, name: "UIReview-compact-group-\(Int(width))-\(type)")
             }
