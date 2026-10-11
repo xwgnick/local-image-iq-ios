@@ -3,6 +3,11 @@ import UIKit
 import XCTest
 @testable import LocalImageIQ
 
+private struct CompactGroupRowSize: PreferenceKey {
+    static let defaultValue = CGSize.zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+}
+
 /// Native-host geometry/identity tests using only synthetic colors/metadata.
 /// No actual gestures, personal images, PhotoKit mutations or timing claims.
 @MainActor
@@ -27,12 +32,12 @@ final class SimilarCleanupRefinementPresentationTests: XCTestCase {
                         .background {
                             GeometryReader { geometry in
                                 Color.clear
-                                    .onAppear { measured.size = geometry.size }
-                                    .onChange(of: geometry.size) { measured.size = $0 }
+                                    .preference(key: CompactGroupRowSize.self, value: geometry.size)
                             }
                         }
                     Spacer(minLength: 0)
                 }
+                .onPreferenceChange(CompactGroupRowSize.self) { measured.size = $0 }
                 let host = try ControlsNativeHost(
                     content: AnyView(content),
                     size: CGSize(width: width, height: 852), dynamicType: type)
