@@ -274,6 +274,12 @@ review, applicable mainland compliance, App Store metadata and Apple review.
   bundled licensed variants, and verifies every resulting resource filename.
   Physical devices are rejected; the helper is absent from the production
   project. Native validation of this preparation path remains pending.
+- Helper run `38204193678` compiled but explicitly failed `unauthorized` before
+  any photo mutation. Removed the remaining `simctl privacy` pregrant; both
+  helper and real app now request actual PhotoKit consent and the UI test handles
+  the system Full Access action. The helper then separately requires system
+  deletion confirmation where applicable. Failure audit is attached before the
+  final assertion rather than depending solely on XCTest unwinding.
 - [Written compliance inquiries](app-store/compliance-inquiries.zh-Hans.txt)
   preserve the actual system-networking boundaries. They have not been sent.
   Apple support requires the owner's account; no identity, enrollment, filing

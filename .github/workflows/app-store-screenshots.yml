@@ -64,7 +64,6 @@ jobs:
             xcrun simctl ui "$id" appearance light
             xcrun simctl status_bar "$id" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
             xcrun simctl install "$id" build/StoreDerivedData/Build/Products/Debug-iphonesimulator/StorePhotoPreparation.app
-            xcrun simctl privacy "$id" grant photos com.example.localimageiq.store-preparation
             xcrun simctl install "$id" build/StoreDerivedData/Build/Products/Debug-iphonesimulator/LocalImageIQ.app
             status=0
             xcodebuild test-without-building -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \

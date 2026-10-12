@@ -65,8 +65,9 @@ test('photo preparation is confined to the screenshot variant and a named dispos
   assert.ok(helper.includes('existing.count == 0 || existing.count == 6'));
   assert.ok(helper.includes('PHAsset.fetchAssets(with: nil).count == 0'));
   assert.ok(helper.includes('actualNames.sorted() == names.sorted()'));
+  assert.ok(helper.includes('await PHPhotoLibrary.requestAuthorization(for: .readWrite)'));
   const capture = source('scripts/store-screenshots/StoreScreenshotTests.swift');
   assert.ok(capture.includes('"已索引 12 张"'));
   assert.ok(capture.includes('"Prepared 12 licensed photos"'));
-  assert.doesNotMatch(source('.github/workflows/app-store-screenshots.yml'), /simctl addmedia/);
+  assert.doesNotMatch(source('.github/workflows/app-store-screenshots.yml'), /simctl (addmedia|privacy)/);
 });

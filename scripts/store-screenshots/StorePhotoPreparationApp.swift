@@ -66,7 +66,8 @@ private struct PreparationView: View {
             }
             return url
         }
-        guard PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized else {
+        let authorization = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        guard authorization == .authorized else {
             throw PreparationError.unauthorized
         }
         let existing = PHAsset.fetchAssets(with: nil)

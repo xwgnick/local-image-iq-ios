@@ -82,8 +82,16 @@ final class StoreScreenshotTests: XCTestCase {
         prepare.tap()
         let status = helper.staticTexts["store-preparation-status"]
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let allow = springboard.buttons["Allow Full Access"]
         let deletion = springboard.alerts.buttons.matching(
             NSPredicate(format: "label MATCHES %@", "^Delete( [0-9]+ Photos?)?$")).firstMatch
+        let permissionOrProgress = NSPredicate { _, _ in
+            allow.exists || deletion.exists
+                || (status.exists && (status.label == "Prepared 12 licensed photos"
+                                      || status.label.hasPrefix("Failed:")))
+        }
+        wait(status, predicate: permissionOrProgress, timeout: 30)
+        if allow.exists { allow.tap() }
         let readyOrConsent = NSPredicate { _, _ in
             deletion.exists || (status.exists && (status.label == "Prepared 12 licensed photos"
                                                   || status.label.hasPrefix("Failed:")))
@@ -93,6 +101,10 @@ final class StoreScreenshotTests: XCTestCase {
         let finished = NSPredicate(format: "exists == true AND (label == %@ OR label BEGINSWITH %@)",
                                    "Prepared 12 licensed photos", "Failed:")
         wait(status, predicate: finished, timeout: 60)
+        let audit = XCTAttachment(string: helper.debugDescription)
+        audit.name = "Store-photo-library-preparation-result"
+        audit.lifetime = .keepAlways
+        add(audit)
         XCTAssertEqual(status.label, "Prepared 12 licensed photos")
     }
 
