@@ -33,29 +33,43 @@ func text(_ value: String, x: CGFloat, y: CGFloat, width: CGFloat,
     }
 }
 
+guard let specimen = NSImage(contentsOfFile: "build/store-source-photos/identity-sample-both.png") else {
+    throw PilotError.source("identity-sample-both.png")
+}
 for index in 0..<4 {
     let image = NSImage(size: NSSize(width: 1600, height: 1100))
     image.lockFocus()
-    NSColor(calibratedWhite: 0.91 - Double(index) * 0.02, alpha: 1).setFill()
+    let backgrounds: [NSColor] = [
+        NSColor(calibratedRed: 0.83, green: 0.76, blue: 0.65, alpha: 1),
+        NSColor(calibratedWhite: 0.94, alpha: 1),
+        NSColor(calibratedRed: 0.63, green: 0.69, blue: 0.72, alpha: 1),
+        NSColor(calibratedRed: 0.90, green: 0.87, blue: 0.81, alpha: 1),
+    ]
+    backgrounds[index].setFill()
     NSRect(x: 0, y: 0, width: 1600, height: 1100).fill()
-    NSColor(calibratedRed: 0.86, green: 0.93, blue: 0.92, alpha: 1).setFill()
-    NSBezierPath(roundedRect: NSRect(x: 120, y: 150, width: 1360, height: 820),
-                 xRadius: 45, yRadius: 45).fill()
-    text("身份证检索 · 演示卡", x: 185, y: 790, width: 1180, size: 62, bold: true)
-    text("虚构样本 / NOT A VALID ID", x: 185, y: 685, width: 1180, size: 40)
-    let front = index % 2 == 0
-    if front {
-        NSColor(calibratedWhite: 0.7, alpha: 1).setFill()
-        NSRect(x: 1150, y: 350, width: 220, height: 270).fill()
-        text("头像\n占位", x: 1190, y: 415, width: 180, size: 44)
-        text("姓名：演示人物 \(index + 1)\n用途：照片搜索演示\n编号：DEMO-A\(index + 1)",
-             x: 185, y: 360, width: 900, size: 48)
-    } else {
-        text("照片检索演示\n非政府签发 / 不含真实身份信息\n背面样式 \(index + 1)",
-             x: 185, y: 360, width: 1120, size: 48)
+    for line in 0..<22 {
+        NSColor(calibratedWhite: index == 1 ? 0.75 : 0.25, alpha: 0.025).setFill()
+        NSRect(x: 0, y: CGFloat(line) * 52, width: 1600, height: 2).fill()
     }
-    text("演示样本 · 不可用于身份验证", x: 185, y: 220, width: 1180, size: 45, bold: true,
-         color: NSColor(calibratedRed: 0.65, green: 0.15, blue: 0.12, alpha: 1))
+    NSGraphicsContext.saveGraphicsState()
+    let transform = NSAffineTransform()
+    transform.translateX(by: 800, yBy: 560)
+    transform.rotate(byDegrees: [CGFloat(-5), 4, -3, 6][index])
+    transform.concat()
+    let shadow = NSShadow()
+    shadow.shadowColor = NSColor(calibratedWhite: 0, alpha: 0.30)
+    shadow.shadowOffset = NSSize(width: 8, height: -14)
+    shadow.shadowBlurRadius = 24
+    shadow.set()
+    // AppKit source coordinates are bottom-up: the specimen front is the lower half.
+    let front = index % 2 == 0
+    let source = NSRect(x: 0, y: front ? 0 : specimen.size.height / 2,
+                        width: specimen.size.width, height: specimen.size.height / 2)
+    specimen.draw(in: NSRect(x: -680, y: -430, width: 1360, height: 860),
+                  from: source, operation: .sourceOver, fraction: 1)
+    NSGraphicsContext.restoreGraphicsState()
+    text("公开证件样本 · NOT A VALID ID · 不可用于身份验证",
+         x: 120, y: 35, width: 1380, size: 28)
     image.unlockFocus()
     try save(image, name: "demo-identity-\(index + 1).png")
 }

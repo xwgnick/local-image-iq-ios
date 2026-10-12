@@ -20,8 +20,8 @@
       "headline": "证件照片，不必翻遍相册",
       "query": "身份证",
       "expectedTopFamily": "demo-identity-",
-      "acceptance": "OCR is off. Multiple distinct fictional card photos should lead the actual semantic results; do not mislabel OCR matches as semantic recognition.",
-      "limitation": "Prominently identify original mock cards as demo samples. No real personal information, valid ID numbers, official seals, national emblem or government-issued replica. Mock success does not prove performance on every real document."
+      "acceptance": "OCR is off. Four staged front/back views of a public identity-card specimen should lead the actual semantic results. Preserve the full evidence, but show only the actual leading specimen photos in the marketing focus crop; do not alter their order.",
+      "limitation": "Use the existing public-domain PRC specimen with its SAMPLE markings and placeholder fields intact. These are four staged views of the same specimen, not four real identities. No real person's identity scan, valid identity number, added portrait or newly generated state insignia. Specimen success does not prove performance on every real document."
     },
     {
       "id": "pilot-03-ocr-query",

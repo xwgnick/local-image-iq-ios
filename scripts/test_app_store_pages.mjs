@@ -75,7 +75,7 @@ test('photo preparation is confined to the screenshot variant and a named dispos
   assert.doesNotMatch(source('.github/workflows/app-store-screenshots.yml'), /simctl (addmedia|privacy)/);
 });
 
-test('priority pilot retains actual Chinese queries, an OCR baseline and distinct safe demo assets', () => {
+test('priority pilot retains actual Chinese queries, an OCR baseline and clearly marked specimen views', () => {
   const source = path => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
   const scenes = JSON.parse(source('scripts/store-screenshots/priority-scenes.json')).scenes;
   assert.equal(scenes.length, 3);
@@ -91,6 +91,13 @@ test('priority pilot retains actual Chinese queries, an OCR baseline and distinc
   const assets = source('scripts/store-screenshots/make_pilot.swift');
   assert.ok(assets.includes('NOT A VALID ID'));
   assert.ok(assets.includes('不可用于身份验证'));
+  assert.ok(assets.includes('identity-sample-both.png'));
+  assert.ok(assets.includes('specimen.draw('));
+  assert.doesNotMatch(assets, /头像\\n占位/);
+  const preparation = source('scripts/store-screenshots/prepare_pilot.mjs');
+  assert.ok(preparation.includes('0837498d3f13f3b7a391d29cccb3e756a8f524a81f406dc302a5930b24094321'));
+  assert.ok(preparation.includes('PD-PRC-exempt'));
+  assert.ok(preparation.includes('Retain SAMPLE markings'));
   assert.ok(assets.includes('["Q7M2", "R8N3", "S9P4", "T6K5"]'));
   assert.ok(assets.includes('["北门值班室", "松桥路东口", "河畔图书馆", "梧桐街南门"]'));
   assert.ok(capture.includes('["松桥路东口", "河畔图书馆", "梧桐街南门"]'));
@@ -102,4 +109,9 @@ test('priority pilot retains actual Chinese queries, an OCR baseline and distinc
   assert.ok(workflow.includes('options: [baseline, priority-pilot]'));
   assert.ok(workflow.includes('testCaptureThreePriorityScenes'));
   assert.ok(workflow.includes('[ "$label" != "iphone-large" ]'));
+  assert.ok(workflow.includes('build/store-photos/demo-identity-*.png'));
+  const preview = source('scripts/store-screenshots/render_priority_preview.mjs');
+  assert.ok(preview.includes('实际搜索前四项'));
+  assert.ok(preview.includes('不代表完整结果列表'));
+  assert.ok(preview.includes('Leading focus crop must be one contiguous row'));
 });
