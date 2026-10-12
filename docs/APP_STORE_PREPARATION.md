@@ -293,6 +293,23 @@ review, applicable mainland compliance, App Store metadata and Apple review.
   lookup for result readiness, based on this actual tree, without changing
   production accessibility. The diagnostic RGB PNG is 1178x2556; final store
   canvases still need exact accepted dimensions and human visual review.
+- Run `38207709838`, job `114674784447`, source
+  `1aa3e32ec90178ce97ee0449aa912f957b46e93b`: **all three device executions
+  passed**, one real-photo UI test each, zero failures. Downloaded artifact
+  `11729247420` and visually reviewed all eighteen frames in per-device sheets.
+  Actual photos, ranking, overview/default and selected circles, +2 exclusions,
+  shared detail selection and privacy presentation are visible.
+- Packaged eighteen RGB/no-alpha candidates at 1179x2556, 1320x2868 and
+  2064x2752. Medium-iPhone XCTest exports are 1178 pixels wide; duplicate only
+  the right edge column to fit the 1179 canvas, with no rescale/content editing.
+  Decoded RGB comparisons verify preservation of every source pixel in all
+  eighteen images. Six packaging/page tests pass; ZIP CRC passes.
+- Local delivery: `build/app-store/Piankexun-store-screenshots-38207709838.zip`,
+  22,197,147 bytes, SHA-256
+  `e74b391b2805e85467766ebfba3ae9f28488a30932e394a65b06cee50d5785b9`.
+  Includes source-photo provenance and per-frame dimensions/hashes/transformation
+  records. These are reviewed native candidates, not owner approval or an Apple
+  upload. No OCR/comparison capture or Chinese Translation test is claimed.
 - [Written compliance inquiries](app-store/compliance-inquiries.zh-Hans.txt)
   preserve the actual system-networking boundaries. They have not been sent.
   Apple support requires the owner's account; no identity, enrollment, filing

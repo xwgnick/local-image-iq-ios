@@ -18,6 +18,8 @@ IPA 1,420,660,564 bytes，完整下载 SHA-256 `b80ff3bba1efe4fcd566eb1a3b2068ac
 
 功能开发暂停。经开发者确认的[隐私政策](https://xwgnick.github.io/local-image-iq-ios/privacy.html)和[支持页面](https://xwgnick.github.io/local-image-iq-ios/support.html)已公开上线。后续准备源码接入了两页链接，并补入CHN/ADM1原始公有领域出处；截图任务使用公开许可素材和真实模型在iPhone／iPad模拟器拍摄，不使用私人照片或伪造搜索结果。上述准备不代表已报名会员、完成备案判断、上传签名包或通过Apple审核，也不会远程修改现有build40。
 
+截图run `38207709838` 已在三台模拟器全部通过，18张原生候选完成视觉、尺寸、RGB像素及ZIP完整性检查。政策／许可入口定点原生7项通过。素材交付位置、许可证据、问卷依据和仍需本人处理的事项见[首发材料包](docs/APP_STORE_SUBMISSION.md)。
+
 ## 0.15.1 / build39 历史交付
 
 **build39 已交付，真机验收待正常使用确认。**清理组间距20→4pt、行内间距8→4pt、分隔线上留白12→4pt；五张预览和44pt操作区域不变。“隐私与关于”改为简短摘要＋可展开详情，重要风险和原详细说明保留。默认搜索建议未变。
