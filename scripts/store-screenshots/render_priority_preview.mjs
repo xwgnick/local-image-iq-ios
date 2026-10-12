@@ -116,8 +116,12 @@ header{padding:100px 100px 58px}.brand{font-size:46px;font-weight:700;letter-spa
 .memory footer{padding-top:40px}
 .ocr-art{display:flex;gap:45px;margin:0 90px 30px;align-items:center}.ocr-art img{width:550px;height:auto;border:2px solid #dfcfac;border-radius:26px;box-shadow:0 20px 40px #4a382d18}.ocr-art>div{flex:1;min-width:0}.ocr-art .eyebrow{font-size:48px;line-height:1.5;margin:0 0 55px}.ocr-art p{font-size:30px;line-height:1.6;color:#746b5b}.ocr-art strong{font-size:59px;color:#826327;white-space:nowrap}.ocr-art .code{font-size:42px;line-height:1.5;color:#292723}.remark{margin:0 90px 35px}.remark figcaption{font-size:27px;color:#746b5b;margin-bottom:14px}.remark svg{display:block;width:100%;border:2px solid #dfcfac;border-radius:18px}.ocr footer{padding-top:35px}
 footer small{font-size:22px;line-height:1.7;color:#8c8172;display:block}.notice{position:fixed;left:12px;bottom:12px;background:#292723;color:white;padding:10px 18px;font-size:14px;border-radius:8px;z-index:2}
-</style><main>${cards}${ocrCard}</main><aside class="notice">长查询与OCR初稿 · 身份证原文检索相关性未达标，该图不展示</aside></html>`;
+</style><main>${cards}${ocrCard}</main><aside class="notice">两张视觉初稿 · 身份证图等待真机翻译路径实拍（OCR关闭）</aside></html>`;
 const output = path.join(root, 'priority-preview.html');
-fs.writeFileSync(output, html);
+const review = html.replace('</style>', `main{flex-wrap:wrap;width:100%;gap:24px;padding:24px}.poster{zoom:.32}.notice{position:static;margin:0 24px 24px;width:fit-content}
+@media(max-width:600px){main{padding:12px;gap:12px}.poster{zoom:.25}.notice{margin:0 12px 12px}}
+@media(max-width:360px){.poster{zoom:.22}}
+</style>`);
+fs.writeFileSync(output, review);
 fs.writeFileSync(path.join(root, 'priority-preview-export.html'), html.replace(/<aside class="notice">.*?<\/aside>/, ''));
-console.log(JSON.stringify({ output, scenes: 2, identityStatus: 'Exact specimen query verified, but relevance rejected; identity poster withheld', ocrStatus: `Reviewed ${ocr.query}: rank ${proof.beforeRank} to ${proof.afterRank}` }));
+console.log(JSON.stringify({ output, scenes: 2, identityStatus: 'Awaiting real-device translated capture with OCR off; raw simulator is not the phone route', ocrStatus: `Reviewed ${ocr.query}: rank ${proof.beforeRank} to ${proof.afterRank}` }));

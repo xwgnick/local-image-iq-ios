@@ -122,3 +122,14 @@ test('priority pilot retains actual Chinese queries, an OCR baseline and clearly
   assert.equal(scenes[2].reviewedEvidence.afterRank, 1);
   assert.equal(scenes[2].reviewedEvidence.afterCapture, 'pilot-ocr-after-2');
 });
+
+test('device shoot kit preserves normal translation settings and contains only public demo inputs', () => {
+  const kit = fs.readFileSync(new URL('store-screenshots/prepare_device_shoot.mjs', import.meta.url), 'utf8');
+  assert.ok(kit.includes('assert.equal(prepared.length, 11)'));
+  assert.ok(kit.includes('Unexpected files in kit; do not include private or unrelated photos'));
+  assert.ok(kit.includes('chineseSearchEnhancement: true, ocr: index === 2'));
+  assert.ok(kit.includes('不删除原有照片，不清空索引，不卸载应用'));
+  assert.ok(kit.includes('不能套用模拟器第6到第1'));
+  assert.ok(kit.includes('不需要任何真人身份证、账号密码或私人照片'));
+  assert.ok(kit.includes("actualDeviceCapture: 'pending'"));
+});
