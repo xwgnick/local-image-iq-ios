@@ -67,4 +67,5 @@ footer small{font-size:22px;line-height:1.7;color:#8c8172;display:block}.notice{
 </style><main>${cards}</main><aside class="notice">长查询取景初稿 · 旧证件素材已撤下，新素材原生重拍中 · OCR尚未完成</aside></html>`;
 const output = path.join(root, 'priority-preview.html');
 fs.writeFileSync(output, html);
+fs.writeFileSync(path.join(root, 'priority-preview-export.html'), html.replace(/<aside class="notice">.*?<\/aside>/, ''));
 console.log(JSON.stringify({ output, scenes: 1, identityStatus: 'Old cards rejected; new specimen capture pending', ocrStatus: 'Not rendered: first example did not prove OCR dependence' }));
