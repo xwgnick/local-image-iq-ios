@@ -626,8 +626,19 @@ actor SQLitePhotoStore {
         var frame = Data()
         frame.reserveCapacity(Int(sqlite3_column_bytes(statement, 3)) + Int(sqlite3_column_bytes(statement, 7)) + 256)
         for column in 0..<sqlite3_column_count(statement) {
-            var type = sqlite3_column_type(statement, column).littleEndian
+            let kind = sqlite3_column_type(statement, column)
+            var type = kind.littleEndian
             Swift.withUnsafeBytes(of: &type) { frame.append(contentsOf: $0) }
+            if kind == SQLITE_FLOAT || kind == SQLITE_INTEGER {
+                // SQLite's numeric-to-text conversion can lose low Double bits.
+                var value = (kind == SQLITE_FLOAT
+                    ? sqlite3_column_double(statement, column).bitPattern
+                    : UInt64(bitPattern: sqlite3_column_int64(statement, column))).littleEndian
+                var length = UInt64(MemoryLayout<UInt64>.size).littleEndian
+                Swift.withUnsafeBytes(of: &length) { frame.append(contentsOf: $0) }
+                Swift.withUnsafeBytes(of: &value) { frame.append(contentsOf: $0) }
+                continue
+            }
             let bytes = sqlite3_column_blob(statement, column)
             let count = Int(sqlite3_column_bytes(statement, column))
             var length = UInt64(count).littleEndian

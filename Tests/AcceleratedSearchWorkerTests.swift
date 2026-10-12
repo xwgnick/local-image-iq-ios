@@ -350,6 +350,22 @@ final class AcceleratedSearchWorkerTests: XCTestCase {
         await noPixels(c)
     }
 
+    func testIncrementalSignaturePreservesLowNumericBitsAndDetectsRevisionChanges() async throws {
+        let c = try context(rows: [row("a")])
+        let reader = SQLitePhotoStore(directory: c.directory, readOnly: true)
+        let ids: Set<String> = ["a"]
+        let original = try await reader.searchRecords(modelVersion: version, accessibleIDs: ids, reusing: [])
+        try await c.writer.save(row("a", creation: Double(100).nextUp))
+        let changedTime = try await reader.searchRecords(modelVersion: version, accessibleIDs: ids, reusing: original)
+        XCTAssertEqual(changedTime.first?.photo.creationTime?.bitPattern, Double(100).nextUp.bitPattern)
+        XCTAssertNotEqual(changedTime.first?.sourceSignature, original.first?.sourceSignature)
+        try await c.writer.save(row("a", revision: Double(123).nextUp, creation: Double(100).nextUp))
+        let changedRevision = try await reader.searchRecords(modelVersion: version, accessibleIDs: ids, reusing: changedTime)
+        XCTAssertEqual(changedRevision.first?.photo.modificationTime.bitPattern, Double(123).nextUp.bitPattern)
+        XCTAssertNotEqual(changedRevision.first?.sourceSignature, changedTime.first?.sourceSignature)
+        await noPixels(c)
+    }
+
     func testCancelledOCRDoesNotDiscardWarmImageMatrixAndSavedTextRemainsSearchable() async throws {
         let c = try context()
         try await seedText(c, id: "b", text: "receipt")
