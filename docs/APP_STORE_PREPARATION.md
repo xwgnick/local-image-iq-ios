@@ -249,8 +249,12 @@ review, applicable mainland compliance, App Store metadata and Apple review.
   retention policy. Only the explicit website allowlist is deployed.
 - Commit `7364a8470bfd704fb60cf62ce201afb3b7b69613` adds external policy/support
   links and the recovered CHN/ADM1 source evidence to generated offline notices.
-  All 11 related Node tests passed. Targeted native run `38201031094` covers
-  resource contracts and the existing notices-navigation UI test.
+  Targeted native run `38201031094`, job `114654271509`, passed all six resource
+  tests and the existing notices-navigation UI test: seven passed, zero failed,
+  zero skipped, no runtime warnings. Downloaded summary/tree/validation evidence
+  confirms both requested selectors. With the subsequent metadata-length check,
+  all twelve related Node tests pass; regeneration matches all seven pinned
+  dependency licenses.
 - First real-photo screenshot run `38199785425` compiled but failed its exact
   indexing gate: exported accessibility evidence showed no Photos permission
   and zero indexed photos. It produced no approved store screenshots.
