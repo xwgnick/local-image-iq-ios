@@ -74,6 +74,30 @@ final class TextIndexStoreTests: XCTestCase {
         }
     }
 
+    func testCompletionMetadataScopesPolicyRevisionAndAccessWithoutWriting() async throws {
+        let (store, directory) = try makeStore()
+        for record in [fixture("full"), fixture("empty", text: ""), fixture("reduced", reduced: true),
+                       fixture("stale"), fixture("old", policy: "old-policy"), fixture("hidden")] {
+            try await store.save(record)
+        }
+        await store.close()
+        let before = try snapshot(directory)
+        let reader = SQLiteTextStore(directory: directory, readOnly: true)
+        let metadata = try await reader.indexedMetadata(
+            revisions: ["full": 1, "empty": 1, "reduced": 1, "stale": 2, "old": 1])
+        await reader.close()
+        XCTAssertEqual(Set(metadata.keys), ["full", "empty", "reduced"])
+        XCTAssertEqual(metadata["full"]?.hasText, true)
+        XCTAssertEqual(metadata["empty"]?.hasText, false)
+        XCTAssertEqual(metadata["reduced"]?.isReduced, true)
+        XCTAssertEqual(try snapshot(directory), before)
+        let missing = directory.appendingPathComponent("missing")
+        let absent = SQLiteTextStore(directory: missing)
+        let empty = try await absent.indexedMetadata(revisions: ["a": 1])
+        XCTAssertTrue(empty.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+    }
+
     func testDurableRoundTripAndPostingsSurviveReopenIncludingNULAndQuotedID() async throws {
         let (store, directory) = try makeStore()
         let expected = fixture("synthetic-'quote-\0照片", text: "北京\0Train123", revision: 123.125, reduced: true)

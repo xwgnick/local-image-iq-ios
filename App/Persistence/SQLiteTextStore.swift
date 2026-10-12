@@ -53,6 +53,27 @@ actor SQLiteTextStore {
         }
     }
 
+    /// Read completion metadata in one pass without decoding stored OCR text.
+    func indexedMetadata(revisions: [String: Double]) throws -> [String: PhotoTextIndexMetadata] {
+        try Task.checkCancellation()
+        guard !revisions.isEmpty, let db = try database() else { return [:] }
+        return try db.statement("""
+            SELECT id, revision, is_reduced, has_text FROM text_records WHERE policy = ?
+            """) { statement in
+            try db.bind(PhotoTextPolicy.version, at: 1, to: statement)
+            var result: [String: PhotoTextIndexMetadata] = [:]
+            while try db.next(statement) {
+                try Task.checkCancellation()
+                let id = try db.string(statement, at: 0)
+                guard let revision = revisions[id],
+                      revision == sqlite3_column_double(statement, 1) else { continue }
+                result[id] = PhotoTextIndexMetadata(isReduced: sqlite3_column_int(statement, 2) != 0,
+                                                    hasText: sqlite3_column_int(statement, 3) != 0)
+            }
+            return result
+        }
+    }
+
     /// Empty completed OCR is a real record, so subsequent manual indexing can resume.
     /// Metadata, text, removal of obsolete postings and all new postings commit together.
     /// The synchronous access guard runs after actor entry and again before commit;

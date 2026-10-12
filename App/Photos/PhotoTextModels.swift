@@ -26,6 +26,11 @@ struct PhotoTextRecord: Sendable {
     let isReduced: Bool
 }
 
+struct PhotoTextIndexMetadata: Sendable {
+    let isReduced: Bool
+    let hasText: Bool
+}
+
 struct TextIndexCounts: Sendable, Equatable {
     var records = 0
     var withText = 0

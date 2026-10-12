@@ -13,6 +13,18 @@ import ImageIQCore
 /// XCUI tap. The footer harness tests covered layout, not ContentView routing.
 @MainActor
 final class OCRLibraryPresentationTests: XCTestCase {
+    func testToggleReusesReducedRecordsButManualUpdateAndRetryRequestQualityUpgrade() async throws {
+        let c = try await context()
+        c.state.textSearchEnabled = true
+        await c.state.waitUntilIdle()
+        XCTAssertEqual(c.worker.retryReducedRequests, [false])
+        c.state.indexPhotoText()
+        await c.state.waitUntilIdle()
+        c.state.retryOCRSync()
+        await c.state.waitUntilIdle()
+        XCTAssertEqual(c.worker.retryReducedRequests, [false, true, true])
+    }
+
     func testWaitingCancellationDoesNotCancelHeldManualImageIndex() async throws {
         let c = try await context()
         let image = OCRLibraryGate()
@@ -443,6 +455,7 @@ private final class OCRLibraryWorker: PhotoWorkServicing {
     private(set) var refreshCalls = 0
     private(set) var imageCalls = 0
     private(set) var textCalls = 0
+    private(set) var retryReducedRequests: [Bool] = []
     private(set) var imageWasCancelled = false
     private(set) var textWasCancelled = false
     private(set) var unexpectedCalls = 0
@@ -458,6 +471,12 @@ private final class OCRLibraryWorker: PhotoWorkServicing {
         try Task.checkCancellation()
         return summary
     }
+    func indexText(networkAllowed: Bool, retryReducedPreviews: Bool,
+                   progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
+        retryReducedRequests.append(retryReducedPreviews)
+        return try await indexText(networkAllowed: networkAllowed, progress: progress)
+    }
+
     func indexText(networkAllowed: Bool, progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
         textCalls += 1
         XCTAssertFalse(networkAllowed)

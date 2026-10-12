@@ -479,7 +479,7 @@ final class AppState: ObservableObject {
 
     func indexPhotoText() {
         guard canIndexText else { return }
-        ocrSync.requestUpdate()
+        ocrSync.requestUpdate(retryReducedPreviews: true)
         refreshOCRSyncAvailability()
     }
 
@@ -492,7 +492,7 @@ final class AppState: ObservableObject {
 
     func retryOCRSync() {
         guard ocrSync.canRetry else { return }
-        ocrSync.requestUpdate()
+        ocrSync.requestUpdate(retryReducedPreviews: true)
         refreshOCRSyncAvailability()
     }
 
@@ -514,8 +514,10 @@ final class AppState: ObservableObject {
         // authoritative as soon as this explicit update may start changing rows.
         summary.textIndexStatisticsKnown = false
         let networkAllowed = allowICloudDownload
+        let retryReducedPreviews = ocrSync.retryReducedPreviews
         schedule(.indexingText, ocrRun: run) { [weak self, worker] token in
-            let summary = try await worker.indexText(networkAllowed: networkAllowed) { [weak self] progress in
+            let summary = try await worker.indexText(networkAllowed: networkAllowed,
+                                                     retryReducedPreviews: retryReducedPreviews) { [weak self] progress in
                 await self?.accept(textProgress: progress, token: token, ocrRun: run)
             }
             return .summary(summary, "文字索引扫描结束；已完成记录可复用，未完成项可手动重试。")

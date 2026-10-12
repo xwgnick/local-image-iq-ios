@@ -6,7 +6,7 @@ import SwiftUI
 struct PhotoTextIndexSection: View {
     let state: AppState
 
-    static let triggerExplanation = "每次在主页从关闭切换为开启，会增量更新一次文字索引；忙碌时等待当前任务结束。仅恢复已保存的开启状态、打开页面或搜索不会再次扫描。也可在这里手动更新。"
+    static let triggerExplanation = "每次在主页从关闭切换为开启，会批量检查已保存的文字索引，仅识别缺失或变化的项目，较小预览的已有结果也会复用；忙碌时等待当前任务结束。仅恢复已保存的开启状态、打开页面或搜索不会再次扫描。手动更新才会尝试重新识别较小或降质预览。"
 
     var body: some View { PhotoTextIndexContent(state: state) }
 }
@@ -76,7 +76,7 @@ struct PhotoTextIndexContent: View {
                     }
                 }
                 if state.summary.textIndexStatisticsKnown, state.summary.textIndexCounts.reduced > 0 {
-                    Text("其中 \(state.summary.textIndexCounts.reduced) 张使用较小或降质预览，细字可能识别不全；下次增量更新会重试。")
+                    Text("其中 \(state.summary.textIndexCounts.reduced) 张使用较小或降质预览，细字可能识别不全；再次开启会复用，手动更新可尝试更清晰的照片。")
                         .font(.caption).foregroundStyle(IQStyle.secondary)
                 }
                 Button(updateTitle, systemImage: "text.viewfinder", action: updateIndex)

@@ -80,6 +80,7 @@ protocol PhotoWorkServicing: Sendable {
     func prepareForLaunch(timing: LaunchTimingRecorder?, progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary
     func indexText(networkAllowed: Bool, progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary
+    func indexText(networkAllowed: Bool, retryReducedPreviews: Bool, progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse
     func search(text: String, limit: Int, locationWeight: Float, filters: PhotoSearchFilters) async throws -> SearchResponse
     func search(text: String, originalText: String, limit: Int, locationWeight: Float, filters: PhotoSearchFilters, textSearchEnabled: Bool) async throws -> SearchResponse
@@ -92,6 +93,10 @@ protocol PhotoWorkServicing: Sendable {
 
 extension PhotoWorkServicing {
     func releaseSearchMemory() async { }
+    func indexText(networkAllowed: Bool, retryReducedPreviews: Bool,
+                   progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
+        try await indexText(networkAllowed: networkAllowed, progress: progress)
+    }
     /// Requirements, rather than extension-only overloads, preserve dynamic
     /// dispatch to production while leaving older injected services unchanged.
     func search(text: String, originalText: String, limit: Int, locationWeight: Float,
@@ -916,6 +921,11 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
     /// Explicit, independently resumable OCR. AppState drains its serialized
     /// queue before entry; this never updates/reconciles the visual index.
     func indexText(networkAllowed: Bool, progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
+        try await indexText(networkAllowed: networkAllowed, retryReducedPreviews: true, progress: progress)
+    }
+
+    func indexText(networkAllowed: Bool, retryReducedPreviews: Bool,
+                   progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
         try Task.checkCancellation()
         let library = self.library
         guard let textRecognizer else { throw AppFailure.photo("此服务不支持照片文字索引。") }
@@ -959,82 +969,78 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
             .map { ($0.id, $0.modificationTime) }, uniquingKeysWith: { _, last in last })
         var state = TextIndexProgress(total: candidates.count)
         try validate()
-        await progress(state)
-        try validate()
         let textStore = try textStorage(readOnly: false)
         do {
+            let saved = try await textStore.indexedMetadata(revisions: eligible)
+            try validate()
+            var pending: [PhotoRevision] = []
+            for revision in candidates {
+                try Task.checkCancellation()
+                if eligible[revision.id] == nil {
+                    state.staleSkipped += 1
+                    state.completed += 1
+                } else if let old = saved[revision.id], !old.isReduced || !retryReducedPreviews {
+                    state.reused += 1
+                    state.completed += 1
+                    if old.hasText { state.withText += 1 }
+                    if old.isReduced { state.reduced += 1 }
+                } else {
+                    pending.append(revision)
+                }
+            }
+            await progress(state)
+            try validate()
             // Only this explicit operation prunes OCR, against exact eligible
             // active-image revisions. Stale visuals remain untouched/searchable.
             try validate()
             try await textStore.reconcile(revisions: eligible)
             try validate()
-            for revision in candidates {
+            for revision in pending {
                 try validate(revision)
-                if eligible[revision.id] == nil {
-                    state.staleSkipped += 1
-                } else {
-                    let old = try await textStore.record(id: revision.id)
+                let recognized: RecognizedPhotoText
+                do {
+                    recognized = try await textRecognizer.recognize(id: revision.id, networkAllowed: networkAllowed)
+                } catch {
+                    // Access/cancellation guards must abort, never become a skip.
                     try validate(revision)
-                    if let old, old.revision == revision.modificationTime,
-                         old.policy == PhotoTextPolicy.version, !old.isReduced {
-                        // Empty text is also a successfully completed full-quality scan.
-                        state.reused += 1
-                        if !old.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { state.withText += 1 }
-                    } else {
-                        let recognized: RecognizedPhotoText
-                        try validate(revision)
-                        do {
-                            recognized = try await textRecognizer.recognize(id: revision.id, networkAllowed: networkAllowed)
-                        } catch {
-                            // Access/cancellation guards are outside ordinary-error
-                            // classification: they must abort, never become a skip.
-                            try validate(revision)
-                            if PhotoImageRequestInfo.isCancellation(error) { throw CancellationError() }
-                            if let failure = error as? AppFailure, case .permission = failure { throw failure }
-                            let cloudOnly: Bool
-                            if let failure = error as? AppFailure, case .cloudOnly = failure { cloudOnly = true }
-                            else { cloudOnly = PhotoImageRequestInfo.requiresNetwork(error) }
-                            if !networkAllowed && cloudOnly { state.cloudSkipped += 1 }
-                            else { state.failed += 1 }
-                            // Never persist an error/partial recognition as completion,
-                            // nor expose arbitrary provider text, paths or asset IDs.
-                            state.completed += 1
-                            try validate(revision)
-                            await progress(state)
-                            try validate(revision)
-                            continue
-                        }
-                        try validate(revision)
-                        let record = PhotoTextRecord(id: revision.id, revision: revision.modificationTime,
-                                                     policy: PhotoTextPolicy.version, text: recognized.text,
-                                                     pixelWidth: recognized.pixelWidth, pixelHeight: recognized.pixelHeight,
-                                                     isReduced: recognized.isReduced)
-                        // Recheck inside the storage actor, including immediately
-                        // before commit, not only before/after the actor hop. Photos
-                        // cannot be atomically locked: observed changes abort, but
-                        // changes after the final guard do not undo a committed row.
-                        try validate(revision)
-                        try await textStore.save(record) { [library, revision, authorization, generation] in
-                            try Task.checkCancellation()
-                            guard library.canReadImages else { throw AppFailure.permission }
-                            guard library.authorizationStatusRawValue == authorization,
-                                  library.changeGeneration == generation else {
-                                throw AppFailure.photo("照片访问已变化，请重新开始文字索引。")
-                            }
-                            let unchanged = library.currentRevision(id: revision.id) == revision
-                            guard library.canReadImages else { throw AppFailure.permission }
-                            guard unchanged, library.authorizationStatusRawValue == authorization,
-                                  library.changeGeneration == generation else {
-                                throw AppFailure.photo("照片已变化，请先更新图片索引，再重试文字索引。")
-                            }
-                            try Task.checkCancellation()
-                        }
-                        try validate(revision)
-                        state.recognized += 1
-                        if !record.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { state.withText += 1 }
-                        if record.isReduced { state.reduced += 1 }
-                    }
+                    if PhotoImageRequestInfo.isCancellation(error) { throw CancellationError() }
+                    if let failure = error as? AppFailure, case .permission = failure { throw failure }
+                    let cloudOnly: Bool
+                    if let failure = error as? AppFailure, case .cloudOnly = failure { cloudOnly = true }
+                    else { cloudOnly = PhotoImageRequestInfo.requiresNetwork(error) }
+                    if !networkAllowed && cloudOnly { state.cloudSkipped += 1 }
+                    else { state.failed += 1 }
+                    state.completed += 1
+                    try validate(revision)
+                    await progress(state)
+                    try validate(revision)
+                    continue
                 }
+                try validate(revision)
+                let record = PhotoTextRecord(id: revision.id, revision: revision.modificationTime,
+                                             policy: PhotoTextPolicy.version, text: recognized.text,
+                                             pixelWidth: recognized.pixelWidth, pixelHeight: recognized.pixelHeight,
+                                             isReduced: recognized.isReduced)
+                // Validate inside the storage actor, including before commit.
+                try await textStore.save(record) { [library, revision, authorization, generation] in
+                    try Task.checkCancellation()
+                    guard library.canReadImages else { throw AppFailure.permission }
+                    guard library.authorizationStatusRawValue == authorization,
+                          library.changeGeneration == generation else {
+                        throw AppFailure.photo("照片访问已变化，请重新开始文字索引。")
+                    }
+                    let unchanged = library.currentRevision(id: revision.id) == revision
+                    guard library.canReadImages else { throw AppFailure.permission }
+                    guard unchanged, library.authorizationStatusRawValue == authorization,
+                          library.changeGeneration == generation else {
+                        throw AppFailure.photo("照片已变化，请先更新图片索引，再重试文字索引。")
+                    }
+                    try Task.checkCancellation()
+                }
+                try validate(revision)
+                state.recognized += 1
+                if !record.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { state.withText += 1 }
+                if record.isReduced { state.reduced += 1 }
                 state.completed += 1
                 try validate(revision)
                 await progress(state)

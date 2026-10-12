@@ -180,6 +180,66 @@ final class TextIndexWorkerTests: XCTestCase {
         XCTAssertEqual(replacement?.text, "receipt")
     }
 
+    func testIncrementalRunReusesFullReducedAndEmptyAndRecognizesOnlyMissing() async throws {
+        let c = try context(["full", "reduced", "empty", "new"])
+        try await seedText([textRow("full"), textRow("reduced", reduced: true),
+                            textRow("empty", text: "")], in: c)
+        let trace = TextWorkerProgress()
+        _ = try await c.worker.indexText(networkAllowed: false, retryReducedPreviews: false) {
+            await trace.append($0)
+        }
+        let states = await trace.values()
+        XCTAssertEqual(states.first?.completed, 3)
+        XCTAssertEqual(states.first?.reused, 3)
+        XCTAssertEqual(states.last?.completed, 4)
+        XCTAssertEqual(states.last?.recognized, 1)
+        XCTAssertEqual(states.last?.reduced, 1)
+        let requests = await c.recognizer.requests
+        XCTAssertEqual(requests.map(\.id), ["new"])
+    }
+
+    func testColdReopenOf7900OldReducedRecordsReusesInOneProgressUpdate() async throws {
+        let ids = (0..<7900).map { "saved-\($0)" }
+        let c = try context(ids, rows: ids.map { row($0, vector: []) })
+        do {
+            let db = try TextIndexDatabase(directory: c.directory, readOnly: false)
+            try db.transaction {
+                try db.statement("""
+                    INSERT INTO text_records (id, revision, policy, text, pixel_width, pixel_height, is_reduced, has_text)
+                    VALUES (?, 123, ?, '', 640, 480, 1, 0)
+                    """) { statement in
+                    for id in ids {
+                        try db.reset(statement)
+                        try db.bind(id, at: 1, to: statement)
+                        try db.bind(PhotoTextPolicy.version, at: 2, to: statement)
+                        try db.execute(statement)
+                    }
+                }
+            }
+        }
+        for name in ["index.sqlite3", "text-index.sqlite3"] {
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)],
+                ofItemAtPath: c.directory.appendingPathComponent(name).path)
+        }
+        let imageBefore = try Data(contentsOf: c.directory.appendingPathComponent("index.sqlite3"))
+        let reopened = PhotoIndexWorker(library: c.library, encoders: c.encoders, directory: c.directory,
+                                        resolver: resolver, textRecognizer: c.recognizer)
+        let trace = TextWorkerProgress()
+        let summary = try await reopened.indexText(networkAllowed: false, retryReducedPreviews: false) {
+            await trace.append($0)
+        }
+        let states = await trace.values()
+        XCTAssertEqual(states.count, 1)
+        XCTAssertEqual(states.first?.completed, 7900)
+        XCTAssertEqual(states.first?.reused, 7900)
+        XCTAssertEqual(states.first?.recognized, 0)
+        XCTAssertEqual(summary.textIndexCounts.records, 7900)
+        XCTAssertEqual(summary.textIndexCounts.reduced, 7900)
+        XCTAssertEqual(c.library.revisionReadCount, 0)
+        XCTAssertEqual(try Data(contentsOf: c.directory.appendingPathComponent("index.sqlite3")), imageBefore)
+        await assertNoRecognition(c)
+    }
+
     func testReducedRecordsRetryOnlyOnNextManualRunThenBecomeReusable() async throws {
         let recognizer = TextWorkerRecognizer { _, _, call in workerTextResult("receipt", reduced: call == 1) }
         let c = try context(recognizer: recognizer)
@@ -790,6 +850,7 @@ private actor TextWorkerProgress {
     private var states: [TextIndexProgress] = []
     func append(_ state: TextIndexProgress) { states.append(state) }
     func last() throws -> TextIndexProgress { try XCTUnwrap(states.last) }
+    func values() -> [TextIndexProgress] { states }
 }
 
 private actor TextWorkerGate {
@@ -816,6 +877,7 @@ private final class TextWorkerLibrary: PhotoLibraryIndexing, PhotoSearchFilterin
     private var authorization: Int? = 3
     private var generation: UInt64? = 0
     private var enumerations = 0
+    private var revisionReads = 0
     private var pixels = 0
     private var places = 0
     private var filters = 0
@@ -827,6 +889,7 @@ private final class TextWorkerLibrary: PhotoLibraryIndexing, PhotoSearchFilterin
     var authorizationStatusRawValue: Int? { locked { authorization } }
     var changeGeneration: UInt64? { locked { generation } }
     var enumerationCount: Int { locked { enumerations } }
+    var revisionReadCount: Int { locked { revisionReads } }
     var pixelCalls: Int { locked { pixels } }
     var placeCalls: Int { locked { places } }
     var filterCalls: Int { locked { filters } }
@@ -844,7 +907,7 @@ private final class TextWorkerLibrary: PhotoLibraryIndexing, PhotoSearchFilterin
         }
     }
     func currentRevision(id: String) -> PhotoRevision? {
-        locked { readable ? revisions.first { $0.id == id } : nil }
+        locked { revisionReads += 1; return readable ? revisions.first { $0.id == id } : nil }
     }
     func placeLabel(id: String, resolver: OfflinePlaceResolver) -> String? { locked { places += 1 }; return nil }
     func indexImage(id: String, networkAllowed: Bool) async throws -> IndexingImage {

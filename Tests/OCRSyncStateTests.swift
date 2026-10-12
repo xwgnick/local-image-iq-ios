@@ -4,6 +4,20 @@ import XCTest
 /// Pure event state, no clocks, worker, Photos, storage, models or network.
 @MainActor
 final class OCRSyncStateTests: XCTestCase {
+    func testManualQualityRetryDoesNotLeakIntoNextToggleAfterDrain() throws {
+        let state = OCRSyncState()
+        state.userChangedEnabled(true)
+        state.requestUpdate(retryReducedPreviews: true)
+        state.updateAvailability(ready: true)
+        let manual = try XCTUnwrap(state.takeReadyRequest())
+        XCTAssertTrue(state.retryReducedPreviews)
+        state.userChangedEnabled(false)
+        state.userChangedEnabled(true)
+        state.finish(token: manual, completion: .cancelled)
+        XCTAssertNotNil(state.takeReadyRequest())
+        XCTAssertFalse(state.retryReducedPreviews)
+    }
+
     func testSavedOnAndRepeatedReadyNeverCreateIntent() {
         let state = OCRSyncState(enabled: true)
         for _ in 0..<3 {

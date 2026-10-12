@@ -18,6 +18,8 @@ final class OCRSyncState: ObservableObject {
     @Published private(set) var enabled: Bool
     @Published private(set) var ready = false
     private var generation: UUID?
+    private var pendingRetryReducedPreviews = false
+    private(set) var retryReducedPreviews = false
 
     var canShow: Bool { phase != .idle }
     var canCancel: Bool { (pending || currentRunning) && phase != .cancelling }
@@ -41,9 +43,10 @@ final class OCRSyncState: ObservableObject {
 
     /// Explicit manual maintenance/retry shares the one pending intent. A
     /// running, non-cancelled update already satisfies a duplicate request.
-    func requestUpdate() {
+    func requestUpdate(retryReducedPreviews: Bool = false) {
         guard enabled, !currentRunning || phase == .cancelling else { return }
         pending = true
+        pendingRetryReducedPreviews = pendingRetryReducedPreviews || retryReducedPreviews
         if !currentRunning {
             progress = TextIndexProgress()
             totalKnown = false
@@ -60,6 +63,8 @@ final class OCRSyncState: ObservableObject {
         let token = UUID()
         generation = token
         pending = false
+        retryReducedPreviews = pendingRetryReducedPreviews
+        pendingRetryReducedPreviews = false
         currentRunning = true
         progress = TextIndexProgress()
         totalKnown = false
@@ -70,6 +75,7 @@ final class OCRSyncState: ObservableObject {
     func cancel() {
         guard pending || currentRunning else { return }
         pending = false
+        pendingRetryReducedPreviews = false
         if currentRunning { phase = .cancelling }
         else { phase = .cancelled }
     }
