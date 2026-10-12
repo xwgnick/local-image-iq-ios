@@ -51,9 +51,9 @@ final class StoreScreenshotTests: XCTestCase {
         capture("pilot-01-memory-query")
         search("身份证", minimumResults: 1)
         capture("pilot-02-document-query")
-        search("北门值班室", minimumResults: 1)
+        search("梧桐街南门", minimumResults: 1)
         capture("pilot-ocr-before")
-        let alternatives = ["松桥路东口", "河畔图书馆", "梧桐街南门"]
+        let alternatives = ["北门值班室", "松桥路东口", "河畔图书馆"]
         for (index, query) in alternatives.enumerated() {
             search(query, minimumResults: 1)
             capture("pilot-ocr-before-\(index + 2)")
@@ -78,7 +78,7 @@ final class StoreScreenshotTests: XCTestCase {
         }
         wait(app.buttons["ocr-sync-open-details"],
              predicate: NSPredicate(format: "exists == false"), timeout: 20)
-        search("北门值班室", minimumResults: 1)
+        search("梧桐街南门", minimumResults: 1)
         capture("pilot-03-ocr-query")
         for (index, query) in alternatives.enumerated() {
             search(query, minimumResults: 1)
