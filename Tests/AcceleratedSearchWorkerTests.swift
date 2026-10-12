@@ -310,6 +310,86 @@ final class AcceleratedSearchWorkerTests: XCTestCase {
         await noPixels(c)
     }
 
+    func testIncrementalSourceReadSharesUnchangedVectorsAndRejectsSameRevisionVectorChanges() async throws {
+        let c = try context()
+        let reader = SQLitePhotoStore(directory: c.directory, readOnly: true)
+        let old = try await reader.searchRecords(modelVersion: version, accessibleIDs: ["a", "b", "c"], reusing: [])
+        try await c.writer.save(row("b", axis: 2))
+        let fresh = try await reader.searchRecords(modelVersion: version, accessibleIDs: ["a", "b", "c"], reusing: old)
+        let unchanged = try XCTUnwrap(fresh.first { $0.photo.id == "a" })
+        let prior = try XCTUnwrap(old.first { $0.photo.id == "a" })
+        XCTAssertEqual(unchanged.photo.imageEmbedding.withUnsafeBufferPointer { $0.baseAddress },
+                       prior.photo.imageEmbedding.withUnsafeBufferPointer { $0.baseAddress })
+        XCTAssertEqual(unchanged.sourceSignature, prior.sourceSignature)
+        let changed = try XCTUnwrap(fresh.first { $0.photo.id == "b" })
+        XCTAssertEqual(changed.photo.imageEmbedding.map(\.bitPattern), TestFixtures.vector(axis: 2).map(\.bitPattern))
+        XCTAssertNotEqual(changed.sourceSignature, old.first { $0.photo.id == "b" }?.sourceSignature)
+        XCTAssertEqual(changed.photo.modificationTime, 123)
+        await noPixels(c)
+    }
+
+    func testIncrementalReadDetectsJoinedPlaceAndMetadataChangesWithUnchangedRevision() async throws {
+        let place = PlaceEmbedding(text: "shared", vector: TestFixtures.vector(axis: 1))
+        let c = try context(rows: [row("a", place: place), row("b", place: place)])
+        let reader = SQLitePhotoStore(directory: c.directory, readOnly: true)
+        let ids: Set<String> = ["a", "b"]
+        let original = try await reader.searchRecords(modelVersion: version, accessibleIDs: ids, reusing: [])
+        try await c.writer.save(row("b", place: PlaceEmbedding(text: "shared", vector: TestFixtures.vector(axis: 2))))
+        let joined = try await reader.searchRecords(modelVersion: version, accessibleIDs: ids, reusing: original)
+        XCTAssertTrue(zip(joined, original).allSatisfy { $0.sourceSignature != $1.sourceSignature })
+        XCTAssertEqual(joined.first?.photo.location?.vector.map(\.bitPattern), TestFixtures.vector(axis: 2).map(\.bitPattern))
+        try await c.writer.save(row("a", creation: nil, geography: "changed"))
+        let metadata = try await reader.searchRecords(modelVersion: version, accessibleIDs: ids, reusing: joined)
+        let changed = try XCTUnwrap(metadata.first { $0.photo.id == "a" })
+        XCTAssertNil(changed.photo.creationTime)
+        XCTAssertNil(changed.photo.location)
+        XCTAssertEqual(changed.geographyVersion, "changed")
+        XCTAssertNotEqual(changed.sourceSignature, joined.first?.sourceSignature)
+        let restricted = try await reader.searchRecords(modelVersion: version, accessibleIDs: ["a"], reusing: metadata)
+        XCTAssertEqual(restricted.map(\.photo.id), ["a"])
+        await noPixels(c)
+    }
+
+    func testCancelledOCRDoesNotDiscardWarmImageMatrixAndSavedTextRemainsSearchable() async throws {
+        let c = try context()
+        try await seedText(c, id: "b", text: "receipt")
+        _ = try await measured(c)
+        let source = try sourceHash(c)
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await c.worker.indexText(networkAllowed: false, retryReducedPreviews: false) { _ in }
+        }
+        do { _ = try await cancelled.value; XCTFail("Cancelled OCR must not run.") }
+        catch is CancellationError { }
+        let timing = SearchTimingRecorder(mode: "accelerated")
+        let withOCR = try await search(c, ocr: true, timing: timing)
+        indexReport(timing.finish(.ready), source: "内存驻留", count: 3, matrix: true)
+        XCTAssertTrue(withOCR.textSearchUsed)
+        XCTAssertEqual(withOCR.textMatchedIDs, ["b"])
+        XCTAssertEqual(try sourceHash(c), source)
+        await noPixels(c)
+    }
+
+    func testNewPhotoRestoresOldBinaryIncrementallyAndPreservesReferenceRanking() async throws {
+        let c = try context()
+        try await seedText(c, id: "b", text: "receipt")
+        _ = try await search(c, ocr: true)
+        await c.worker.releaseSearchMemory()
+        try await c.writer.save(row("new", axis: 1))
+        c.library.replace([PhotoRevision(id: "a", modificationTime: 123, creationTime: 100),
+                           PhotoRevision(id: "b", modificationTime: 123, creationTime: 100),
+                           PhotoRevision(id: "c", modificationTime: 123, creationTime: 100),
+                           PhotoRevision(id: "new", modificationTime: 123, creationTime: 100)])
+        let raw = try await search(c, ocr: true, reference: true)
+        let accelerated = try await search(c, ocr: true)
+        same(accelerated, raw)
+        XCTAssertEqual(accelerated.hits.count, 4)
+        let cold = try await anotherWorker(c).search(text: "first", originalText: "receipt", limit: Int.max,
+                                                   locationWeight: 0.6, filters: .init(), textSearchEnabled: true)
+        same(cold, raw)
+        await noPixels(c)
+    }
+
     func testExternalSaveInvalidatesWarmRecordsAndMatrixWithoutPhotoEpochChange() async throws {
         let c = try context()
         let before = try await measured(c, weight: 0)

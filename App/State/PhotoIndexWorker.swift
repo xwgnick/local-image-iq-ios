@@ -264,8 +264,9 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
     private actor SearchRecordLoad {
         private(set) var failure: Error?
 
-        func read(_ reader: SQLitePhotoStore, modelVersion: String, ids: Set<String>) async throws -> [CachedPhoto] {
-            do { return try await reader.searchRecords(modelVersion: modelVersion, accessibleIDs: ids) }
+        func read(_ reader: SQLitePhotoStore, modelVersion: String, ids: Set<String>,
+                  reusing records: [CachedPhoto] = []) async throws -> [CachedPhoto] {
+            do { return try await reader.searchRecords(modelVersion: modelVersion, accessibleIDs: ids, reusing: records) }
             catch { failure = error; throw error }
         }
     }
@@ -275,7 +276,9 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
         let load = SearchRecordLoad()
         do {
             return try await searchCache().records(modelVersion: modelVersion, accessibleIDs: accessibleIDs,
-                                                   deferPersistence: true) {
+                                                   deferPersistence: true, reload: { records in
+                try await load.read(readonly, modelVersion: modelVersion, ids: accessibleIDs, reusing: records)
+            }) {
                 try await load.read(readonly, modelVersion: modelVersion, ids: accessibleIDs)
             }
         } catch {

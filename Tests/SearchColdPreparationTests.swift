@@ -60,6 +60,93 @@ final class SearchColdPreparationTests: XCTestCase {
         XCTAssertEqual(lhs.map { $0.score.bitPattern }, rhs.map { $0.score.bitPattern }, file: file, line: line)
     }
 
+    func testChangedSourceReusesResidentRowsBeforeDeferredFileWasWritten() async throws {
+        let c = try context()
+        let originalIDs: Set<String> = ["row-00000", "row-00001", "row-00002", "row-00003"]
+        let first = try await c.cache.records(modelVersion: "test-model", accessibleIDs: originalIDs, deferPersistence: true) {
+            try await c.reader.searchRecords(modelVersion: "test-model", accessibleIDs: originalIDs, reusing: [])
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.binary.path))
+        let writer = SQLitePhotoStore(directory: c.directory)
+        try await writer.save(TestFixtures.photo(id: "new-photo", model: "test-model"))
+        await writer.close()
+        let ids = originalIDs.union(["new-photo"])
+        let next = try await c.cache.records(modelVersion: "test-model", accessibleIDs: ids,
+                                             deferPersistence: true, reload: { previous in
+            XCTAssertEqual(previous.map(\.photo.id), first.records.map(\.photo.id))
+            let refreshed = try await c.reader.searchRecords(modelVersion: "test-model", accessibleIDs: ids,
+                                                              reusing: previous)
+            let unchanged = try XCTUnwrap(refreshed.first { $0.photo.id == "row-00000" })
+            XCTAssertEqual(unchanged.photo.imageEmbedding.withUnsafeBufferPointer { $0.baseAddress },
+                           first.records[0].photo.imageEmbedding.withUnsafeBufferPointer { $0.baseAddress })
+            return refreshed
+        }) {
+            XCTFail("The pending resident snapshot should be verified, not discarded.")
+            return try await c.reader.searchRecords(modelVersion: "test-model", accessibleIDs: ids)
+        }
+        XCTAssertEqual(next.records.count, 5)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.binary.path))
+    }
+
+    func test7900CachedVectorsSurviveOneNewPhotoWithoutFullJSONReload() async throws {
+        let rows = fixtureRows(count: 7900)
+        let c = try context(rows: rows)
+        let originalIDs = Set(rows.map(\.photo.id))
+        _ = try await c.cache.records(modelVersion: "test-model", accessibleIDs: originalIDs) {
+            try await c.reader.searchRecords(modelVersion: "test-model", accessibleIDs: originalIDs, reusing: [])
+        }
+        await c.cache.invalidate()
+        let writer = SQLitePhotoStore(directory: c.directory)
+        try await writer.save(TestFixtures.photo(id: "new-photo", model: "test-model"))
+        await writer.close()
+        let ids = originalIDs.union(["new-photo"])
+        let baselineStart = ProcessInfo.processInfo.systemUptime
+        let baseline = try await c.reader.searchRecords(modelVersion: "test-model", accessibleIDs: ids)
+        let baselineSeconds = ProcessInfo.processInfo.systemUptime - baselineStart
+        let incrementalStart = ProcessInfo.processInfo.systemUptime
+        let result = try await c.cache.records(modelVersion: "test-model", accessibleIDs: ids,
+                                               deferPersistence: true, reload: { previous in
+            let refreshed = try await c.reader.searchRecords(modelVersion: "test-model", accessibleIDs: ids,
+                                                              reusing: previous)
+            let byID = Dictionary(previous.map { ($0.photo.id, $0) }, uniquingKeysWith: { _, last in last })
+            var reused = 0
+            for record in refreshed {
+                guard let old = byID[record.photo.id], record.sourceSignature == old.sourceSignature else { continue }
+                XCTAssertEqual(record.photo.imageEmbedding.withUnsafeBufferPointer { $0.baseAddress },
+                               old.photo.imageEmbedding.withUnsafeBufferPointer { $0.baseAddress })
+                reused += 1
+            }
+            XCTAssertEqual(reused, 7900)
+            return refreshed
+        }) {
+            XCTFail("A valid previous binary must reach incremental source verification.")
+            return try await c.reader.searchRecords(modelVersion: "test-model", accessibleIDs: ids)
+        }
+        let incrementalSeconds = ProcessInfo.processInfo.systemUptime - incrementalStart
+        XCTAssertEqual(result.records.count, 7901)
+        XCTAssertEqual(result.records.map(\.photo.id), baseline.map(\.photo.id))
+        XCTAssertEqual(result.records.map { $0.photo.imageEmbedding.map(\.bitPattern) },
+                       baseline.map { $0.photo.imageEmbedding.map(\.bitPattern) })
+        let query = unit(seed: 71)
+        let expected = try VectorSearch.search(query: query, photos: baseline.map(\.photo), limit: Int.max, locationWeight: 0.6)
+        let actual = try ResidentSearchIndex(photos: result.records.map(\.photo))
+            .search(query: query, limit: Int.max, locationWeight: 0.6)
+        same(actual, expected)
+        let evidence: [String: Any] = [
+            "records": 7901, "reusedWithoutJSONDecoding": 7900,
+            "fullSQLiteReadMilliseconds": baselineSeconds * 1000,
+            "incrementalCacheRecoveryMilliseconds": incrementalSeconds * 1000,
+            "speedup": baselineSeconds / incrementalSeconds,
+            "boundary": "native synthetic SQLite and binary cache; excludes phone models, translation and UI"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys])
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+        attachment.name = "TIMINGS-incremental-search-cache-7900"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        print("TIMINGS-incremental-search-cache-7900 " + String(decoding: data, as: UTF8.self))
+    }
+
     func testMeasuredEagerVersusDeferredColdPreparationPreservesEveryRankAndScoreBit() async throws {
         let count = 256
         let rows = fixtureRows(count: count)

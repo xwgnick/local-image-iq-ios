@@ -6,6 +6,13 @@ import ImageIQCore
 struct CachedPhoto: Sendable {
     let photo: IndexedPhoto
     let geographyVersion: String
+    let sourceSignature: Data?
+
+    init(photo: IndexedPhoto, geographyVersion: String, sourceSignature: Data? = nil) {
+        self.photo = photo
+        self.geographyVersion = geographyVersion
+        self.sourceSignature = sourceSignature
+    }
 }
 
 /// Incremental diff metadata for ALL models/IDs; never decodes an embedding.
@@ -98,6 +105,17 @@ actor SQLitePhotoStore {
     /// contribute to scores, place means, or errors about their vector contents.
     /// This is a SELECT-only handle, never an implicit update/prune operation.
     func searchRecords(modelVersion: String, accessibleIDs: Set<String>) throws -> [CachedPhoto] {
+        try readSearchRecords(modelVersion: modelVersion, accessibleIDs: accessibleIDs, reusing: nil)
+    }
+
+    func searchRecords(modelVersion: String, accessibleIDs: Set<String>, reusing records: [CachedPhoto]) throws -> [CachedPhoto] {
+        let reusable = Dictionary(records.map { (Data($0.photo.id.utf8), $0) },
+                                  uniquingKeysWith: { _, last in last })
+        return try readSearchRecords(modelVersion: modelVersion, accessibleIDs: accessibleIDs, reusing: reusable)
+    }
+
+    private func readSearchRecords(modelVersion: String, accessibleIDs: Set<String>,
+                                   reusing reusable: [Data: CachedPhoto]?) throws -> [CachedPhoto] {
         guard readOnly else { throw AppFailure.storage("Search requires a read-only connection.") }
         defer { connection = nil }
         try Task.checkCancellation()
@@ -109,8 +127,14 @@ actor SQLitePhotoStore {
             var records: [CachedPhoto] = []
             while try db.next(statement) {
                 try Task.checkCancellation()
-                guard accessibleIDs.contains(try db.string(statement, at: 0)) else { continue }
-                records.append(try decode(statement))
+                let id = try db.string(statement, at: 0)
+                guard accessibleIDs.contains(id) else { continue }
+                let signature = try reusableSignature(statement, enabled: reusable != nil)
+                if let signature, let cached = reusable?[Data(id.utf8)], cached.sourceSignature == signature {
+                    records.append(cached)
+                } else {
+                    records.append(try decode(statement, sourceSignature: signature))
+                }
             }
             try Task.checkCancellation()
             return records
@@ -595,7 +619,27 @@ actor SQLitePhotoStore {
         return vector
     }
 
-    private func decode(_ statement: OpaquePointer) throws -> CachedPhoto {
+    /// Frame every selected SQLite value, including both opaque vector blobs.
+    /// This detects same-revision edits without decoding unchanged vector JSON.
+    private func reusableSignature(_ statement: OpaquePointer, enabled: Bool) throws -> Data? {
+        guard enabled else { return nil }
+        var hash = SHA256()
+        for column in 0..<sqlite3_column_count(statement) {
+            var type = sqlite3_column_type(statement, column).littleEndian
+            Swift.withUnsafeBytes(of: &type) { hash.update(bufferPointer: $0) }
+            let bytes = sqlite3_column_blob(statement, column)
+            let count = Int(sqlite3_column_bytes(statement, column))
+            var length = UInt64(count).littleEndian
+            Swift.withUnsafeBytes(of: &length) { hash.update(bufferPointer: $0) }
+            if count > 0 {
+                guard let bytes else { throw AppFailure.storage("Unable to read the local index.") }
+                hash.update(bufferPointer: UnsafeRawBufferPointer(start: bytes, count: count))
+            }
+        }
+        return Data(hash.finalize())
+    }
+
+    private func decode(_ statement: OpaquePointer, sourceSignature: Data? = nil) throws -> CachedPhoto {
         let db = try database()
         let image = try Self.decodeEmbedding(db.blob(statement, at: 3))
         var place: PlaceEmbedding?
@@ -606,7 +650,8 @@ actor SQLitePhotoStore {
         let photo = IndexedPhoto(id: try db.string(statement, at: 0), modificationTime: sqlite3_column_double(statement, 1),
                                  modelVersion: try db.string(statement, at: 2), imageEmbedding: image, location: place,
                                  creationTime: sqlite3_column_type(statement, 4) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 4))
-        return CachedPhoto(photo: photo, geographyVersion: try db.string(statement, at: 6))
+        return CachedPhoto(photo: photo, geographyVersion: try db.string(statement, at: 6),
+                           sourceSignature: sourceSignature)
     }
 }
 

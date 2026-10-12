@@ -81,6 +81,7 @@ actor SearchIndexCache {
     }
 
     func records(modelVersion: String, accessibleIDs: Set<String>, deferPersistence: Bool = false,
+                 reload: (@Sendable ([CachedPhoto]) async throws -> [CachedPhoto])? = nil,
                  load: @escaping @Sendable () async throws -> [CachedPhoto]) async throws -> SearchIndexCacheResult {
         // Actor reentrancy must not allow a suspended loader to undo clear(),
         // invalidate(), or a newer request (including a narrower access scope).
@@ -111,6 +112,7 @@ actor SearchIndexCache {
                 self.resident = nil
                 return try await uncached(scope: scope, ids: accessibleIDs, ticket: ticket, load: load)
             }
+            let previousResident = resident
             resident = nil
 
             // Only the disposable file is ever read whole. The source database
@@ -133,7 +135,22 @@ actor SearchIndexCache {
                 return SearchIndexCacheResult(records: decoded, source: .binary, signature: signature)
             }
 
-            let loaded = try await load()
+            let previous: [CachedPhoto]?
+            if reload != nil, let previousResident, previousResident.scope.modelUTF8 == scope.modelUTF8 {
+                previous = previousResident.records.filter { accessibleIDs.contains($0.photo.id) }
+            } else if reload != nil {
+                previous = try readBinary(key: key, ids: accessibleIDs, forReload: true)
+            } else {
+                previous = nil
+            }
+            let loaded: [CachedPhoto]
+            if let reload, let previous,
+               previous.allSatisfy({ $0.sourceSignature != nil }) {
+                try check(ticket)
+                loaded = try await reload(previous)
+            } else {
+                loaded = try await load()
+            }
             try check(ticket)
             let records = try Self.acceptLoaded(loaded, scope: scope, ids: accessibleIDs)
             observeWork?(.recordsValidated(count: records.count))
@@ -211,7 +228,9 @@ actor SearchIndexCache {
             try check(ticket)
             guard try unchanged(pending.stamp) else { return }
             try validateAccess()
-            let data = try await Self.encodeDeferred(pending.records, key: pending.key, observeWork: observeWork)
+            guard let data = try await Self.encodeDeferred(pending.records, key: pending.key, observeWork: observeWork) else {
+                return
+            }
             await deferredCheckpoint?(.beforeCommit)
             try check(ticket)
             // Do not queue a nonessential cache write ahead of a sync writer or
@@ -225,11 +244,9 @@ actor SearchIndexCache {
             defer { lease?.release() }
             guard try unchanged(pending.stamp) else { return }
             try validateAccess()
-            if let data {
-                let write = try persist(data, stamp: pending.stamp, ticket: ticket)
-                publication = write.publication
-                guard write.safe else { return }
-            }
+            let write = try persist(data, stamp: pending.stamp, ticket: ticket)
+            publication = write.publication
+            guard write.safe else { return }
             try check(ticket)
             guard try unchanged(pending.stamp) else {
                 discardOwnPublication(publication)
@@ -411,15 +428,16 @@ actor SearchIndexCache {
         return Data(hash.finalize())
     }
 
-    private func readBinary(key: SearchCacheKey, ids: Set<String>) throws -> [CachedPhoto]? {
+    private func readBinary(key: SearchCacheKey, ids: Set<String>, forReload: Bool = false) throws -> [CachedPhoto]? {
         do {
             try Task.checkCancellation()
             let bytes = try Data(contentsOf: binaryURL)
             let decoder = PropertyListDecoder()
             let envelope = try decoder.decode(SearchCacheEnvelope.self, from: bytes)
-            // Scope/model/source checks precede decoding ANY payload vectors.
+            // A stale file is only input to a fresh, scope-filtered SQLite read.
             guard envelope.magic == SearchCacheEnvelope.magicValue, envelope.schema == 1,
-                  envelope.key == key,
+                  envelope.key.scope.modelUTF8 == key.scope.modelUTF8,
+                  forReload || envelope.key == key,
                   envelope.headerSHA256 == envelope.expectedHeaderSHA256,
                   envelope.payloadSHA256 == Data(SHA256.hash(data: envelope.payload)) else { return nil }
             try Task.checkCancellation()
@@ -431,7 +449,11 @@ actor SearchIndexCache {
             var validatedLocationVectors: [Data: [Float]] = [:]
             for row in rows {
                 try Task.checkCancellation()
-                guard ids.contains(row.id), Data(row.modelVersion.utf8) == key.scope.modelUTF8,
+                if !ids.contains(row.id) {
+                    if forReload { continue }
+                    return nil
+                }
+                guard Data(row.modelVersion.utf8) == key.scope.modelUTF8,
                       seen.insert(Data(row.id.utf8)).inserted else { return nil }
                 result.append(try row.record(validatedLocationVectors: &validatedLocationVectors))
             }
@@ -749,6 +771,7 @@ private struct SearchCacheRow: Codable {
     let image: Data
     let locationText: String?
     let locationVector: Data?
+    let sourceSignature: Data?
 
     init(_ cached: CachedPhoto, locationData: Data? = nil) {
         let photo = cached.photo
@@ -760,10 +783,12 @@ private struct SearchCacheRow: Codable {
         image = Self.pack(photo.imageEmbedding)
         locationText = photo.location?.text
         locationVector = locationData ?? photo.location.map { Self.pack($0.vector) }
+        sourceSignature = cached.sourceSignature
     }
 
     func record(validatedLocationVectors: inout [Data: [Float]]) throws -> CachedPhoto {
         try Self.validateMetadata(id: id, revision: modificationTime, creation: creationTime)
+        guard sourceSignature == nil || sourceSignature?.count == 32 else { throw SearchCacheFailure.invalidRecords }
         guard (locationText == nil) == (locationVector == nil) else { throw SearchCacheFailure.invalidRecords }
         let vector = try Self.unpack(image)
         var place: PlaceEmbedding?
@@ -783,7 +808,7 @@ private struct SearchCacheRow: Codable {
         return CachedPhoto(photo: IndexedPhoto(id: id, modificationTime: modificationTime,
                                                modelVersion: modelVersion, imageEmbedding: vector,
                                                location: place, creationTime: creationTime),
-                           geographyVersion: geographyVersion)
+                           geographyVersion: geographyVersion, sourceSignature: sourceSignature)
     }
 
     static func validateMetadata(id: String, revision: Double, creation: Double?) throws {
