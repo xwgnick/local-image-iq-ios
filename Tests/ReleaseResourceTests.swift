@@ -2,6 +2,19 @@ import XCTest
 @testable import LocalImageIQ
 
 final class ReleaseResourceTests: XCTestCase {
+    @MainActor
+    func testPublicPolicyAndSupportLinksUseVerifiedHTTPSPages() {
+        XCTAssertEqual(PrivacySettingsView.privacyPolicyURL.absoluteString,
+                       "https://xwgnick.github.io/local-image-iq-ios/privacy.html")
+        XCTAssertEqual(PrivacySettingsView.supportURL.absoluteString,
+                       "https://xwgnick.github.io/local-image-iq-ios/support.html")
+        for url in [PrivacySettingsView.privacyPolicyURL, PrivacySettingsView.supportURL] {
+            XCTAssertEqual(url.scheme, "https")
+            XCTAssertNil(url.query)
+            XCTAssertNil(url.fragment)
+        }
+    }
+
     func testChineseBrandPreservesInstallAndDataIdentity() {
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "片刻寻")
         XCTAssertEqual(Bundle.main.bundleIdentifier, "com.example.localimageiq")
@@ -36,7 +49,8 @@ final class ReleaseResourceTests: XCTestCase {
         for expected in ["SigLIP 2", "Pillow 11.1.0", "geoBoundaries", "CHN / ADM1",
                          "swift-transformers 1.3.4", "swift-huggingface 0.13.0", "swift-jinja 2.5.1",
                          "swift-collections 1.6.0", "swift-crypto 4.5.2", "eventsource 1.5.1",
-                         "yyjson 0.12.0", "Apache License", "Permission to use, copy, modify and distribute"] {
+                         "yyjson 0.12.0", "Apache License", "Permission to use, copy, modify and distribute",
+                         "File:China_blank_province_map.svg", "Newfraferz87"] {
             XCTAssertTrue(text.contains(expected), "Missing bundled notice: \(expected)")
         }
         let manifestURL = try XCTUnwrap(Bundle.main.url(forResource: "third-party-manifest",

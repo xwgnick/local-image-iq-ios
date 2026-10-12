@@ -63,6 +63,14 @@ test('source resources and workflow pins match reviewed dependency inventory', (
   assert.equal(checkSource().packages, 7);
 });
 
+test('bundled attribution retains original metadata and adds verified CHN ADM1 source evidence', () => {
+  const text = fs.readFileSync(new URL('../Resources/Legal/ThirdPartyNotices.txt', import.meta.url), 'utf8');
+  assert.ok(text.includes('licenseSource: commons.wikimedia.org/wiki/File\n'));
+  assert.ok(text.includes('https://commons.wikimedia.org/wiki/File:China_blank_province_map.svg'));
+  assert.ok(text.includes('Newfraferz87'));
+  assert.ok(text.includes('9cf4cb357ea388cc135b47664b40f9483c80bf29c625d3a69f9bc70011704ea4'));
+});
+
 test('full native validation can retain evidence without publishing an app or release', () => {
   const workflow = fs.readFileSync(new URL('../.github/workflows/ios.yml', import.meta.url), 'utf8');
   assert.match(workflow, /publish_release:\s+description:[^\n]+\s+type: boolean\s+default: true/);

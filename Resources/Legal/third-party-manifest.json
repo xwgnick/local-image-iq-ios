@@ -151,7 +151,7 @@
       ]
     }
   ],
-  "noticesSHA256": "6c05927ff6793fb270290afad2fe1f02874c612cec6fe2d25fcfe8fc1720e4c9",
-  "sourceAttributionSHA256": "3f7d49ca7c38b9b7f24a341b006b92899c4d7210cd825cb9344bf09b451f9f12",
-  "reviewStatus": "License texts and attribution packaged; upstream CHN/ADM1 provenance remains unresolved. Not legal clearance."
+  "noticesSHA256": "84906a7f192bd43e5844177eaaa9cba69d6737f1908d2c384f35605205d3e2dc",
+  "sourceAttributionSHA256": "aed6c2abf8d101e9a84a5bad0a1e2b34473c980a75fe9de9551e0bbfd9be2d63",
+  "reviewStatus": "License texts and attribution packaged; original CHN/ADM1 public-domain source recovered from the pinned archive. Geographic-data distribution compliance remains unconfirmed. Not legal clearance."
 }

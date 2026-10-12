@@ -5,6 +5,8 @@ struct PrivacySettingsView: View {
     @ObservedObject var state: AppState
     @State private var confirmClearHistory = false
 
+    static let privacyPolicyURL = URL(string: "https://xwgnick.github.io/local-image-iq-ios/privacy.html")!
+    static let supportURL = URL(string: "https://xwgnick.github.io/local-image-iq-ios/support.html")!
     static let localSummary = "照片和搜索内容不上传至应用服务器。索引与搜索记录保存在本机；开启 OCR 后，识别文字也保存在本机，关闭 OCR 不会删除已有文字索引。"
     static let cloudSummary = "iCloud 下载默认关闭；「加载高清」可在你同意后仅下载当前照片。系统服务另受 Apple 的设置和隐私政策约束。"
     static let sharingSummary = "删除需勾选并确认，可能经 iCloud 同步到其他设备。分享的照片画面可能含私人信息，接收方可保留副本。"
@@ -55,6 +57,10 @@ struct PrivacySettingsView: View {
 
             Section("关于") {
                 LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
+                Link("隐私政策（网页）", destination: Self.privacyPolicyURL)
+                    .accessibilityIdentifier("privacy-policy-link")
+                Link("帮助与联系（网页）", destination: Self.supportURL)
+                    .accessibilityIdentifier("privacy-support-link")
                 NavigationLink {
                     ThirdPartyNoticesView()
                 } label: {

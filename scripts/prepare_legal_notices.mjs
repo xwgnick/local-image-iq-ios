@@ -68,7 +68,7 @@ export function prepareNotices(checkouts, { check = false, repository = root } =
     packages: records,
     noticesSHA256: sha(notices),
     sourceAttributionSHA256: sha(places),
-    reviewStatus: 'License texts and attribution packaged; upstream CHN/ADM1 provenance remains unresolved. Not legal clearance.',
+    reviewStatus: 'License texts and attribution packaged; original CHN/ADM1 public-domain source recovered from the pinned archive. Geographic-data distribution compliance remains unconfirmed. Not legal clearance.',
   }, null, 2) + '\n';
   const output = path.join(repository, 'Resources', 'Legal');
   if (!check) fs.mkdirSync(output, { recursive: true });

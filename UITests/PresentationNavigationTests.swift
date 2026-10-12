@@ -503,6 +503,11 @@ final class PresentationNavigationTests: XCTestCase {
         app.buttons["open-settings"].tap()
         expectHittable(app.buttons["close-settings"])
         openSettingsPage("settings-privacy", title: "隐私与关于")
+        for identifier in ["privacy-policy-link", "privacy-support-link"] {
+            let externalLink = app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+            scrollTo(externalLink, in: try sheetForm())
+            XCTAssertTrue(externalLink.isEnabled)
+        }
         let link = app.buttons["privacy-third-party-notices"]
         scrollTo(link, in: try sheetForm())
         link.tap()

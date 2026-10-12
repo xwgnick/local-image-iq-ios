@@ -44,6 +44,26 @@ scheme-qualified form, https://commons.wikimedia.org/wiki/File, is included for
 traceability only; it is not a license text or a repaired, verified file link.
 “Public Domain” is the upstream metadata value, not a new rights determination.
 
+#### Original-source evidence recovered on 2026-10-12
+
+The original archive at the same pinned revision contains `meta.txt` and
+`license.png`, both identifying the full source that the release metadata
+truncated:
+
+- Archive: https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/9469f09592ced973a3448cf66b6100b741b64c0d/sourceData/gbOpen/CHN_ADM1.zip
+- Archive SHA-256: 9cf4cb357ea388cc135b47664b40f9483c80bf29c625d3a69f9bc70011704ea4
+- Original: https://commons.wikimedia.org/wiki/File:China_blank_province_map.svg
+- Author: Newfraferz87; dated 30 March 2019; source described as own work.
+- The author's statement releases the work into the public domain worldwide,
+  with permission to use it for any purpose where such a release is not legally
+  possible, except conditions required by law. Both the archived license
+  screenshot and current source page were inspected.
+
+This additional evidence resolves the incomplete file link; the recorded
+release metadata above remains unchanged. It is not a determination of
+territorial boundaries, current administrative accuracy, or compliance with
+map/geographic-information regulations in any distribution territory.
+
 ### CHN / ADM2 — China
 
 - canonical: County Level
