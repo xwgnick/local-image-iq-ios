@@ -31,9 +31,9 @@ final class SearchColdPreparationTests: XCTestCase {
         return cache
     }
 
-    private func fixtureRows(count: Int) -> [CachedPhoto] {
+    private func fixtureRows(count: Int, uniqueImages: Bool = false) -> [CachedPhoto] {
         (0..<count).map { index in
-            // Repeated images deliberately create exact score ties. Distinct
+            // Default repeated images deliberately create exact score ties. Distinct
             // places include canonically equivalent but byte-distinct text.
             let place: PlaceEmbedding?
             switch index % 4 {
@@ -43,14 +43,20 @@ final class SearchColdPreparationTests: XCTestCase {
             default: place = PlaceEmbedding(text: "Other", vector: unit(seed: 43))
             }
             return CachedPhoto(photo: IndexedPhoto(id: String(format: "row-%05d", index),
-                modificationTime: 123, modelVersion: "test-model", imageEmbedding: unit(seed: index % 17),
+                modificationTime: 123, modelVersion: "test-model", imageEmbedding: unit(seed: uniqueImages ? index : index % 17),
                 location: place, creationTime: index % 3 == 0 ? nil : Double(index)),
                 geographyVersion: "test-places")
         }
     }
 
     private func unit(seed: Int) -> [Float] {
-        let values = (0..<768).map { Float((($0 + seed * 13) * 37) % 101 - 50) }
+        var state = UInt64(seed) + 1
+        let values = (0..<768).map { _ -> Float in
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            return Float(Int32(truncatingIfNeeded: state)) / Float(Int32.max)
+        }
         let norm = sqrt(values.reduce(0.0) { $0 + Double($1) * Double($1) })
         return values.map { Float(Double($0) / norm) }
     }
@@ -88,8 +94,39 @@ final class SearchColdPreparationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: c.binary.path))
     }
 
+    func testReloadMustValidateNewArrayStorageEvenWhenItCopiesTheOldSourceSignature() async throws {
+        let c = try context()
+        let ids: Set<String> = ["row-00000", "row-00001", "row-00002", "row-00003"]
+        _ = try await c.cache.records(modelVersion: "test-model", accessibleIDs: ids, deferPersistence: true) {
+            try await c.reader.searchRecords(modelVersion: "test-model", accessibleIDs: ids, reusing: [])
+        }
+        let writer = SQLitePhotoStore(directory: c.directory)
+        try await writer.save(TestFixtures.photo(id: "new-photo", model: "test-model"))
+        await writer.close()
+        do {
+            _ = try await c.cache.records(modelVersion: "test-model", accessibleIDs: ids.union(["new-photo"]),
+                                          deferPersistence: true, reload: { previous in
+                let old = try XCTUnwrap(previous.first)
+                let photo = old.photo
+                var bad = photo.imageEmbedding
+                bad[0] = .nan
+                let changed = CachedPhoto(photo: IndexedPhoto(id: photo.id, modificationTime: photo.modificationTime,
+                    modelVersion: photo.modelVersion, imageEmbedding: bad, location: photo.location,
+                    creationTime: photo.creationTime), geographyVersion: old.geographyVersion,
+                    sourceSignature: old.sourceSignature)
+                return [changed] + Array(previous.dropFirst())
+            }) {
+                XCTFail("The validated resident snapshot should reach the reload callback.")
+                return []
+            }
+            XCTFail("A copied source signature must not bypass vector validation.")
+        } catch {
+            XCTAssertTrue(error is SearchCacheFailure)
+        }
+    }
+
     func test7900CachedVectorsSurviveOneNewPhotoWithoutFullJSONReload() async throws {
-        let rows = fixtureRows(count: 7900)
+        let rows = fixtureRows(count: 7900, uniqueImages: true)
         let c = try context(rows: rows)
         let originalIDs = Set(rows.map(\.photo.id))
         _ = try await c.cache.records(modelVersion: "test-model", accessibleIDs: originalIDs) {
@@ -106,8 +143,11 @@ final class SearchColdPreparationTests: XCTestCase {
         let incrementalStart = ProcessInfo.processInfo.systemUptime
         let result = try await c.cache.records(modelVersion: "test-model", accessibleIDs: ids,
                                                deferPersistence: true, reload: { previous in
+            let reloadStart = ProcessInfo.processInfo.systemUptime
             let refreshed = try await c.reader.searchRecords(modelVersion: "test-model", accessibleIDs: ids,
                                                               reusing: previous)
+            print("TIMINGS-incremental-sql-source-row-verification-milliseconds " +
+                  String((ProcessInfo.processInfo.systemUptime - reloadStart) * 1000))
             let byID = Dictionary(previous.map { ($0.photo.id, $0) }, uniquingKeysWith: { _, last in last })
             var reused = 0
             for record in refreshed {

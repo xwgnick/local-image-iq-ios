@@ -380,6 +380,7 @@ final class AcceleratedSearchWorkerTests: XCTestCase {
                            PhotoRevision(id: "b", modificationTime: 123, creationTime: 100),
                            PhotoRevision(id: "c", modificationTime: 123, creationTime: 100),
                            PhotoRevision(id: "new", modificationTime: 123, creationTime: 100)])
+        try XCTUnwrap(c.library as? AcceleratedSnapshotLibrary).notifyChange()
         let raw = try await search(c, ocr: true, reference: true)
         let accelerated = try await search(c, ocr: true)
         same(accelerated, raw)

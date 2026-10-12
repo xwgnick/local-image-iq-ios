@@ -152,7 +152,7 @@ actor SearchIndexCache {
                 loaded = try await load()
             }
             try check(ticket)
-            let records = try Self.acceptLoaded(loaded, scope: scope, ids: accessibleIDs)
+            let records = try Self.acceptLoaded(loaded, scope: scope, ids: accessibleIDs, reusingValidated: previous ?? [])
             observeWork?(.recordsValidated(count: records.count))
             guard try unchanged(stamp) else { return try Self.uncachedResult(records) }
 
@@ -297,7 +297,9 @@ actor SearchIndexCache {
     }
 
     private static func acceptLoaded(_ loaded: [CachedPhoto], scope: SearchCacheScope,
-                                     ids: Set<String>) throws -> [CachedPhoto] {
+                                     ids: Set<String>, reusingValidated previous: [CachedPhoto] = []) throws -> [CachedPhoto] {
+        let validated = Dictionary(previous.map { (Data($0.photo.id.utf8), $0) },
+                                   uniquingKeysWith: { _, last in last })
         var accepted: [CachedPhoto] = []
         var seen: Set<Data> = []
         for cached in loaded {
@@ -309,11 +311,25 @@ actor SearchIndexCache {
             try SearchCacheRow.validateMetadata(id: photo.id, revision: photo.modificationTime,
                                                creation: photo.creationTime)
             guard seen.insert(Data(photo.id.utf8)).inserted else { throw SearchCacheFailure.invalidRecords }
-            try SearchCacheRow.validateVector(photo.imageEmbedding)
-            if let place = photo.location { try SearchCacheRow.validateVector(place.vector) }
+            let prior = validated[Data(photo.id.utf8)]?.photo
+            // Only identical, still-live immutable Array storage has already
+            // passed validation. Matching IDs, revisions or values do not suffice.
+            if prior.map({ sharesStorage(photo.imageEmbedding, $0.imageEmbedding) }) != true {
+                try SearchCacheRow.validateVector(photo.imageEmbedding)
+            }
+            if let place = photo.location,
+               prior?.location.map({ sharesStorage(place.vector, $0.vector) }) != true {
+                try SearchCacheRow.validateVector(place.vector)
+            }
             accepted.append(cached)
         }
         return accepted
+    }
+
+    private static func sharesStorage(_ lhs: [Float], _ rhs: [Float]) -> Bool {
+        lhs.withUnsafeBufferPointer { left in
+            rhs.withUnsafeBufferPointer { $0.baseAddress == left.baseAddress }
+        }
     }
 
     private enum Observation {

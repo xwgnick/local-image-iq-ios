@@ -623,20 +623,21 @@ actor SQLitePhotoStore {
     /// This detects same-revision edits without decoding unchanged vector JSON.
     private func reusableSignature(_ statement: OpaquePointer, enabled: Bool) throws -> Data? {
         guard enabled else { return nil }
-        var hash = SHA256()
+        var frame = Data()
+        frame.reserveCapacity(Int(sqlite3_column_bytes(statement, 3)) + Int(sqlite3_column_bytes(statement, 7)) + 256)
         for column in 0..<sqlite3_column_count(statement) {
             var type = sqlite3_column_type(statement, column).littleEndian
-            Swift.withUnsafeBytes(of: &type) { hash.update(bufferPointer: $0) }
+            Swift.withUnsafeBytes(of: &type) { frame.append(contentsOf: $0) }
             let bytes = sqlite3_column_blob(statement, column)
             let count = Int(sqlite3_column_bytes(statement, column))
             var length = UInt64(count).littleEndian
-            Swift.withUnsafeBytes(of: &length) { hash.update(bufferPointer: $0) }
+            Swift.withUnsafeBytes(of: &length) { frame.append(contentsOf: $0) }
             if count > 0 {
                 guard let bytes else { throw AppFailure.storage("Unable to read the local index.") }
-                hash.update(bufferPointer: UnsafeRawBufferPointer(start: bytes, count: count))
+                frame.append(bytes.assumingMemoryBound(to: UInt8.self), count: count)
             }
         }
-        return Data(hash.finalize())
+        return Data(SHA256.hash(data: frame))
     }
 
     private func decode(_ statement: OpaquePointer, sourceSignature: Data? = nil) throws -> CachedPhoto {
