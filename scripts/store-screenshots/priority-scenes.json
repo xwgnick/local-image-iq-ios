@@ -1,5 +1,5 @@
 {
-  "status": "exact-queries-verified-identity-relevance-rejected-clean-ocr-reviewed",
+  "status": "awaiting-real-device-translated-identity-capture-clean-ocr-reviewed",
   "scope": "Three priority scenes requested by the owner; not the full eight-image campaign",
   "visualDirection": {
     "palette": "Piankexun warm gold, ivory and dark ink; no competitor artwork",
@@ -21,7 +21,7 @@
       "query": "身份证",
       "expectedTopFamily": "demo-identity-",
       "acceptance": "OCR is off. Four staged front/back views of a public identity-card specimen should lead the actual semantic results. Preserve the full evidence, but show only the actual leading specimen photos in the marketing focus crop; do not alter their order.",
-      "limitation": "Use the existing public-domain PRC specimen with its SAMPLE markings and placeholder fields intact. These are four staged views of the same specimen, not four real identities. No real person's identity scan, valid identity number, added portrait or newly generated state insignia. Specimen success does not prove performance on every real document."
+      "limitation": "Use the existing public-domain PRC specimen with its SAMPLE markings and placeholder fields intact. These are four staged views of the same specimen, not four real identities. No real person's identity scan, valid identity number, added portrait or newly generated state insignia. The owner reports successful phone searches with Chinese-to-English translation on and OCR off. Apple Translation is unavailable in this simulator; raw-Chinese rankings cannot evaluate that phone route. Require actual-device translated capture rather than changing production search or substituting English results under a Chinese query."
     },
     {
       "id": "pilot-03-ocr-query",
