@@ -121,7 +121,8 @@ final class SearchColdPreparationTests: XCTestCase {
             }
             XCTFail("A copied source signature must not bypass vector validation.")
         } catch {
-            XCTAssertTrue(error is SearchCacheFailure)
+            XCTAssertFalse(error is CancellationError)
+            XCTAssertEqual(error.localizedDescription, "The search index could not be read.")
         }
     }
 
