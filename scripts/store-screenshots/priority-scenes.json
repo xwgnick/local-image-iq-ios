@@ -3,7 +3,7 @@
   "scope": "Three priority scenes requested by the owner; not the full eight-image campaign",
   "visualDirection": {
     "palette": "Piankexun warm gold, ivory and dark ink; no competitor artwork",
-    "layout": "Large Chinese benefit headline, full query callout, actual native screenshot with one relevant result enlarged only from that screenshot",
+    "layout": "Large Chinese benefit headline, full query callout and untouched native screenshot crop. An original source photo may be enlarged separately only after its actual first-result match is reviewed, explicitly labelled outside the app UI.",
     "restriction": "Never replace the query or reorder, insert, remove or fabricate app results"
   },
   "scenes": [

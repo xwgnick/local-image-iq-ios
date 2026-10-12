@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { pngDimensions } from './package_captures.mjs';
 
 const root = path.resolve(process.argv[2] ?? '');
@@ -8,6 +9,9 @@ assert.equal(path.basename(root), '38213207890', 'Preview uses the reviewed firs
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'iphone-large', 'manifest.json')));
 const scenes = JSON.parse(fs.readFileSync(new URL('priority-scenes.json', import.meta.url))).scenes.slice(0, 2);
 const escape = text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
+const sunset = fs.readFileSync(path.resolve('build', 'app-store', 'pilot-sources', 'sunset-pier.jpg'));
+assert.equal(createHash('sha256').update(sunset).digest('hex'),
+  '9b505bd5d5af1b046add5e9b17a92af5a2ae766ce0e0490974a63f8cc38c0cc4');
 const cards = scenes.map((scene, index) => {
   const matches = manifest.flatMap(test => test.attachments).filter(a =>
     a.suggestedHumanReadableName.startsWith(`Store-${scene.id}_`) && a.exportedFileName.endsWith('.png'));
@@ -15,11 +19,12 @@ const cards = scenes.map((scene, index) => {
   const bytes = fs.readFileSync(path.join(root, 'iphone-large', matches[0].exportedFileName));
   assert.deepEqual(pngDimensions(bytes), [1320, 2868]);
   const headline = index === 0 ? '记得那个时刻<br>就能开始找' : '证件照片<br>不必翻遍相册';
-  return `<article class="poster" id="scene-${index + 1}">
+  return `<article class="poster ${index === 0 ? 'memory' : 'document'}" id="scene-${index + 1}">
     <header><div class="brand">片刻寻 <span>AI 照片搜索 · 在本机处理</span></div>
     <div class="eyebrow">${index === 0 ? '用记忆中的细节寻找' : '用一个词，找到一类照片'}</div>
     <h1>${headline}</h1>
     <div class="query"><b>试着搜</b><p>${escape(scene.query)}</p></div></header>
+    ${index === 0 ? `<figure class="hero"><img alt="本次实际检索排第一的日落照片，单独展示原图" src="data:image/jpeg;base64,${sunset.toString('base64')}"><figcaption>这张照片，在本次实际搜索中排第一</figcaption></figure>` : ''}
     <section class="native"><img alt="未经替换输入或结果的真实原生截图" src="data:image/png;base64,${bytes.toString('base64')}"></section>
     <footer><strong>${index === 0 ? '把天空、人物、地点，写进同一句描述。' : '少翻相册，多留一点时间。'}</strong>
       <p>${index === 0 ? '实际中文原文检索 · 场景照片来自公开许可素材' : '原创建模演示卡 · 无真实身份信息 · 不可用于身份验证'}</p>
@@ -36,6 +41,8 @@ header{padding:100px 100px 58px}.brand{font-size:46px;font-weight:700;letter-spa
 .query b{font-size:28px;color:#98773a}.query p{font-size:42px;line-height:1.55;margin:14px 0 0}
 .native{margin:0 90px;height:1510px;overflow:hidden;border:3px solid #cec2aa;border-radius:46px;background:#f6f7f9;box-shadow:0 35px 70px #4a382d24}
 .native img{width:100%;height:auto;display:block}footer{padding:65px 100px}footer strong{font-size:40px;line-height:1.5}footer p{font-size:27px;line-height:1.7;color:#746b5b}
+.hero{margin:0 90px 24px}.hero img{display:block;width:100%;height:auto;border-radius:30px}.hero figcaption{font-size:27px;color:#746b5b;padding:18px 0}
+.memory .native{height:540px;position:relative}.memory .native img{position:absolute;top:-800px}.memory footer{padding-top:40px}
 footer small{font-size:22px;line-height:1.7;color:#8c8172;display:block}.notice{position:fixed;left:12px;bottom:12px;background:#292723;color:white;padding:10px 18px;font-size:14px;border-radius:8px;z-index:2}
 </style><main>${cards}</main><aside class="notice">两张视觉初稿 · 第三张OCR场景正在更换例子，尚未完成</aside></html>`;
 const output = path.join(root, 'priority-preview.html');
