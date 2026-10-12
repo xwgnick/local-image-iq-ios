@@ -262,6 +262,10 @@ review, applicable mainland compliance, App Store metadata and Apple review.
   the real Photos consent UI after test installation and disables parallel
   testing. It retains the exact twelve-photo gate and production model/grouping
   behavior. Six frames per device are planned, without OCR or comparison frames.
+- Run `38201428817` passed actual full-Photos consent but failed because the
+  capture script looked for the library-root Done button on its Photos Access
+  child page. The correction uses that page's native navigation-back button;
+  it does not change app navigation or remove the exact indexing gate.
 - [Written compliance inquiries](app-store/compliance-inquiries.zh-Hans.txt)
   preserve the actual system-networking boundaries. They have not been sent.
   Apple support requires the owner's account; no identity, enrollment, filing

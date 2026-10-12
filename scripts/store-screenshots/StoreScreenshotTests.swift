@@ -28,8 +28,9 @@ final class StoreScreenshotTests: XCTestCase {
         wait(allow, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
         allow.tap()
         XCTAssertTrue(app.staticTexts["可访问全部照片"].waitForExistence(timeout: 20))
-        tap("close-library")
-        tap("open-library")
+        let back = app.navigationBars["照片访问"].buttons.element(boundBy: 0)
+        wait(back, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
+        back.tap()
         let count = app.staticTexts["stored-index-count"]
         wait(count, predicate: NSPredicate(format: "exists == true AND label == %@", "已索引 12 张"), timeout: 180)
         tap("close-library")
