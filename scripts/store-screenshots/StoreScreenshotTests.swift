@@ -119,10 +119,12 @@ final class StoreScreenshotTests: XCTestCase {
         submit.tap()
         wait(app.descendants(matching: .any).matching(identifier: "results-heading").firstMatch,
              predicate: NSPredicate(format: "exists == true"), timeout: 90)
-        wait(app.buttons["select-search-results"],
-             predicate: NSPredicate(format: "exists == true AND enabled == true"), timeout: 30)
         if app.buttons["keyboard-done"].exists { app.buttons["keyboard-done"].tap() }
         else if app.buttons["hide-search-keyboard"].exists { app.buttons["hide-search-keyboard"].tap() }
+        for rank in [1, 6] {
+            wait(app.buttons["result-tile-\(rank)"],
+                 predicate: NSPredicate(format: "exists == true AND hittable == true AND enabled == true"), timeout: 30)
+        }
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
@@ -134,7 +136,18 @@ final class StoreScreenshotTests: XCTestCase {
 
     private func wait(_ element: XCUIElement, predicate: NSPredicate, timeout: TimeInterval) {
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed,
+        let result = XCTWaiter.wait(for: [expectation], timeout: timeout)
+        if result != .completed {
+            let screen = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screen.name = "Store-failed-readiness-screen"
+            screen.lifetime = .keepAlways
+            add(screen)
+            let hierarchy = XCTAttachment(string: app.debugDescription)
+            hierarchy.name = "Store-failed-readiness-accessibility"
+            hierarchy.lifetime = .keepAlways
+            add(hierarchy)
+        }
+        XCTAssertEqual(result, .completed,
                        "Expected real UI readiness: \(element)")
     }
 

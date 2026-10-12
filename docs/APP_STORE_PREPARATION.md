@@ -280,6 +280,13 @@ review, applicable mainland compliance, App Store metadata and Apple review.
   the system Full Access action. The helper then separately requires system
   deletion confirmation where applicable. Failure audit is attached before the
   final assertion rather than depending solely on XCTest unwinding.
+- Run `38205184354` verified removal of the six stock simulator resources and
+  imported all twelve licensed filenames. The real app authorized and indexed
+  exactly twelve photos. Its native video shows coffee results with six coffee
+  variants ranked above cats. The test failed waiting for the selection-button
+  accessibility ID, not because search returned nothing. Capture readiness now
+  checks actual result tiles 1 and 6, with immediate screenshot/hierarchy
+  attachments on timeout. Video-derived diagnosis frames are not store assets.
 - [Written compliance inquiries](app-store/compliance-inquiries.zh-Hans.txt)
   preserve the actual system-networking boundaries. They have not been sent.
   Apple support requires the owner's account; no identity, enrollment, filing
