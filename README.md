@@ -12,7 +12,11 @@
 
 IPA 1,420,660,564 bytes，完整下载 SHA-256 `b80ff3bba1efe4fcd566eb1a3b2068acfed61f2df09e401a26fa167e02fb028d` 及全量CRC通过。沿用原Sideloadly账号／有效Bundle ID重签并覆盖安装，不卸载、不清库、不为升级重建索引。详见[构建记录](docs/BUILD_STATUS.md)和[安装说明](docs/WINDOWS_IPHONE_INSTALL.md)。
 
-工具链已更新到Xcode26.3／SDK26.2，最低iOS17；隐私清单和离线第三方声明已随包。**这不是App Store上架**：政策／支持页仍为未部署草稿，账号、许可最终核查及适用大陆合规仍待完成。
+工具链已更新到Xcode26.3／SDK26.2，最低iOS17；隐私清单和离线第三方声明已随包。**这不是App Store上架**：开发者账号、正式签名及适用大陆合规仍待完成。
+
+### App Store发布准备（不改变上述已交付包）
+
+功能开发暂停。经开发者确认的[隐私政策](https://xwgnick.github.io/local-image-iq-ios/privacy.html)和[支持页面](https://xwgnick.github.io/local-image-iq-ios/support.html)已公开上线。后续准备源码接入了两页链接，并补入CHN/ADM1原始公有领域出处；截图任务使用公开许可素材和真实模型在iPhone／iPad模拟器拍摄，不使用私人照片或伪造搜索结果。上述准备不代表已报名会员、完成备案判断、上传签名包或通过Apple审核，也不会远程修改现有build40。
 
 ## 0.15.1 / build39 历史交付
 

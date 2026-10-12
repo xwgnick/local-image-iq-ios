@@ -30,3 +30,25 @@ test('Pages workflow publishes an explicit small allowlist, not submission notes
   assert.ok(workflow.includes('path: build/public-site'));
   assert.doesNotMatch(workflow, /cp\s+-[^\n]*r|path:\s*docs|metadata\.zh-Hans/);
 });
+
+test('store metadata fits Apple text and UTF-8 byte limits without inventing pending account details', () => {
+  const metadata = JSON.parse(read('metadata.zh-Hans.json'));
+  for (const [field, maximum] of Object.entries({
+    name: 30, subtitle: 30, promotionalText: 170, description: 4000,
+  })) {
+    assert.equal(typeof metadata[field], 'string', field);
+    assert.ok([...metadata[field]].length > 0, field);
+    assert.ok([...metadata[field]].length <= maximum, field);
+  }
+  for (const [field, maximum] of Object.entries({ keywords: 100, reviewNotes: 4000 })) {
+    assert.equal(typeof metadata[field], 'string', field);
+    assert.ok(Buffer.byteLength(metadata[field], 'utf8') > 0, field);
+    assert.ok(Buffer.byteLength(metadata[field], 'utf8') <= maximum, field);
+  }
+  assert.equal(metadata.status, 'draft-not-submitted');
+  assert.equal(metadata.requiresSignIn, false);
+  assert.equal(metadata.reviewContact, null);
+  assert.equal(metadata.copyright, null);
+  assert.equal(metadata.privacyPolicyURL, 'https://xwgnick.github.io/local-image-iq-ios/privacy.html');
+  assert.equal(metadata.supportURL, 'https://xwgnick.github.io/local-image-iq-ios/support.html');
+});

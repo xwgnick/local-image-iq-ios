@@ -1,0 +1,33 @@
+{
+  "status": "draft-not-submitted",
+  "locale": "zh-Hans",
+  "candidate": {
+    "version": "0.16.0",
+    "build": "40",
+    "sourceCommit": "206e69405e381b042ca44dfc6f31fec6cb462bbe"
+  },
+  "name": "片刻寻－AI搜照片与相似清理",
+  "subtitle": "凭记忆线索找照片，挑选清理相似画面",
+  "promotionalText": "记得画面，却忘了照片在哪？用记忆中的人物、物品或场景线索，在本机查找照片；再把相似画面放在一起比较，亲自选择要清理的照片。找到想看的，留下值得的。",
+  "description": "找到想看的，留下值得的。\n\n片刻寻是一款在本机运行的 AI 照片搜索与相似照片整理工具。不必记得准确日期或相册名称，试着描述记忆中的物品、场景或画面，就能在已授权的照片中寻找线索。\n\n【凭记忆线索找照片】\n用自然语言描述想找的画面，例如“海边的日落”或“桌上的一杯咖啡”。图像模型在设备上计算和检索，不把照片或搜索内容上传至开发者服务器。搜索结果按相关性提供参考，不保证每次都能找到目标照片。\n\n【把照片里的文字也变成线索】\n按需开启文字搜索，在本机识别照片中的文字，帮助查找截图、笔记等内容。识别结果保存在本机；关闭文字搜索不会自动删除已保存的文字索引，可通过清除索引一并删除。\n\n【相似画面，由你决定去留】\n把相似照片归组查看，概览和组内共用选择模式。支持逐张选择、滑动选择和全选本组；按住小图临时看大图，松手收起。进入组内可并排对比，挑选你希望保留的画面。\n\n【不自动删除】\n只有你选择并确认后，才向系统提交删除。分组和全选不会自动替你保留一张；相似也不代表完全相同。开启系统 iCloud 照片时，删除可能同步到其他设备，请先检查选择并备份重要照片。\n\n【照片与搜索在本机处理】\n无需注册应用账号，没有广告。图像模型随应用提供；可以只授权部分照片，并在系统设置中调整权限。搜索记录可单独清除，不影响照片或索引。\n\n使用说明：\n• 支持 iOS 17 及以上系统，中文搜索增强依赖系统翻译功能的可用性；部分功能受设备、系统版本和语言支持限制。\n• 首次使用需要完成照片索引，耗时取决于设备、照片数量及本地资源情况。\n• 仅在 iCloud 的照片可能需要你允许系统下载。语言包准备也可能需要联网；“本机处理”不代表设备绝不联网。\n• 文字识别、语义搜索和相似分组可能遗漏或误判，请以实际照片为准。",
+  "keywords": "相册整理,图片查找,自然语言,文字识别,截图检索,离线检索,回忆",
+  "reviewNotes": "Piankexun is an on-device photo search and similar-photo organization app. No app account, sign-in, developer-operated photo server, advertisements, or in-app purchases are implemented in the current candidate.\n\nReview preparation: Use a device or simulator containing non-sensitive test photos. Include a few visually similar photos and one image with readable text. The app does not ship a sample photo library. Please grant Photos access to these test photos; limited Photos access is supported. Complete initial photo indexing before testing search and similar-photo grouping.\n\nSearch: Describe an object or scene actually present in the authorized test photos. Results are relevance-based and are not guaranteed exact matches. Optional OCR recognizes photo text locally. Chinese query enhancement uses Apple Translation where available; system language-resource preparation may require a network connection. The image model and tokenizer are bundled, not downloaded at runtime.\n\nCleanup: Open Similar Cleanup using the bottom navigation. In the overview, tap Select to enter selection mode. Normal visible thumbnails support selection; the +N tile opens the group and cannot be selected as a photo. Selection is shared between overview and group detail. The X action clears all selections and exits selection mode. Hold a thumbnail to preview it; release to dismiss. Side-by-side comparison is available inside a group. Deletion is never automatic and requires confirmation. Use disposable test photos only if testing deletion; iCloud Photos may propagate deletions to other devices.\n\nPrivacy: Photos, search queries and OCR processing stay on-device in the implemented app paths. Global iCloud downloads are off by default; a user may authorize downloads, including a single-photo high-resolution request. These Apple system services are separate from developer data collection. Offline third-party notices are available in Settings > Privacy & About.\n\nThe installed build is intended to be reviewed with its real photo-library workflow, not UI-test launch arguments or synthetic screenshot fixtures.",
+  "requiresSignIn": false,
+  "privacyPolicyURL": "https://xwgnick.github.io/local-image-iq-ios/privacy.html",
+  "supportURL": "https://xwgnick.github.io/local-image-iq-ios/support.html",
+  "marketingURL": null,
+  "copyright": null,
+  "reviewContact": null,
+  "pendingOwnerDecisions": {
+    "storeVersion": null,
+    "bundleIdentifier": null,
+    "sku": null,
+    "price": null,
+    "primaryCategory": null,
+    "secondaryCategory": null,
+    "publicOperatorName": "谢文戈",
+    "publicSupportEmail": "xiewenge_neu@163.com",
+    "hosting": "GitHub Pages",
+    "supportEmailRetention": "问题处理完毕后90天内删除；未结请求或依法必要保留的信息除外，仅在必要范围和期限内保留"
+  }
+}
