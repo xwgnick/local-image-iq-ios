@@ -8,6 +8,8 @@
 
 现按原完整流程重新验证真实模型、App/UI 回归并构建设备 IPA。**此时尚未交付 build41，以下 build40 仍是最近已交付包**；完整构建、发布、下载和整包校验通过后才提供新下载链接。覆盖安装须沿用原签名账号、签名团队和实际 Bundle ID，不能仅凭源码默认 ID 判断兼容性。
 
+首次完整运行 [38297071331](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38297071331) 未通过：发布资源测试仍断言旧的 0.16.0／40，实际 App 已为 0.16.1／41。UI 21 项中 20 通过、1 项既有键盘测试跳过。已同步版本断言，保持 Bundle ID 和品牌断言不变，重新执行完整流水线，不跳过失败项，也不发布未经通过的 IPA。
+
 ## 0.16.0 / build40 历史交付
 
 **[下载片刻寻 build40 IPA](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-38167404946-1/LocalImageIQ-0.16.0-build40-iphoneos-unsigned.ipa)**。桌面名称改为“片刻寻”；为保留升级兼容性，Bundle ID、内部工程名、存储目录与数据格式标识继续沿用 `LocalImageIQ` 系列名称。旧版下载链接和历史验证记录不改名。
