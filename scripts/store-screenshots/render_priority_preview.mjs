@@ -7,7 +7,7 @@ import { pngDimensions } from './package_captures.mjs';
 const root = path.resolve(process.argv[2] ?? '');
 assert.equal(path.basename(root), '38213207890', 'Preview uses the reviewed first pilot only');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'iphone-large', 'manifest.json')));
-const scenes = JSON.parse(fs.readFileSync(new URL('priority-scenes.json', import.meta.url))).scenes.slice(0, 2);
+const scenes = JSON.parse(fs.readFileSync(new URL('priority-scenes.json', import.meta.url))).scenes.slice(0, 1);
 const escape = text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
 const sunset = fs.readFileSync(path.resolve('build', 'app-store', 'pilot-sources', 'sunset-pier.jpg'));
 assert.equal(createHash('sha256').update(sunset).digest('hex'),
@@ -52,7 +52,7 @@ const cards = scenes.map((scene, index) => {
   </article>`;
 }).join('');
 const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>片刻寻 · 两张重点场景视觉初稿</title><style>
+<title>片刻寻 · 长查询视觉初稿</title><style>
 *{box-sizing:border-box}body{margin:0;background:#ddd8ce;font-family:"Microsoft YaHei","PingFang SC",sans-serif;color:#292723}
 main{display:flex;gap:48px;padding:48px;width:max-content}.poster{width:1320px;height:2868px;background:linear-gradient(145deg,#fffaf0,#efe5d2);overflow:hidden;position:relative;border-radius:0}
 header{padding:100px 100px 58px}.brand{font-size:46px;font-weight:700;letter-spacing:5px;color:#826327}.brand span{font-size:27px;letter-spacing:1px;font-weight:400;margin-left:25px;color:#776d5c}
@@ -64,7 +64,7 @@ header{padding:100px 100px 58px}.brand{font-size:46px;font-weight:700;letter-spa
 .hero{margin:0 90px 24px}.hero img{display:block;width:100%;height:auto;border-radius:30px}.hero figcaption{font-size:27px;color:#746b5b;padding:18px 0}
 .memory footer{padding-top:40px}
 footer small{font-size:22px;line-height:1.7;color:#8c8172;display:block}.notice{position:fixed;left:12px;bottom:12px;background:#292723;color:white;padding:10px 18px;font-size:14px;border-radius:8px;z-index:2}
-</style><main>${cards}</main><aside class="notice">两张视觉初稿 · 第三张OCR场景正在更换例子，尚未完成</aside></html>`;
+</style><main>${cards}</main><aside class="notice">长查询取景初稿 · 旧证件素材已撤下，新素材原生重拍中 · OCR尚未完成</aside></html>`;
 const output = path.join(root, 'priority-preview.html');
 fs.writeFileSync(output, html);
-console.log(JSON.stringify({ output, scenes: 2, ocrStatus: 'Not rendered: first example did not prove OCR dependence' }));
+console.log(JSON.stringify({ output, scenes: 1, identityStatus: 'Old cards rejected; new specimen capture pending', ocrStatus: 'Not rendered: first example did not prove OCR dependence' }));
