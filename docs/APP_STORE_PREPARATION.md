@@ -287,6 +287,12 @@ review, applicable mainland compliance, App Store metadata and Apple review.
   accessibility ID, not because search returned nothing. Capture readiness now
   checks actual result tiles 1 and 6, with immediate screenshot/hierarchy
   attachments on timeout. Video-derived diagnosis frames are not store assets.
+- Run `38206547291` exported a full failure PNG and AX tree: result identifiers
+  belong to `Other` wrappers containing unnamed buttons, while the selection
+  button inherits `results-heading`. Use type-independent exact-identifier
+  lookup for result readiness, based on this actual tree, without changing
+  production accessibility. The diagnostic RGB PNG is 1178x2556; final store
+  canvases still need exact accepted dimensions and human visual review.
 - [Written compliance inquiries](app-store/compliance-inquiries.zh-Hans.txt)
   preserve the actual system-networking boundaries. They have not been sent.
   Apple support requires the owner's account; no identity, enrollment, filing

@@ -122,7 +122,8 @@ final class StoreScreenshotTests: XCTestCase {
         if app.buttons["keyboard-done"].exists { app.buttons["keyboard-done"].tap() }
         else if app.buttons["hide-search-keyboard"].exists { app.buttons["hide-search-keyboard"].tap() }
         for rank in [1, 6] {
-            wait(app.buttons["result-tile-\(rank)"],
+            let tile = app.descendants(matching: .any).matching(identifier: "result-tile-\(rank)").firstMatch
+            wait(tile,
                  predicate: NSPredicate(format: "exists == true AND hittable == true AND enabled == true"), timeout: 30)
         }
         XCTAssertFalse(app.alerts.firstMatch.exists)

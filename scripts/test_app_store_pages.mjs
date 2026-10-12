@@ -69,7 +69,7 @@ test('photo preparation is confined to the screenshot variant and a named dispos
   const capture = source('scripts/store-screenshots/StoreScreenshotTests.swift');
   assert.ok(capture.includes('"已索引 12 张"'));
   assert.ok(capture.includes('"Prepared 12 licensed photos"'));
-  assert.ok(capture.includes('"result-tile-\\(rank)"'));
+  assert.ok(capture.includes('app.descendants(matching: .any).matching(identifier: "result-tile-\\(rank)")'));
   assert.doesNotMatch(capture, /app\.buttons\["select-search-results"\]/);
   assert.doesNotMatch(source('.github/workflows/app-store-screenshots.yml'), /simctl (addmedia|privacy)/);
 });
