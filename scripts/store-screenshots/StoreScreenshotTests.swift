@@ -16,25 +16,7 @@ final class StoreScreenshotTests: XCTestCase {
     }
 
     func testCaptureRealPhotoWorkflows() throws {
-        XCUIDevice.shared.orientation = .portrait
-        try prepareLicensedLibrary()
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
-        app.launch()
-        waitForPreparedHome(app)
-
-        tap("open-library")
-        tap("library-photo-access")
-        tap("authorize-photos")
-        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Full Access"]
-        wait(allow, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
-        allow.tap()
-        XCTAssertTrue(app.staticTexts["可访问全部照片"].waitForExistence(timeout: 20))
-        let back = app.navigationBars["照片访问"].buttons.element(boundBy: 0)
-        wait(back, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
-        back.tap()
-        let count = app.staticTexts["stored-index-count"]
-        wait(count, predicate: NSPredicate(format: "exists == true AND label == %@", "已索引 12 张"), timeout: 180)
-        tap("close-library")
+        try launchIndexedLibrary(count: 12)
 
         search("coffee")
         capture("01-coffee-search")
@@ -56,7 +38,6 @@ final class StoreScreenshotTests: XCTestCase {
         XCTAssertTrue(app.collectionViews["similar-cleanup-five-column-grid"].waitForExistence(timeout: 10))
         capture("05-cleanup-detail")
 
-        // Leave cleanup through the real bottom navigation without deleting photos.
         tap("primary-search-tab")
         tap("open-settings")
         tap("settings-privacy")
@@ -64,7 +45,58 @@ final class StoreScreenshotTests: XCTestCase {
         capture("06-privacy")
     }
 
-    private func prepareLicensedLibrary() throws {
+    func testCaptureThreePriorityScenes() throws {
+        try launchIndexedLibrary(count: 11)
+        search("傍晚的海边，粉紫色和橙色的天空，两个人站在水边，身后有一座长长的栈桥", minimumResults: 1)
+        capture("pilot-01-memory-query")
+        search("身份证", minimumResults: 1)
+        capture("pilot-02-document-query")
+        search("Q7M2", minimumResults: 1)
+        capture("pilot-ocr-before")
+        let ocr = app.switches["photo-text-search-enabled"].firstMatch
+        wait(ocr, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
+        XCTAssertEqual(ocr.value as? String, "0")
+        ocr.tap()
+        tap("open-library")
+        tap("library-text-index")
+        let status = app.staticTexts["text-index-status"]
+        wait(status, predicate: NSPredicate(format: "exists == true AND label == %@", "文字索引已更新"), timeout: 180)
+        let counts = app.staticTexts["text-index-counts"]
+        wait(counts, predicate: NSPredicate(format: "exists == true AND label BEGINSWITH %@", "已识别 11 张"), timeout: 30)
+        capture("pilot-ocr-index-evidence")
+        let back = app.navigationBars["文本索引"].buttons.element(boundBy: 0)
+        wait(back, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
+        back.tap()
+        tap("close-library")
+        search("Q7M2", minimumResults: 1)
+        capture("pilot-03-ocr-query")
+    }
+
+    private func launchIndexedLibrary(count expected: Int) throws {
+        XCUIDevice.shared.orientation = .portrait
+        try prepareLicensedLibrary(count: expected)
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        waitForPreparedHome(app)
+
+        tap("open-library")
+        tap("library-photo-access")
+        tap("authorize-photos")
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Full Access"]
+        wait(allow, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
+        allow.tap()
+        XCTAssertTrue(app.staticTexts["可访问全部照片"].waitForExistence(timeout: 20))
+        let back = app.navigationBars["照片访问"].buttons.element(boundBy: 0)
+        wait(back, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
+        back.tap()
+        let count = app.staticTexts["stored-index-count"]
+        let expectedLabel = expected == 12 ? "已索引 12 张" : "已索引 11 张"
+        wait(count, predicate: NSPredicate(format: "exists == true AND label == %@", expectedLabel), timeout: 180)
+        tap("close-library")
+    }
+
+    private func prepareLicensedLibrary(count expected: Int) throws {
+        let success = expected == 12 ? "Prepared 12 licensed photos" : "Prepared 11 licensed photos"
         let device = try XCTUnwrap(ProcessInfo.processInfo.environment["SIMULATOR_UDID"])
         let helper = XCUIApplication(bundleIdentifier: "com.example.localimageiq.store-preparation")
         helper.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
@@ -87,28 +119,28 @@ final class StoreScreenshotTests: XCTestCase {
             NSPredicate(format: "label MATCHES %@", "^Delete( [0-9]+ Photos?)?$")).firstMatch
         let permissionOrProgress = NSPredicate { _, _ in
             allow.exists || deletion.exists
-                || (status.exists && (status.label == "Prepared 12 licensed photos"
+                || (status.exists && (status.label == success
                                       || status.label.hasPrefix("Failed:")))
         }
         wait(status, predicate: permissionOrProgress, timeout: 30)
         if allow.exists { allow.tap() }
         let readyOrConsent = NSPredicate { _, _ in
-            deletion.exists || (status.exists && (status.label == "Prepared 12 licensed photos"
+            deletion.exists || (status.exists && (status.label == success
                                                   || status.label.hasPrefix("Failed:")))
         }
         wait(status, predicate: readyOrConsent, timeout: 30)
         if deletion.exists { deletion.tap() }
         let finished = NSPredicate(format: "exists == true AND (label == %@ OR label BEGINSWITH %@)",
-                                   "Prepared 12 licensed photos", "Failed:")
+                                   success, "Failed:")
         wait(status, predicate: finished, timeout: 60)
         let audit = XCTAttachment(string: helper.debugDescription)
         audit.name = "Store-photo-library-preparation-result"
         audit.lifetime = .keepAlways
         add(audit)
-        XCTAssertEqual(status.label, "Prepared 12 licensed photos")
+        XCTAssertEqual(status.label, success)
     }
 
-    private func search(_ query: String) {
+    private func search(_ query: String, minimumResults: Int = 6) {
         let field = app.textFields["photo-query"]
         XCTAssertTrue(field.waitForExistence(timeout: 15))
         if app.buttons["clear-query"].exists { app.buttons["clear-query"].tap() }
@@ -121,7 +153,7 @@ final class StoreScreenshotTests: XCTestCase {
              predicate: NSPredicate(format: "exists == true"), timeout: 90)
         if app.buttons["keyboard-done"].exists { app.buttons["keyboard-done"].tap() }
         else if app.buttons["hide-search-keyboard"].exists { app.buttons["hide-search-keyboard"].tap() }
-        for rank in [1, 6] {
+        for rank in Set([1, minimumResults]) {
             let tile = app.descendants(matching: .any).matching(identifier: "result-tile-\(rank)").firstMatch
             wait(tile,
                  predicate: NSPredicate(format: "exists == true AND hittable == true AND enabled == true"), timeout: 30)

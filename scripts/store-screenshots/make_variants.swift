@@ -25,3 +25,5 @@ for name in ["coffee", "chelsea"] {
     }
 }
 print("Prepared 12 public demonstration photos; small crop variants, no private photos.")
+let names = ["coffee", "chelsea"].flatMap { family in (0..<6).map { "\(family)-crop-\($0).png" } }
+try JSONEncoder().encode(names.sorted()).write(to: output.appendingPathComponent("inventory.json"))

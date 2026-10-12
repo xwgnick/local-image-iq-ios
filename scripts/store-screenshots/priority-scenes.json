@@ -1,0 +1,35 @@
+{
+  "status": "native-pilot-pending-not-approved",
+  "scope": "Three priority scenes requested by the owner; not the full eight-image campaign",
+  "visualDirection": {
+    "palette": "Piankexun warm gold, ivory and dark ink; no competitor artwork",
+    "layout": "Large Chinese benefit headline, full query callout, actual native screenshot with one relevant result enlarged only from that screenshot",
+    "restriction": "Never replace the query or reorder, insert, remove or fabricate app results"
+  },
+  "scenes": [
+    {
+      "id": "pilot-01-memory-query",
+      "headline": "记得那个时刻，就能开始找",
+      "query": "傍晚的海边，粉紫色和橙色的天空，两个人站在水边，身后有一座长长的栈桥",
+      "expectedTopPhoto": "moment-sunset.png",
+      "acceptance": "Actual Chinese query visible in the UI or recorded AX; sunset photo first, with distractors in the indexed library. Full query repeated outside the screenshot only if the same query was truly entered.",
+      "limitation": "Apple Translation is unavailable on the simulator. This pilot tests raw Chinese retrieval, not the unavailable translation path. If relevance fails, require a real-device shoot rather than substituting English results."
+    },
+    {
+      "id": "pilot-02-document-query",
+      "headline": "证件照片，不必翻遍相册",
+      "query": "身份证",
+      "expectedTopFamily": "demo-identity-",
+      "acceptance": "OCR is off. Multiple distinct fictional card photos should lead the actual semantic results; do not mislabel OCR matches as semantic recognition.",
+      "limitation": "Prominently identify original mock cards as demo samples. No real personal information, valid ID numbers, official seals, national emblem or government-issued replica. Mock success does not prove performance on every real document."
+    },
+    {
+      "id": "pilot-03-ocr-query",
+      "headline": "记住一段文字，也能找到照片",
+      "query": "Q7M2",
+      "expectedTopPhoto": "demo-menu-1.png",
+      "acceptance": "Four menus share layout but have different codes. Preserve before-OCR search, actual eleven-photo OCR completion evidence, then same-query search with OCR enabled. Matching menu must be first; if it already leads without OCR, choose a better example rather than claiming the baseline proves an OCR improvement.",
+      "limitation": "This is an original fictitious order/menu, not a customer's receipt or private screenshot."
+    }
+  ]
+}

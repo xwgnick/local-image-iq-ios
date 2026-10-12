@@ -65,6 +65,7 @@ test('photo preparation is confined to the screenshot variant and a named dispos
   assert.ok(helper.includes('existing.count == 0 || existing.count == 6'));
   assert.ok(helper.includes('PHAsset.fetchAssets(with: nil).count == 0'));
   assert.ok(helper.includes('actualNames.sorted() == names.sorted()'));
+  assert.ok(helper.includes('Set(names).count == names.count'));
   assert.ok(helper.includes('await PHPhotoLibrary.requestAuthorization(for: .readWrite)'));
   const capture = source('scripts/store-screenshots/StoreScreenshotTests.swift');
   assert.ok(capture.includes('"已索引 12 张"'));
@@ -72,4 +73,28 @@ test('photo preparation is confined to the screenshot variant and a named dispos
   assert.ok(capture.includes('app.descendants(matching: .any).matching(identifier: "result-tile-\\(rank)")'));
   assert.doesNotMatch(capture, /app\.buttons\["select-search-results"\]/);
   assert.doesNotMatch(source('.github/workflows/app-store-screenshots.yml'), /simctl (addmedia|privacy)/);
+});
+
+test('priority pilot retains actual Chinese queries, an OCR baseline and distinct safe demo assets', () => {
+  const source = path => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+  const scenes = JSON.parse(source('scripts/store-screenshots/priority-scenes.json')).scenes;
+  assert.equal(scenes.length, 3);
+  assert.ok([...scenes[0].query].length >= 30);
+  const capture = source('scripts/store-screenshots/StoreScreenshotTests.swift');
+  for (const scene of scenes) {
+    assert.ok(capture.includes(`search("${scene.query}"`), scene.id);
+    assert.ok(capture.includes(`capture("${scene.id}")`), scene.id);
+  }
+  assert.ok(capture.indexOf('capture("pilot-ocr-before")') < capture.indexOf('ocr.tap()'));
+  assert.ok(capture.includes('"文字索引已更新"'));
+  assert.ok(capture.includes('"已识别 11 张"'));
+  const assets = source('scripts/store-screenshots/make_pilot.swift');
+  assert.ok(assets.includes('NOT A VALID ID'));
+  assert.ok(assets.includes('不可用于身份验证'));
+  assert.ok(assets.includes('["Q7M2", "R8N3", "S9P4", "T6K5"]'));
+  assert.doesNotMatch(assets, /[0-9]{18}/);
+  const workflow = source('.github/workflows/app-store-screenshots.yml');
+  assert.ok(workflow.includes('options: [baseline, priority-pilot]'));
+  assert.ok(workflow.includes('testCaptureThreePriorityScenes'));
+  assert.ok(workflow.includes('[ "$label" != "iphone-large" ]'));
 });

@@ -2,6 +2,12 @@ name: Capture real App Store screenshot candidates
 
 on:
   workflow_dispatch:
+    inputs:
+      campaign:
+        type: choice
+        options: [baseline, priority-pilot]
+        default: baseline
+        description: Baseline engineering frames or three priority marketing scenes
 
 permissions:
   contents: read
@@ -15,6 +21,7 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       IMAGEIQ_REQUIRE_MODELS: '1'
       IMAGEIQ_TEST_ALL_COMPUTE_UNITS: '0'
+      STORE_CAMPAIGN: ${{ inputs.campaign }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +37,12 @@ jobs:
         run: |
           node scripts/check_release.mjs --toolchain
           node scripts/store-screenshots/prepare_photos.mjs
-          swift scripts/store-screenshots/make_variants.swift
+          if [ "$STORE_CAMPAIGN" = "priority-pilot" ]; then
+            node scripts/store-screenshots/prepare_pilot.mjs
+            swift scripts/store-screenshots/make_pilot.swift
+          else
+            swift scripts/store-screenshots/make_variants.swift
+          fi
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
       - name: Prepare real resources without changing production data or models
         run: |
@@ -57,7 +69,12 @@ jobs:
           xcrun simctl list runtimes --json > build/store-runtimes.json
           xcrun simctl list devicetypes --json > build/store-devices.json
           node scripts/store-screenshots/select_devices.mjs
+          selector=LocalImageIQUITests/StoreScreenshotTests/testCaptureRealPhotoWorkflows
+          if [ "$STORE_CAMPAIGN" = "priority-pilot" ]; then
+            selector=LocalImageIQUITests/StoreScreenshotTests/testCaptureThreePriorityScenes
+          fi
           while IFS='|' read -r label type runtime; do
+            if [ "$STORE_CAMPAIGN" = "priority-pilot" ] && [ "$label" != "iphone-large" ]; then continue; fi
             id=$(xcrun simctl create "Store-$label-${GITHUB_RUN_ID}" "$type" "$runtime")
             xcrun simctl boot "$id"
             xcrun simctl bootstatus "$id" -b
@@ -70,7 +87,7 @@ jobs:
               -destination "platform=iOS Simulator,id=$id" -derivedDataPath build/StoreDerivedData \
               -resultBundlePath "build/Store-$label.xcresult" \
               -parallel-testing-enabled NO \
-              -only-testing:LocalImageIQUITests/StoreScreenshotTests CODE_SIGNING_ALLOWED=NO || status=$?
+              "-only-testing:$selector" CODE_SIGNING_ALLOWED=NO || status=$?
             xcrun xcresulttool export attachments --path "build/Store-$label.xcresult" --output-path "build/store-captures/$label"
             xcrun simctl shutdown "$id"
             xcrun simctl delete "$id"

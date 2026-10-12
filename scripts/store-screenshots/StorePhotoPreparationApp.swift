@@ -27,7 +27,6 @@ private struct PreparationView: View {
                 Task {
                     do {
                         try await prepare()
-                        status = "Prepared 12 licensed photos"
                     } catch {
                         status = "Failed: \(error)"
                         NSLog("Store photo preparation failed: %@", String(describing: error))
@@ -56,8 +55,14 @@ private struct PreparationView: View {
         throw PreparationError.notDisposableSimulator
         #endif
 
-        let names = ["coffee", "chelsea"].flatMap { family in
-            (0..<6).map { "\(family)-crop-\($0).png" }
+        guard let inventory = Bundle.main.url(forResource: "inventory", withExtension: "json",
+                                              subdirectory: "store-photos") else {
+            throw PreparationError.missingPhotos
+        }
+        let names = try JSONDecoder().decode([String].self, from: Data(contentsOf: inventory))
+        guard [11, 12].contains(names.count), Set(names).count == names.count,
+              names.allSatisfy({ !$0.contains("/") && !$0.contains("\\") && $0.hasSuffix(".png") }) else {
+            throw PreparationError.unexpectedLibrary
         }
         let urls = try names.map { name -> URL in
             guard let url = Bundle.main.url(forResource: name, withExtension: nil, subdirectory: "store-photos"),
@@ -101,9 +106,10 @@ private struct PreparationView: View {
         imported.enumerateObjects { asset, _, _ in
             actualNames.append(contentsOf: PHAssetResource.assetResources(for: asset).map(\.originalFilename))
         }
-        guard imported.count == 12, actualNames.sorted() == names.sorted() else {
+        guard imported.count == names.count, actualNames.sorted() == names.sorted() else {
             throw PreparationError.verificationFailed
         }
         audit += "\nVerified imported filenames: \(actualNames.sorted().joined(separator: ", "))"
+        status = "Prepared \(names.count) licensed photos"
     }
 }
