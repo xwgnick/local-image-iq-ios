@@ -72,6 +72,8 @@ for index in 0..<4 {
     text("\(drinks[index])\n今日餐点：烤吐司\n请凭取餐码领取", x: 110, y: 750, width: 980, size: 72)
     text("取餐码", x: 110, y: 590, width: 980, size: 60)
     text(codes[index], x: 110, y: 400, width: 980, size: 150, bold: true)
+    let locations = ["北门值班室", "松桥路东口", "河畔图书馆", "梧桐街南门"]
+    text("备注：请送到\(locations[index])，交给现场工作人员。", x: 110, y: 280, width: 980, size: 28)
     text("演示素材 · 非真实订单", x: 110, y: 130, width: 980, size: 42)
     image.unlockFocus()
     try save(image, name: "demo-menu-\(index + 1).png")

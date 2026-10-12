@@ -92,6 +92,11 @@ test('priority pilot retains actual Chinese queries, an OCR baseline and distinc
   assert.ok(assets.includes('NOT A VALID ID'));
   assert.ok(assets.includes('不可用于身份验证'));
   assert.ok(assets.includes('["Q7M2", "R8N3", "S9P4", "T6K5"]'));
+  assert.ok(assets.includes('["北门值班室", "松桥路东口", "河畔图书馆", "梧桐街南门"]'));
+  assert.ok(capture.includes('["松桥路东口", "河畔图书馆", "梧桐街南门"]'));
+  assert.ok(capture.includes('capture("pilot-ocr-before-\\(index + 2)")'));
+  assert.ok(capture.includes('capture("pilot-ocr-after-\\(index + 2)")'));
+  assert.ok(capture.includes('tap("dismiss-ocr-sync")'));
   assert.doesNotMatch(assets, /[0-9]{18}/);
   const workflow = source('.github/workflows/app-store-screenshots.yml');
   assert.ok(workflow.includes('options: [baseline, priority-pilot]'));

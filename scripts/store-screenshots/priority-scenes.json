@@ -1,5 +1,5 @@
 {
-  "status": "native-pilot-pending-not-approved",
+  "status": "first-native-pilot-reviewed-ocr-example-rejected",
   "scope": "Three priority scenes requested by the owner; not the full eight-image campaign",
   "visualDirection": {
     "palette": "Piankexun warm gold, ivory and dark ink; no competitor artwork",
@@ -26,9 +26,9 @@
     {
       "id": "pilot-03-ocr-query",
       "headline": "记住一段文字，也能找到照片",
-      "query": "Q7M2",
+      "query": "北门值班室",
       "expectedTopPhoto": "demo-menu-1.png",
-      "acceptance": "Four menus share layout but have different codes. Preserve before-OCR search, actual eleven-photo OCR completion evidence, then same-query search with OCR enabled. Matching menu must be first; if it already leads without OCR, choose a better example rather than claiming the baseline proves an OCR improvement.",
+      "acceptance": "Four menus share layout but contain distinct small-print delivery locations. Preserve all four before/after searches and actual eleven-photo OCR completion evidence. Adopt only a query whose intended menu improves to first with OCR enabled; if the before result is already first, that query cannot prove OCR dependence.",
       "limitation": "This is an original fictitious order/menu, not a customer's receipt or private screenshot."
     }
   ]

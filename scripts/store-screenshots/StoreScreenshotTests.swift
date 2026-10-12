@@ -51,8 +51,13 @@ final class StoreScreenshotTests: XCTestCase {
         capture("pilot-01-memory-query")
         search("身份证", minimumResults: 1)
         capture("pilot-02-document-query")
-        search("Q7M2", minimumResults: 1)
+        search("北门值班室", minimumResults: 1)
         capture("pilot-ocr-before")
+        let alternatives = ["松桥路东口", "河畔图书馆", "梧桐街南门"]
+        for (index, query) in alternatives.enumerated() {
+            search(query, minimumResults: 1)
+            capture("pilot-ocr-before-\(index + 2)")
+        }
         let ocr = app.switches["photo-text-search-enabled"].firstMatch
         wait(ocr, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
         XCTAssertEqual(ocr.value as? String, "0")
@@ -68,8 +73,17 @@ final class StoreScreenshotTests: XCTestCase {
         wait(back, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
         back.tap()
         tap("close-library")
-        search("Q7M2", minimumResults: 1)
+        if app.buttons["dismiss-ocr-sync"].exists {
+            tap("dismiss-ocr-sync")
+        }
+        wait(app.buttons["ocr-sync-open-details"],
+             predicate: NSPredicate(format: "exists == false"), timeout: 20)
+        search("北门值班室", minimumResults: 1)
         capture("pilot-03-ocr-query")
+        for (index, query) in alternatives.enumerated() {
+            search(query, minimumResults: 1)
+            capture("pilot-ocr-after-\(index + 2)")
+        }
     }
 
     private func launchIndexedLibrary(count expected: Int) throws {
