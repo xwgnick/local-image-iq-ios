@@ -1,0 +1,43 @@
+name: Publish app privacy and support pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-store-pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event.repository.private == false && github.repository == 'xwgnick/local-image-iq-ios'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate public pages
+        run: node --test scripts/test_app_store_pages.mjs
+      - uses: actions/configure-pages@v5
+      - name: Copy only approved public files
+        run: |
+          mkdir -p build/public-site
+          cp docs/app-store/privacy.html docs/app-store/support.html docs/app-store/style.css build/public-site/
+          cp docs/app-store/support.html build/public-site/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/public-site
+      - uses: actions/deploy-pages@v4
+        id: deployment
