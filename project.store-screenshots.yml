@@ -2,6 +2,28 @@ include:
   - project.models.yml
 
 targets:
+  StorePhotoPreparation:
+    type: application
+    platform: iOS
+    sources:
+      - path: scripts/store-screenshots/StorePhotoPreparationApp.swift
+      - path: build/store-photos
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.localimageiq.store-preparation
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Store Photo Preparation
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Prepare licensed photos only on disposable screenshot simulators.
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Import licensed demonstration photos.
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
   LocalImageIQUITests:
     sources:
       - path: scripts/store-screenshots/StoreScreenshotTests.swift
+
+schemes:
+  LocalImageIQ:
+    build:
+      targets:
+        StorePhotoPreparation: [test]

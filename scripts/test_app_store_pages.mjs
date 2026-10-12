@@ -52,3 +52,21 @@ test('store metadata fits Apple text and UTF-8 byte limits without inventing pen
   assert.equal(metadata.privacyPolicyURL, 'https://xwgnick.github.io/local-image-iq-ios/privacy.html');
   assert.equal(metadata.supportURL, 'https://xwgnick.github.io/local-image-iq-ios/support.html');
 });
+
+test('photo preparation is confined to the screenshot variant and a named disposable simulator', () => {
+  const source = path => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+  const project = source('project.yml');
+  assert.doesNotMatch(project, /StorePhotoPreparation|scripts\/store-screenshots/);
+  assert.ok(source('project.store-screenshots.yml').includes('StorePhotoPreparation: [test]'));
+  const helper = source('scripts/store-screenshots/StorePhotoPreparationApp.swift');
+  assert.ok(helper.includes('#if targetEnvironment(simulator)'));
+  assert.ok(helper.includes('^Store-(iphone-medium|iphone-large|ipad-13)-[0-9]+$'));
+  assert.ok(helper.includes('arguments[marker + 1] == device'));
+  assert.ok(helper.includes('existing.count == 0 || existing.count == 6'));
+  assert.ok(helper.includes('PHAsset.fetchAssets(with: nil).count == 0'));
+  assert.ok(helper.includes('actualNames.sorted() == names.sorted()'));
+  const capture = source('scripts/store-screenshots/StoreScreenshotTests.swift');
+  assert.ok(capture.includes('"已索引 12 张"'));
+  assert.ok(capture.includes('"Prepared 12 licensed photos"'));
+  assert.doesNotMatch(source('.github/workflows/app-store-screenshots.yml'), /simctl addmedia/);
+});

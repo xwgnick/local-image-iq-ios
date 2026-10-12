@@ -17,6 +17,7 @@ final class StoreScreenshotTests: XCTestCase {
 
     func testCaptureRealPhotoWorkflows() throws {
         XCUIDevice.shared.orientation = .portrait
+        try prepareLicensedLibrary()
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         waitForPreparedHome(app)
@@ -61,6 +62,38 @@ final class StoreScreenshotTests: XCTestCase {
         tap("settings-privacy")
         XCTAssertTrue(app.navigationBars["隐私与关于"].waitForExistence(timeout: 10))
         capture("06-privacy")
+    }
+
+    private func prepareLicensedLibrary() throws {
+        let device = try XCTUnwrap(ProcessInfo.processInfo.environment["SIMULATOR_UDID"])
+        let helper = XCUIApplication(bundleIdentifier: "com.example.localimageiq.store-preparation")
+        helper.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+                                  "--disposable-store-simulator", device]
+        helper.launch()
+        defer {
+            let evidence = XCTAttachment(string: helper.debugDescription)
+            evidence.name = "Store-photo-library-preparation"
+            evidence.lifetime = .keepAlways
+            add(evidence)
+            helper.terminate()
+        }
+        let prepare = helper.buttons["prepare-store-library"]
+        wait(prepare, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
+        prepare.tap()
+        let status = helper.staticTexts["store-preparation-status"]
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let deletion = springboard.alerts.buttons.matching(
+            NSPredicate(format: "label MATCHES %@", "^Delete( [0-9]+ Photos?)?$")).firstMatch
+        let readyOrConsent = NSPredicate { _, _ in
+            deletion.exists || (status.exists && (status.label == "Prepared 12 licensed photos"
+                                                  || status.label.hasPrefix("Failed:")))
+        }
+        wait(status, predicate: readyOrConsent, timeout: 30)
+        if deletion.exists { deletion.tap() }
+        let finished = NSPredicate(format: "exists == true AND (label == %@ OR label BEGINSWITH %@)",
+                                   "Prepared 12 licensed photos", "Failed:")
+        wait(status, predicate: finished, timeout: 60)
+        XCTAssertEqual(status.label, "Prepared 12 licensed photos")
     }
 
     private func search(_ query: String) {

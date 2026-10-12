@@ -266,6 +266,14 @@ review, applicable mainland compliance, App Store metadata and Apple review.
   capture script looked for the library-root Done button on its Photos Access
   child page. The correction uses that page's native navigation-back button;
   it does not change app navigation or remove the exact indexing gate.
+- Run `38202694946` passed consent/navigation and actually indexed 18 photos,
+  failing the required twelve-photo gate. Extra simulator content must not be
+  silently accepted as licensed store material. A screenshot-only helper now
+  verifies the disposable simulator name and exact UDID before using PhotoKit
+  to remove initial samples, confirms an empty library, imports the twelve
+  bundled licensed variants, and verifies every resulting resource filename.
+  Physical devices are rejected; the helper is absent from the production
+  project. Native validation of this preparation path remains pending.
 - [Written compliance inquiries](app-store/compliance-inquiries.zh-Hans.txt)
   preserve the actual system-networking boundaries. They have not been sent.
   Apple support requires the owner's account; no identity, enrollment, filing
