@@ -83,8 +83,8 @@ for index in 0..<4 {
     text("自制菜单 / DEMO MENU", x: 110, y: 1180, width: 980, size: 42)
     let codes = ["Q7M2", "R8N3", "S9P4", "T6K5"]
     let drinks = ["桂花拿铁", "抹茶拿铁", "柠檬苏打", "热巧克力"]
-    text("\(drinks[index])\n今日餐点：烤吐司\n请凭取餐码领取", x: 110, y: 750, width: 980, size: 72)
-    text("取餐码", x: 110, y: 590, width: 980, size: 60)
+    text("\(drinks[index])\n今日餐点：烤吐司\n请凭取餐码领取", x: 110, y: 950, width: 980, size: 72)
+    text("取餐码", x: 110, y: 640, width: 980, size: 60)
     text(codes[index], x: 110, y: 400, width: 980, size: 150, bold: true)
     let locations = ["北门值班室", "松桥路东口", "河畔图书馆", "梧桐街南门"]
     text("备注：请送到\(locations[index])，交给现场工作人员。", x: 110, y: 280, width: 980, size: 28)

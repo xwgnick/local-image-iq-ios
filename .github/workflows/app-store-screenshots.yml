@@ -101,6 +101,7 @@ jobs:
             build/store-captures
             build/store-source-photos/provenance.json
             build/store-photos/demo-identity-*.png
+            build/store-photos/demo-menu-*.png
             build/store-devices.txt
             build/Store-*.xcresult
           if-no-files-found: error

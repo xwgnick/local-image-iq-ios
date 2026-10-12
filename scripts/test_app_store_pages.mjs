@@ -104,12 +104,16 @@ test('priority pilot retains actual Chinese queries, an OCR baseline and clearly
   assert.ok(capture.includes('capture("pilot-ocr-before-\\(index + 2)")'));
   assert.ok(capture.includes('capture("pilot-ocr-after-\\(index + 2)")'));
   assert.ok(capture.includes('tap("dismiss-ocr-sync")'));
+  assert.ok(capture.includes('wait(clear, predicate: NSPredicate(format: "exists == false")'));
+  assert.ok(capture.includes('return value.isEmpty || value == field.placeholderValue'));
+  assert.ok(capture.includes('wait(field, predicate: NSPredicate(format: "value == %@", query)'));
   assert.doesNotMatch(assets, /[0-9]{18}/);
   const workflow = source('.github/workflows/app-store-screenshots.yml');
   assert.ok(workflow.includes('options: [baseline, priority-pilot]'));
   assert.ok(workflow.includes('testCaptureThreePriorityScenes'));
   assert.ok(workflow.includes('[ "$label" != "iphone-large" ]'));
   assert.ok(workflow.includes('build/store-photos/demo-identity-*.png'));
+  assert.ok(workflow.includes('build/store-photos/demo-menu-*.png'));
   const preview = source('scripts/store-screenshots/render_priority_preview.mjs');
   assert.ok(preview.includes('实际搜索前四项'));
   assert.ok(preview.includes('不代表完整结果列表'));

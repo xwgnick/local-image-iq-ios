@@ -157,14 +157,26 @@ final class StoreScreenshotTests: XCTestCase {
     private func search(_ query: String, minimumResults: Int = 6) {
         let field = app.textFields["photo-query"]
         XCTAssertTrue(field.waitForExistence(timeout: 15))
-        if app.buttons["clear-query"].exists { app.buttons["clear-query"].tap() }
+        let clear = app.buttons["clear-query"]
+        if clear.exists {
+            tap("clear-query")
+            wait(clear, predicate: NSPredicate(format: "exists == false"), timeout: 20)
+        }
         field.tap()
+        wait(app.keyboards.firstMatch, predicate: NSPredicate(format: "exists == true"), timeout: 15)
+        let empty = NSPredicate { _, _ in
+            guard let value = field.value as? String else { return false }
+            return value.isEmpty || value == field.placeholderValue
+        }
+        wait(field, predicate: empty, timeout: 20)
         field.typeText(query)
+        wait(field, predicate: NSPredicate(format: "value == %@", query), timeout: 20)
         let submit = app.buttons["search-photos"]
         wait(submit, predicate: NSPredicate(format: "exists == true AND enabled == true"), timeout: 30)
         submit.tap()
         wait(app.descendants(matching: .any).matching(identifier: "results-heading").firstMatch,
              predicate: NSPredicate(format: "exists == true"), timeout: 90)
+        wait(submit, predicate: NSPredicate(format: "exists == true AND enabled == true"), timeout: 90)
         if app.buttons["keyboard-done"].exists { app.buttons["keyboard-done"].tap() }
         else if app.buttons["hide-search-keyboard"].exists { app.buttons["hide-search-keyboard"].tap() }
         for rank in Set([1, minimumResults]) {
