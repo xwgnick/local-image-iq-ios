@@ -24,7 +24,17 @@ test('ad copy is benefits-led and never pretends to be a new device capture', ()
   assert.doesNotMatch(copy, /第[一二三四五六七八九十0-9]+项|排名|验收|测试|100%|完全不联网/);
   assert.ok(campaignDemoScenes[0].query.length > 30);
   assert.ok(campaignDemoScenes[2].query.includes('北门值班室'));
+  assert.match(campaignDemoScenes[3].query, /玩玩具.*扑/);
+  assert.doesNotMatch(copy, /绿眼睛|棕色条纹/);
   assert.ok(campaignDemoDisclaimer.includes('不是新的真机运行截图'));
+});
+
+test('text scene uses an everyday delivery receipt, not an invented merchant menu', () => {
+  const order = fs.readFileSync(new URL('./campaign-order.svg', import.meta.url), 'utf8');
+  assert.ok(order.includes('外卖订单'));
+  assert.ok(order.includes('北门值班室'));
+  assert.ok(order.includes('演示订单'));
+  assert.doesNotMatch(order, /片刻小馆|Q7M2/);
 });
 
 test('exported demo delivers every full-resolution RGB frame and public provenance',
@@ -51,12 +61,29 @@ test('exported demo delivers every full-resolution RGB frame and public provenan
       assert.equal(composition.controlsAltered, false);
       assert.ok(html.includes(`data-scene="${composition.scene}"`));
     }
-    assert.deepEqual(manifest.searchCompositions[1].files, [1, 2, 3, 4].map(i => `demo-identity-${i}.png`));
-    assert.deepEqual(manifest.searchCompositions[2].files, ['demo-menu-1.png']);
+    assert.deepEqual(manifest.searchCompositions.map(item => item.files.length), [7, 10, 1, 8]);
+    for (const index of [0, 1, 3]) {
+      const files = manifest.searchCompositions[index].files;
+      assert.ok(files.length > 5 && files.length <= 10, 'One to two filled native result rows');
+      assert.equal(new Set(files).size, files.length, 'No repeated result filenames');
+    }
+    assert.ok(manifest.searchCompositions[1].files.includes('identity-view-10.svg'));
+    assert.deepEqual(manifest.searchCompositions[2].files, ['campaign-order.svg']);
+    assert.ok(manifest.searchCompositions[3].files.every(name => name.startsWith('cat-play-')));
+    assert.equal(manifest.additionalInputHashes.length, 15);
+    const catPhotos = manifest.additionalInputHashes.filter(photo => photo.category === 'cat-play');
+    assert.equal(new Set(catPhotos.map(photo => photo.sha256)).size, 8);
+    for (const photo of manifest.additionalInputHashes) {
+      assert.match(photo.license, /^(Public domain|CC0|CC BY [0-9.]+)$/);
+      assert.ok(photo.author.length > 0);
+      assert.ok(photo.sourcePage.startsWith('https://commons.wikimedia.org/'));
+    }
+    assert.ok(fs.readFileSync(path.join(output, 'credits.html'), 'utf8').includes('照片来源与署名'));
     assert.ok(html.includes(`<p>${campaignDemoScenes[0].query}</p>`));
     assert.ok(html.includes('App 原界面 · 搜索结果示意'));
     assert.ok(html.includes('多拍的 6 张'));
     assert.ok(html.includes('留下 1 张'));
+    assert.equal((html.match(/class="result-preview /g) ?? []).length, 3);
     assert.doesNotMatch(html, /class="phone|class="app-title|poster ink/);
     assert.ok(html.includes('功能示意 · 演示素材'));
     assert.ok(html.includes('首次准备模型与语言包可能需要联网'));
