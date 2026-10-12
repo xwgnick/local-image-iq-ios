@@ -65,11 +65,11 @@ jobs:
             xcrun simctl status_bar "$id" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
             xcrun simctl addmedia "$id" build/store-photos/*.png
             xcrun simctl install "$id" build/StoreDerivedData/Build/Products/Debug-iphonesimulator/LocalImageIQ.app
-            xcrun simctl privacy "$id" grant photos com.example.localimageiq
             status=0
             xcodebuild test-without-building -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
               -destination "platform=iOS Simulator,id=$id" -derivedDataPath build/StoreDerivedData \
               -resultBundlePath "build/Store-$label.xcresult" \
+              -parallel-testing-enabled NO \
               -only-testing:LocalImageIQUITests/StoreScreenshotTests CODE_SIGNING_ALLOWED=NO || status=$?
             xcrun xcresulttool export attachments --path "build/Store-$label.xcresult" --output-path "build/store-captures/$label"
             xcrun simctl shutdown "$id"

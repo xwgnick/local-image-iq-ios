@@ -22,8 +22,16 @@ final class StoreScreenshotTests: XCTestCase {
         waitForPreparedHome(app)
 
         tap("open-library")
+        tap("library-photo-access")
+        tap("authorize-photos")
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Full Access"]
+        wait(allow, predicate: NSPredicate(format: "exists == true AND hittable == true"), timeout: 20)
+        allow.tap()
+        XCTAssertTrue(app.staticTexts["可访问全部照片"].waitForExistence(timeout: 20))
+        tap("close-library")
+        tap("open-library")
         let count = app.staticTexts["stored-index-count"]
-        wait(count, predicate: NSPredicate(format: "exists == true AND label CONTAINS %@", "12"), timeout: 180)
+        wait(count, predicate: NSPredicate(format: "exists == true AND label == %@", "已索引 12 张"), timeout: 180)
         tap("close-library")
 
         search("coffee")
