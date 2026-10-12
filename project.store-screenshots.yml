@@ -1,0 +1,7 @@
+include:
+  - project.models.yml
+
+targets:
+  LocalImageIQUITests:
+    sources:
+      - path: scripts/store-screenshots/StoreScreenshotTests.swift

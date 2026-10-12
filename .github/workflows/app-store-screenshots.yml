@@ -1,0 +1,88 @@
+name: Capture real App Store screenshot candidates
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: github.event.repository.private == false && github.repository == 'xwgnick/local-image-iq-ios'
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      IMAGEIQ_REQUIRE_MODELS: '1'
+      IMAGEIQ_TEST_ALL_COMPUTE_UNITS: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: arm64
+      - name: Verify tools and acquire only licensed demonstration photos
+        run: |
+          node scripts/check_release.mjs --toolchain
+          node scripts/store-screenshots/prepare_photos.mjs
+          swift scripts/store-screenshots/make_variants.swift
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+      - name: Prepare real resources without changing production data or models
+        run: |
+          python -m pip install shapely==2.1.2
+          python scripts/build_places.py --download
+          python -m venv .model-env
+          .model-env/bin/python -m pip install -r scripts/requirements-coreml.txt
+          .model-env/bin/python scripts/export_models.py --download
+          node scripts/check_project.mjs --models
+      - name: Compile screenshot-only test selection with real app
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate --spec project.store-screenshots.yml
+          xcodebuild -resolvePackageDependencies -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
+            -clonedSourcePackagesDirPath build/SourcePackages
+          node scripts/prepare_legal_notices.mjs build/SourcePackages/checkouts --check
+          xcodebuild build-for-testing -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build/StoreDerivedData \
+            -clonedSourcePackagesDirPath build/SourcePackages -disableAutomaticPackageResolution \
+            -only-testing:LocalImageIQUITests/StoreScreenshotTests CODE_SIGNING_ALLOWED=NO
+      - name: Capture iPhone and iPad on fresh disposable simulators
+        run: |
+          set -euo pipefail
+          xcrun simctl list runtimes --json > build/store-runtimes.json
+          xcrun simctl list devicetypes --json > build/store-devices.json
+          node scripts/store-screenshots/select_devices.mjs
+          while IFS='|' read -r label type runtime; do
+            id=$(xcrun simctl create "Store-$label-${GITHUB_RUN_ID}" "$type" "$runtime")
+            xcrun simctl boot "$id"
+            xcrun simctl bootstatus "$id" -b
+            xcrun simctl ui "$id" appearance light
+            xcrun simctl status_bar "$id" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
+            xcrun simctl addmedia "$id" build/store-photos/*.png
+            xcrun simctl install "$id" build/StoreDerivedData/Build/Products/Debug-iphonesimulator/LocalImageIQ.app
+            xcrun simctl privacy "$id" grant photos com.example.localimageiq
+            status=0
+            xcodebuild test-without-building -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
+              -destination "platform=iOS Simulator,id=$id" -derivedDataPath build/StoreDerivedData \
+              -resultBundlePath "build/Store-$label.xcresult" \
+              -only-testing:LocalImageIQUITests/StoreScreenshotTests CODE_SIGNING_ALLOWED=NO || status=$?
+            xcrun xcresulttool export attachments --path "build/Store-$label.xcresult" --output-path "build/store-captures/$label"
+            xcrun simctl shutdown "$id"
+            xcrun simctl delete "$id"
+            if [ "$status" -ne 0 ]; then exit "$status"; fi
+          done < build/store-devices.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: store-screenshot-candidates-${{ github.run_id }}
+          path: |
+            build/store-captures
+            build/store-source-photos/provenance.json
+            build/store-devices.txt
+            build/Store-*.xcresult
+          if-no-files-found: error
