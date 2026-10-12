@@ -1,5 +1,5 @@
 {
-  "status": "small-print-ocr-evidence-reviewed-identity-query-capture-rejected",
+  "status": "exact-queries-verified-identity-relevance-rejected-clean-ocr-reviewed",
   "scope": "Three priority scenes requested by the owner; not the full eight-image campaign",
   "visualDirection": {
     "palette": "Piankexun warm gold, ivory and dark ink; no competitor artwork",
@@ -26,17 +26,17 @@
     {
       "id": "pilot-03-ocr-query",
       "headline": "记住一段文字，也能找到照片",
-      "query": "梧桐街南门",
-      "expectedTopPhoto": "demo-menu-4.png",
+      "query": "北门值班室",
+      "expectedTopPhoto": "demo-menu-1.png",
       "reviewedEvidence": {
-        "run": "38215771558",
-        "sha": "01a019eab2384a6c14e8d0640cb2e0aed040ec9e",
-        "beforeCapture": "pilot-ocr-before-4",
-        "afterCapture": "pilot-ocr-after-4",
-        "beforeRank": 4,
+        "run": "38219454927",
+        "sha": "be33c49f659d7c29ae3f6c09a7b0c8444fb89fee",
+        "beforeCapture": "pilot-ocr-before-2",
+        "afterCapture": "pilot-ocr-after-2",
+        "beforeRank": 6,
         "afterRank": 1,
-        "visibleCode": "T6K5",
-        "review": "Actual PNGs and AX reviewed: identical Chinese query, OCR switch 0 then 1, intended T6K5 menu rises from fourth to first. The other three queries already had their intended menu first before OCR and were rejected."
+        "visibleCode": "Q7M2",
+        "review": "Exact-query run PNGs and AX reviewed: 北门值班室 uses the same query before/after, OCR switch 0 then 1, Q7M2 menu rises from sixth to first. Clean menu-1 source is available. 河畔图书馆 also rises from second to first; 松桥路东口 and 梧桐街南门 were already first and were rejected."
       },
       "acceptance": "Four menus share layout but contain distinct small-print delivery locations. Preserve all four before/after searches and actual eleven-photo OCR completion evidence. Adopt only a query whose intended menu improves to first with OCR enabled; if the before result is already first, that query cannot prove OCR dependence.",
       "limitation": "This is an original fictitious order/menu, not a customer's receipt or private screenshot."

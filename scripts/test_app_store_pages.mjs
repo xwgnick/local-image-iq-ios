@@ -100,7 +100,7 @@ test('priority pilot retains actual Chinese queries, an OCR baseline and clearly
   assert.ok(preparation.includes('Retain SAMPLE markings'));
   assert.ok(assets.includes('["Q7M2", "R8N3", "S9P4", "T6K5"]'));
   assert.ok(assets.includes('["北门值班室", "松桥路东口", "河畔图书馆", "梧桐街南门"]'));
-  assert.ok(capture.includes('["北门值班室", "松桥路东口", "河畔图书馆"]'));
+  assert.ok(capture.includes('["松桥路东口", "河畔图书馆", "梧桐街南门"]'));
   assert.ok(capture.includes('capture("pilot-ocr-before-\\(index + 2)")'));
   assert.ok(capture.includes('capture("pilot-ocr-after-\\(index + 2)")'));
   assert.ok(capture.includes('tap("dismiss-ocr-sync")'));
@@ -118,7 +118,7 @@ test('priority pilot retains actual Chinese queries, an OCR baseline and clearly
   assert.ok(preview.includes('实际搜索前四项'));
   assert.ok(preview.includes('不代表完整结果列表'));
   assert.ok(preview.includes('Leading focus crop must be one contiguous row'));
-  assert.equal(scenes[2].reviewedEvidence.beforeRank, 4);
+  assert.equal(scenes[2].reviewedEvidence.beforeRank, 6);
   assert.equal(scenes[2].reviewedEvidence.afterRank, 1);
-  assert.equal(scenes[2].reviewedEvidence.afterCapture, 'pilot-ocr-after-4');
+  assert.equal(scenes[2].reviewedEvidence.afterCapture, 'pilot-ocr-after-2');
 });
