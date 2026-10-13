@@ -64,7 +64,9 @@ extension XCTestCase {
     }
 
     private func attachLaunchDiagnostics(in app: XCUIApplication, message: String) {
-        let hierarchy = XCTAttachment(string: "\(message)\n\n\(app.debugDescription)")
+        let description = "\(message)\n\n\(app.debugDescription)"
+        print(description)
+        let hierarchy = XCTAttachment(string: description)
         hierarchy.name = "Launch-startup-accessibility"
         hierarchy.lifetime = .keepAlways
         add(hierarchy)

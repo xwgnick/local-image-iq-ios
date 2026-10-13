@@ -2,6 +2,7 @@ import XCTest
 import SwiftUI
 import UIKit
 import Photos
+import Combine
 import ImageIQCore
 @testable import LocalImageIQ
 
@@ -13,6 +14,20 @@ import ImageIQCore
 @MainActor
 final class PrimaryNavigationPresentationTests: XCTestCase {
     private let phone = CGSize(width: 393, height: 852)
+
+    func testNoOpSwipeCancellationDoesNotPublishRedundantViewUpdates() {
+        let navigation = PrimaryNavigationPresentation()
+        var publications = 0
+        let observation = navigation.$dragOffset.dropFirst().sink { _ in publications += 1 }
+        defer { observation.cancel() }
+        navigation.cancelSwipe()
+        navigation.updateSwipe(horizontal: 0, vertical: 100, width: phone.width)
+        XCTAssertEqual(publications, 0)
+        navigation.updateSwipe(horizontal: -150, vertical: 0, width: phone.width)
+        navigation.cancelSwipe()
+        navigation.cancelSwipe()
+        XCTAssertEqual(publications, 2)
+    }
 
     func testSwipeTracksDistanceAndHandlesCancellationVelocityAndDisabledState() {
         let navigation = PrimaryNavigationPresentation()

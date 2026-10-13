@@ -80,6 +80,7 @@ struct LaunchPreparationNotice: View {
                 .foregroundStyle(IQStyle.text).tint(IQStyle.accent)
                 .background(IQStyle.surface, in: Capsule())
                 .overlay(Capsule().strokeBorder(IQStyle.line, lineWidth: 1))
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("search-preparation-notice")
             }
         }

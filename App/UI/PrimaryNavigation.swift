@@ -19,24 +19,27 @@ final class PrimaryNavigationPresentation: ObservableObject {
 
     func select(_ page: PrimaryPage, switchingDisabled: Bool = false) {
         guard !switchingDisabled, self.page != page else { return }
-        dragOffset = 0
+        cancelSwipe()
         self.page = page
     }
 
     func updateSwipe(horizontal: CGFloat, vertical: CGFloat, width: CGFloat, switchingDisabled: Bool = false) {
         guard !switchingDisabled, width.isFinite, width > 0,
               horizontal.isFinite, vertical.isFinite, abs(horizontal) > abs(vertical) * 1.7 else {
-            dragOffset = 0
+            cancelSwipe()
             return
         }
-        dragOffset = page == .search ? max(-width, min(0, horizontal)) : min(width, max(0, horizontal))
+        let offset = page == .search ? max(-width, min(0, horizontal)) : min(width, max(0, horizontal))
+        if dragOffset != offset { dragOffset = offset }
     }
 
-    func cancelSwipe() { dragOffset = 0 }
+    func cancelSwipe() {
+        if dragOffset != 0 { dragOffset = 0 }
+    }
 
     func selectSwipe(horizontal: CGFloat, vertical: CGFloat, predictedHorizontal: CGFloat? = nil,
                      width: CGFloat = 0, switchingDisabled: Bool = false) {
-        defer { dragOffset = 0 }
+        defer { cancelSwipe() }
         guard !switchingDisabled, horizontal.isFinite, vertical.isFinite, width.isFinite, width >= 0,
               abs(horizontal) > abs(vertical) * 1.7 else { return }
         let threshold = max(80, width * 0.25)

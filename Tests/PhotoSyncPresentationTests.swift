@@ -10,6 +10,15 @@ import ImageIQCore
 /// teardown. Captures are actual UIKit UIImages, not generated screen artwork.
 @MainActor
 final class PhotoSyncPresentationTests: XCTestCase {
+    func testPreparationRingDoesNotPublishPhotoSyncFramesOrAttachPhotoProbes() async throws {
+        let host = try ControlsNativeHost(content: AnyView(
+            PhotoSyncProgressRing(fraction: 0.5, reportsGeometry: false)))
+        defer { host.close() }
+        try await host.settle()
+        XCTAssertTrue(host.sync.isEmpty)
+        XCTAssertTrue(host.attachedSyncProbes.isEmpty)
+    }
+
     func testV5ExactCompactLabelAndRealRingPixelsChangeWithoutMovingViewportOrTextBaseline() async throws {
         let run = PresentationSyncRun(initial: PhotoSyncProgress(phase: .updating, total: 38,
             completed: 12, encoded: 10, failed: 1, needsNetwork: 1))
