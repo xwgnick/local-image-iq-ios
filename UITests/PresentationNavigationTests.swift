@@ -13,7 +13,9 @@ final class PresentationNavigationTests: XCTestCase {
         expectHittable(toggle)
         expectHittable(info)
         // Establish a known value using the real switch, then verify restart.
-        if toggle.value as? String == "1" { toggle.tap() }
+        if toggle.value as? String == "1" {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
         expectSwitch(toggle, enabled: false)
         info.tap()
         XCTAssertTrue(app.navigationBars["地点增强"].waitForExistence(timeout: 5))
@@ -32,12 +34,17 @@ final class PresentationNavigationTests: XCTestCase {
         back(from: "搜索增强", to: "地点增强")
         app.buttons["close-location-info"].tap()
         expectSwitch(toggle, enabled: false)
-        toggle.tap()
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         expectSwitch(toggle, enabled: true)
         app.terminate()
         launch()
-        expectSwitch(app.switches["location-search-enabled"], enabled: true)
-        app.switches["location-search-enabled"].tap()
+        let restored = app.switches["location-search-enabled"]
+        expectHittable(restored)
+        expectSwitch(restored, enabled: true)
+        restored.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        expectSwitch(restored, enabled: false)
+        app.terminate()
+        launch()
         expectSwitch(app.switches["location-search-enabled"], enabled: false)
     }
 

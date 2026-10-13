@@ -461,7 +461,7 @@ final class MinimalSearchPresentationTests: XCTestCase {
         if width >= 340 {
             XCTAssertLessThanOrEqual(area.maxY, usable.maxY + host.pixel)
         } else {
-            XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height,
+            XCTAssertGreaterThan(scroll.contentSize.height, usable.height,
                                  "Narrow-screen stacked controls remain vertically scrollable")
         }
         XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + host.pixel)

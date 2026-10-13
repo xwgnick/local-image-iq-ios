@@ -119,7 +119,7 @@ final class DebugToolsPresentationTests: XCTestCase {
             paths.settings = [.translation]
             try await self.waitForPage("搜索增强", depth: 2, in: view)
             await self.fulfillment(of: [checked], timeout: 5)
-            try await self.assertFormRows([4], in: view)
+            try await self.assertFormRows([4, 2], in: view)
             XCTAssertEqual(c.translator.availabilityCalls, [.simplified],
                            "Only explicit translation entry checks the fake pack")
             XCTAssertEqual(c.state.translationAvailability, .installed)
