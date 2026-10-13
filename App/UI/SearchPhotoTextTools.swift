@@ -130,7 +130,9 @@ struct SearchPhotoTextTools: View {
                     .background { measuredFrame(location ? .locationLabel : .label) }
                 Spacer(minLength: 0)
                 Button(action: info) {
-                    Image(systemName: "info.circle").font(.system(size: 13))
+                    Image(systemName: "info.circle").resizable().scaledToFit()
+                        .frame(width: 13, height: 13)
+                        .foregroundStyle(IQStyle.accent)
                         .background { measuredFrame(location ? .locationInfoGlyph : .infoGlyph) }
                         .frame(width: 44, height: 44).contentShape(Rectangle())
                 }

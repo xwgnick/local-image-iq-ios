@@ -31,6 +31,17 @@ final class MinimalSearchPresentationTests: XCTestCase {
             try host.attach(to: self, name: "UIReview-minimal-search-home-\(Int(width))")
             attachGeometry(host, measured, name: "Geometry-minimal-search-home-\(Int(width))")
             try assertHome(host, measured, width: width)
+            if width < 340 {
+                let scroll = try primarySearchScrollView(in: host.controller.view)
+                scroll.setContentOffset(CGPoint(x: 0, y: scroll.contentSize.height - scroll.bounds.height
+                                                + scroll.adjustedContentInset.bottom), animated: false)
+                try await host.settle()
+                let hero = try XCTUnwrap(measured.frames[.hero])
+                let usable = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: host.window)
+                XCTAssertGreaterThanOrEqual(hero.minY, usable.minY - host.pixel)
+                XCTAssertLessThanOrEqual(hero.maxY, usable.maxY + host.pixel,
+                    "Stacked narrow-screen cards must leave the hero reachable by scrolling")
+            }
             XCTAssertEqual(f.app.searchSuggestions.map(\.label), ["身份证", "猫猫追逐逗猫棒", "海边日落"])
             XCTAssertEqual(f.app.searchSuggestions[1].query, "猫猫追逐逗猫棒")
             // Only the lower-left library-status footer is removed. The top
@@ -447,7 +458,12 @@ final class MinimalSearchPresentationTests: XCTestCase {
         let scroll = try primarySearchScrollView(in: host.controller.view)
         let usable = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: host.window)
         XCTAssertGreaterThanOrEqual(hero.minY, usable.minY - host.pixel)
-        XCTAssertLessThanOrEqual(area.maxY, usable.maxY + host.pixel)
+        if width >= 340 {
+            XCTAssertLessThanOrEqual(area.maxY, usable.maxY + host.pixel)
+        } else {
+            XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height,
+                                 "Narrow-screen stacked controls remain vertically scrollable")
+        }
         XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + host.pixel)
         let band = try bottomFrame(host, .syncToast)
         let nav = try bottomFrame(host, .navigation)
@@ -503,7 +519,7 @@ final class MinimalSearchPresentationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(toggle.width + host.pixel, 51)
         XCTAssertGreaterThanOrEqual(toggle.height + host.pixel, 44)
         XCTAssertLessThanOrEqual(toggle.maxX, width - 20 + host.pixel)
-        XCTAssertLessThanOrEqual(info.intersection(toggle).width, host.pixel,
+        XCTAssertTrue(info.intersection(toggle).isNull || info.intersection(toggle).isEmpty,
                     "Info and switch must have independent non-overlapping targets")
         XCTAssertEqual(glyph.width, 13, accuracy: host.pixel)
         XCTAssertEqual(locationGlyph.width, 13, accuracy: host.pixel)
