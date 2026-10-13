@@ -2,15 +2,19 @@
 
 商店名称：**片刻寻－AI搜照片与相似清理**。副标题：**凭记忆线索找照片，挑选清理相似画面**。品牌文案：**找到想看的，留下值得的。**
 
-## 0.16.3 / build43 后续体验修正：定点通过，完整发布待完成
+## 0.16.3 / build43 后续体验修正版已交付
 
 - 搜索准备改为共用底部胶囊，保留首次提醒、真实进度与失败重试，不再占用首页的大块区域。
 - 主页面拖动时两页等距跟随手指，松手切换或回弹；保留页面状态及弹层、键盘、选图等隔离。
 - 单张本机 OCR 失败持久记录，普通开关不重复识别／报错；图库跨启动保留待处理数量，手动更新或照片变化后重试。失败不伪装成完成，旧有效文字不因重试失败而丢失。
 
-真实 SQLite 的持久失败／重开／事务回滚及精确 7906＋1 回归已通过；半程原生导航坐标与实际 XCUI 横滑、竖滑及弹层隔离已通过。初轮还有底部提示回归，不称整轮成功；[复跑 38380410636](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38380410636) 实际手势通过，但旧照片同步圆环测量仍失败，已保持其原绘制／诊断路径，仅复用无诊断的 OCR 圆环给搜索准备。[最终定点 38382656168](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38382656168) **SUCCESS，20 项全通过**，包含真实圆环像素／布局、准备圆环不污染同步帧和 0.16.3／43 资源断言。**尚无 build43 的完整模型／全套 App／UI／设备 IPA 与下载校验结论；不要用下方 build42 下载链接当作本轮修复包。**详见[文字索引](docs/PHOTO_TEXT_SEARCH.md)、[启动准备](docs/STARTUP_SCREEN.md)、[跟手导航](docs/PRIMARY_NAVIGATION_GROUP_REUSE.md)。
+真实 SQLite 的持久失败／重开／事务回滚及精确 7906＋1 回归、半程原生导航坐标与实际 XCUI 横滑／竖滑／弹层隔离均已通过。定点展示回归修正后，[最终定点 38382656168](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38382656168) **SUCCESS，20 项全通过**。随后[第二次完整运行 38391638208](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38391638208) **SUCCESS**，构建源码 **`e88ba8197bca11a67222f13f6f7c00fcdff7b823`**：Core **79 全通过**；App **2108＝2107 通过／1 项既有真机文件保护检查跳过／0 失败**；UI **22＝21 通过／1 项既有拖动收键盘例外跳过／0 失败**。真实模型转换、CPU／全部计算单元校验、Release arm64 设备构建和发布均通过。详见[文字索引](docs/PHOTO_TEXT_SEARCH.md)、[启动准备](docs/STARTUP_SCREEN.md)、[跟手导航](docs/PRIMARY_NAVIGATION_GROUP_REUSE.md)。
 
-首轮完整 [38383963547](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38383963547) 未通过：App 2108 项中 2106 通过、1 项既有跳过、1 项失败；失败仅为文字进度完整字符串仍缺少新增的「待手动重试 0」，现已同步精确断言，不删除或放宽检查。UI 22 项中 21 通过、1 项既有跳过、零失败。首轮未生成或发布新版 IPA；继续完整复跑后才交付。
+**[下载 build43 IPA](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-38391638208-1/LocalImageIQ-0.16.3-build43-iphoneos-unsigned.ipa)** · [本地已核验包](build/device-download/38391638208/LocalImageIQ-0.16.3-build43-iphoneos-unsigned.ipa)。Release **411665592**，tag **ci-38391638208-1**。已完整下载 **1,420,737,889 bytes**，SHA-256 **`1826f0e5ccdcf180873ddba944b8259d37fde02e9f3c864e535c865b62988040`**；全量 ZIP CRC PASS，12 目录、33 文件。[校验记录](build/device-download/38391638208/build43-verification.json)与配套设备／交付报告已保存。
+
+原始 Bundle ID／模型版本与此前交付包一致；文字库仅增加向后兼容的可选失败元数据表，主索引与已保存文字不清除。最低 iOS 17，仍为未签名 IPA。**沿用原签名账号、Team 和实际 Bundle ID 覆盖安装，不卸载、不清库、不重建索引，不因升级直接切换新付费团队。**安装后核对 **0.16.3／43**、已有索引和设置保留，再检查底部准备胶囊、两页跟手滑动及同张 OCR 失败不反复打扰。原生与包校验不等于手机验收，那张照片的底层 Vision 失败原因仍未确定。
+
+首轮完整 [38383963547](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38383963547) 未通过：App 2108 项中 2106 通过、1 项既有跳过、1 项失败；失败仅为文字进度完整字符串仍缺少新增的「待手动重试 0」，已同步精确断言，不删除或放宽检查。UI 22 项中 21 通过、1 项既有跳过、零失败。首轮未生成或发布新版 IPA，以上交付来自第二次完整复跑成功后的包。
 
 ## 0.16.2 / build42 体验修正版已交付
 
