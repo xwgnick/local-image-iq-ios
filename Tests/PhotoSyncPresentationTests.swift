@@ -12,7 +12,7 @@ import ImageIQCore
 final class PhotoSyncPresentationTests: XCTestCase {
     func testPreparationRingDoesNotPublishPhotoSyncFramesOrAttachPhotoProbes() async throws {
         let host = try ControlsNativeHost(content: AnyView(
-            PhotoSyncProgressRing(fraction: 0.5, reportsGeometry: false)))
+            IndexSyncProgressRing(fraction: 0.5)))
         defer { host.close() }
         try await host.settle()
         XCTAssertTrue(host.sync.isEmpty)

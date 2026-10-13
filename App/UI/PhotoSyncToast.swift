@@ -227,7 +227,6 @@ private struct PhotoSyncReservationLayout: Layout {
 
 struct PhotoSyncProgressRing: View {
     let fraction: Double
-    var reportsGeometry = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         ZStack {
@@ -236,7 +235,7 @@ struct PhotoSyncProgressRing: View {
                 .stroke(IQStyle.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: fraction)
-                .toastFrame(.fill, reportsGeometry: reportsGeometry)
+                .toastFrame(.fill)
         }
         .padding(1) // Keep the complete 2pt stroke inside the actual 14pt view.
         .frame(width: 14, height: 14)
@@ -369,13 +368,9 @@ private struct PhotoSyncLayoutProbe: UIViewRepresentable {
 }
 
 private extension View {
-    func toastFrame(_ part: PhotoSyncFramePart, reportsGeometry: Bool = true) -> some View {
-        syncFrame(part, reportsGeometry: reportsGeometry)
-            .background {
-                if reportsGeometry {
-                    PhotoSyncLayoutProbe(part: part).allowsHitTesting(false).accessibilityHidden(true)
-                }
-            }
+    func toastFrame(_ part: PhotoSyncFramePart) -> some View {
+        syncFrame(part)
+            .background(PhotoSyncLayoutProbe(part: part).allowsHitTesting(false).accessibilityHidden(true))
     }
 }
 
@@ -387,12 +382,10 @@ struct PhotoSyncFrames: PreferenceKey {
 }
 
 extension View {
-    func syncFrame(_ part: PhotoSyncFramePart, reportsGeometry: Bool = true) -> some View {
+    func syncFrame(_ part: PhotoSyncFramePart) -> some View {
         background {
-            if reportsGeometry {
-                GeometryReader { geometry in
-                    Color.clear.preference(key: PhotoSyncFrames.self, value: [part: geometry.frame(in: .global)])
-                }
+            GeometryReader { geometry in
+                Color.clear.preference(key: PhotoSyncFrames.self, value: [part: geometry.frame(in: .global)])
             }
         }
     }

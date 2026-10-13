@@ -47,7 +47,7 @@ struct LaunchPreparationNotice: View {
                     } label: {
                         HStack(spacing: 8) {
                             if state.activity == .starting {
-                                PhotoSyncProgressRing(fraction: state.startupProgress.fraction, reportsGeometry: false)
+                                IndexSyncProgressRing(fraction: state.startupProgress.fraction)
                             } else {
                                 Image(systemName: "exclamationmark.circle").foregroundStyle(IQStyle.accent)
                             }

@@ -394,7 +394,7 @@ class BrandingTests(unittest.TestCase):
         source = swift_source(ROOT / "App" / "UI" / "StartupView.swift")
         notice = self.swift_block(source, r"struct\s+LaunchPreparationNotice\s*:\s*View")
         self.assertRegex(notice, r"if\s+state\.activity\s*==\s*\.starting\s*\{")
-        self.assertRegex(notice, r"PhotoSyncProgressRing\s*\(\s*fraction:\s*state\.startupProgress\.fraction\s*,\s*reportsGeometry:\s*false\s*\)")
+        self.assertRegex(notice, r"IndexSyncProgressRing\s*\(\s*fraction:\s*state\.startupProgress\.fraction\s*\)")
         self.assertRegex(notice, r"IndexSyncReservationLayout\s*\(\s*metrics:\s*metrics\s*\)")
         self.assertNotRegex(notice, r"\bProgressView\s*\(")
         self.assertRegex(notice, r"if\s+state\.initialPreparation\b")
