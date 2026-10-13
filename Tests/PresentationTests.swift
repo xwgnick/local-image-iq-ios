@@ -20,7 +20,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertTrue(hits.allSatisfy { $0.photo.imageEmbedding.count == 768 })
         for hit in hits { try EmbeddingValidation.validateUnit(hit.photo.imageEmbedding) }
         XCTAssertTrue(PhotoResultsGrid(hits: hits, onSelect: { _ in }) { _ in Color.clear }.compact,
-                      "The default production grid must use the five-column layout")
+                      "The default production grid must use the three-column layout")
         for appearance in [UIUserInterfaceStyle.light, .dark] {
             let layout = PresentationGridLayout()
             try await snapshot(PresentationGridReview(hits: hits, compact: true, layout: layout),
@@ -28,8 +28,8 @@ final class PresentationTests: XCTestCase {
                                size: phone, appearance: appearance)
             // Measure the actual production grid's supplied thumbnail bounds,
             // not an inferred AX tree or a reconstructed layout. This also
-            // checks worker order: three hits occupy the first three of five columns.
-            try assertUniformGrid(hits, layout: layout, columns: 5, aspectRatio: 1, spacing: 3)
+            // checks worker order: three hits occupy the full first row.
+            try assertUniformGrid(hits, layout: layout, columns: 3, aspectRatio: 1, spacing: 3)
         }
     }
 
@@ -43,8 +43,8 @@ final class PresentationTests: XCTestCase {
                            id: "grid-12-top", size: phone, appearance: .light)
         try await snapshot(PresentationGridReview(hits: hits, compact: true, anchor: .bottom, layout: bottom),
                            id: "grid-12-bottom", size: phone, appearance: .light)
-        try assertUniformGrid(hits, layout: top, columns: 5, aspectRatio: 1, spacing: 3)
-        try assertUniformGrid(hits, layout: bottom, columns: 5, aspectRatio: 1, spacing: 3)
+        try assertUniformGrid(hits, layout: top, columns: 3, aspectRatio: 1, spacing: 3)
+        try assertUniformGrid(hits, layout: bottom, columns: 3, aspectRatio: 1, spacing: 3)
     }
 
     // Historical test selector/attachment retained; V5 now uses five columns.
@@ -54,7 +54,7 @@ final class PresentationTests: XCTestCase {
         try await snapshot(PresentationGridReview(hits: hits, compact: true, layout: layout),
                            id: "compact-3-columns", size: compactPhone, appearance: .light)
         // Keep the existing review artifact name; its content is now approved V5.
-        try assertUniformGrid(hits, layout: layout, columns: 5, aspectRatio: 1, spacing: 3)
+        try assertUniformGrid(hits, layout: layout, columns: 3, aspectRatio: 1, spacing: 3)
     }
 
     func testEmptyHomeSnapshot() async throws {
@@ -326,7 +326,7 @@ final class PresentationTests: XCTestCase {
         let request = await worker.lastSearch
         XCTAssertEqual(request?.text, query)
         XCTAssertEqual(request?.limit, Int.max, "AppState requests the full ranking, even for a three-hit fixture")
-        XCTAssertEqual(request?.locationWeight, Float(0.6))
+        XCTAssertEqual(request?.locationWeight, 0)
     }
 
     func testEditingQueryClearsCompletedResultsAndSelection() async throws {

@@ -12,6 +12,20 @@ import ImageIQCore
 @MainActor
 final class PhotoCheckPresentationTests: XCTestCase {
     private let phone = CGSize(width: 393, height: 852)
+
+    func testDisabledLocationEnhancementUsesImageOnlyDiagnosticWithoutErasingWeight() async throws {
+        let worker = PhotoCheckTestWorker()
+        let state = await readyState(worker: worker)
+        state.locationSearchEnabled = false
+        state.locationWeight = 0.37
+        await completeSearch(state)
+        state.checkPhoto(id: PhotoCheckFixtures.photoID, query: PhotoCheckFixtures.checkQuery)
+        await state.waitUntilIdle()
+        let observed = await worker.observations()
+        XCTAssertEqual(observed.checkRequests.first?.weight, 0)
+        XCTAssertEqual(state.photoCheckReport?.locationWeight, 0)
+        XCTAssertEqual(state.locationWeight, 0.37)
+    }
     private let compactPhone = CGSize(width: 375, height: 667)
 
     // MARK: State preservation and request contract
@@ -382,6 +396,7 @@ final class PhotoCheckPresentationTests: XCTestCase {
     private func readyState(worker: PhotoCheckTestWorker) async -> AppState {
         // Injected authorization only gates AppState. It does not grant PhotoKit access.
         let state = AppState(worker: worker, authorizationStatus: { .authorized })
+        state.locationSearchEnabled = true
         XCTAssertFalse(state.debugToolsEnabled)
         state.debugToolsEnabled = true // Positive diagnostic contracts opt in; production defaults stay off.
         state.refresh()

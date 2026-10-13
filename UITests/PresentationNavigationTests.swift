@@ -6,6 +6,41 @@ import XCTest
 /// UIReview attachments are native screenshots for later xcresult export/review.
 @MainActor
 final class PresentationNavigationTests: XCTestCase {
+    func testLocationEnhancementIntroductionSettingsAndRestartPersistence() throws {
+        launch()
+        let toggle = app.switches["location-search-enabled"]
+        let info = app.buttons["location-search-info"]
+        expectHittable(toggle)
+        expectHittable(info)
+        // Establish a known value using the real switch, then verify restart.
+        if toggle.value as? String == "1" { toggle.tap() }
+        expectSwitch(toggle, enabled: false)
+        info.tap()
+        XCTAssertTrue(app.navigationBars["地点增强"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "默认地点权重 0.6")).firstMatch.exists)
+        let settings = app.buttons["open-location-enhancement-settings"]
+        expectHittable(settings)
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["搜索增强"].waitForExistence(timeout: 5))
+        let form = try sheetForm()
+        let reset = app.buttons["reset-location-weight"]
+        scrollTo(reset, in: form)
+        reset.tap()
+        let weight = app.sliders["location-weight"]
+        expectHittable(weight)
+        XCTAssertEqual(weight.value as? String, "60%")
+        back(from: "搜索增强", to: "地点增强")
+        app.buttons["close-location-info"].tap()
+        expectSwitch(toggle, enabled: false)
+        toggle.tap()
+        expectSwitch(toggle, enabled: true)
+        app.terminate()
+        launch()
+        expectSwitch(app.switches["location-search-enabled"], enabled: true)
+        app.switches["location-search-enabled"].tap()
+        expectSwitch(app.switches["location-search-enabled"], enabled: false)
+    }
+
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
@@ -250,14 +285,13 @@ final class PresentationNavigationTests: XCTestCase {
         scrollTo(advanced, in: form, swipeUp: false)
         XCTAssertFalse(weight.exists, "Advanced must start collapsed after opting in")
         tapDisclosure(advanced)
-        expectExpandedWeight(weight)
-        XCTAssertEqual(weight.value as? String, "60%", "The actual location-weight slider keeps its default")
+        expectAbsent(weight)
         scrollTo(advanced, in: form, swipeUp: false)
         tapDisclosure(advanced)
         expectAbsent(weight)
         scrollTo(advanced, in: form, swipeUp: false)
         tapDisclosure(advanced)
-        expectExpandedWeight(weight)
+        expectAbsent(weight)
         scrollTo(app.buttons["诊断信息"], in: form)
         // Advanced is expanded: hiding tools must remove it, not merely collapse it.
         setDebugTools(false, in: form)
@@ -266,11 +300,20 @@ final class PresentationNavigationTests: XCTestCase {
         scrollTo(advanced, in: form)
         expectAbsent(weight)
         tapDisclosure(advanced)
-        expectExpandedWeight(weight)
+        expectAbsent(weight)
         setDebugTools(false, in: form)
         assertSettingsDebugOff(in: form)
         back(from: "高级", to: "设置")
         assertSettingsPrimary()
+        openSettingsPage("settings-translation", title: "搜索增强")
+        let enhancementForm = try sheetForm()
+        scrollTo(weight, in: enhancementForm)
+        expectExpandedWeight(weight)
+        XCTAssertEqual(weight.value as? String, "60%")
+        let location = app.switches["location-search-enabled-settings"]
+        scrollTo(location, in: enhancementForm, swipeUp: false)
+        expectSwitch(location, enabled: false)
+        back(from: "搜索增强", to: "设置")
         done.tap()
         expectAbsent(done)
         expectHittable(field)

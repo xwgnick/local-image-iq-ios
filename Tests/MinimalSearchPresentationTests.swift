@@ -489,10 +489,15 @@ final class MinimalSearchPresentationTests: XCTestCase {
         let label = try XCTUnwrap(measured.ocr[.label])
         let info = try XCTUnwrap(measured.ocr[.info])
         let toggle = try XCTUnwrap(measured.ocr[.toggle])
+        let subtitle = try XCTUnwrap(measured.ocr[.subtitle])
+        let locationSubtitle = try XCTUnwrap(measured.ocr[.locationSubtitle])
+        let locationToggle = try XCTUnwrap(measured.ocr[.locationToggle])
+        let glyph = try XCTUnwrap(measured.ocr[.infoGlyph])
+        let locationGlyph = try XCTUnwrap(measured.ocr[.locationInfoGlyph])
         XCTAssertGreaterThanOrEqual(filter.width + host.pixel, 44)
         XCTAssertGreaterThanOrEqual(filter.height + host.pixel, 44)
         XCTAssertLessThanOrEqual(label.maxX, info.minX + host.pixel)
-        XCTAssertLessThanOrEqual(info.maxX, toggle.minX + host.pixel)
+        XCTAssertLessThanOrEqual(info.maxY, toggle.minY + host.pixel)
         XCTAssertEqual(info.width, 44, accuracy: host.pixel)
         XCTAssertEqual(info.height, 44, accuracy: host.pixel)
         XCTAssertGreaterThanOrEqual(toggle.width + host.pixel, 51)
@@ -500,6 +505,21 @@ final class MinimalSearchPresentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(toggle.maxX, width - 20 + host.pixel)
         XCTAssertLessThanOrEqual(info.intersection(toggle).width, host.pixel,
                     "Info and switch must have independent non-overlapping targets")
+        XCTAssertEqual(glyph.width, 13, accuracy: host.pixel)
+        XCTAssertEqual(locationGlyph.width, 13, accuracy: host.pixel)
+        XCTAssertLessThanOrEqual(locationToggle.maxX, width - 20 + host.pixel)
+        if subtitle.height < 20 {
+            let font = UIFont.systemFont(ofSize: 11)
+            for (text, frame) in [("搜索照片中的文字", subtitle), ("搜索某地点的照片", locationSubtitle)] {
+                let required = (text as NSString).size(withAttributes: [.font: font]).width
+                XCTAssertGreaterThanOrEqual(frame.width + host.pixel, required, "Approved subtitle must fit without truncation")
+                XCTAssertLessThanOrEqual(frame.height, 16, "Default subtitle stays on one line")
+            }
+        }
+        if width == 393, subtitle.height < 20 {
+            XCTAssertEqual(toggle.minY, locationToggle.minY, accuracy: host.pixel)
+            XCTAssertLessThan(toggle.maxX, locationToggle.minX)
+        }
     }
 
     private func bottomFrame(_ host: ControlsNativeHost, _ part: RootBottomLayoutPart) throws -> CGRect {

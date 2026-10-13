@@ -68,9 +68,7 @@ final class SearchToolsPresentationTests: XCTestCase {
         c.state.setSelectingResults(true)
         var callbacks: [String] = []
         let layout = SearchToolsReviewGridLayout()
-        // Five columns fit twelve hits in the full phone. Use a real short
-        // viewport for this offscreen-selection check, not the old two-column
-        // layout or a false assertion that rank 12 must be offscreen on a phone.
+        // Use a short viewport to keep the offscreen-selection assertion exact.
         let hosted = try await mount(SearchToolsReviewGrid(state: c.state, layout: layout,
                                                           onSelect: { callbacks.append($0) }),
                          size: CGSize(width: phone.width, height: 150), watermark: false)
@@ -281,7 +279,7 @@ final class SearchToolsPresentationTests: XCTestCase {
         XCTAssertEqual(c.worker.refreshCount, 1, file: file, line: line)
         XCTAssertEqual(c.worker.requests.map { $0.text }, [SearchToolsReviewWorker.query], file: file, line: line)
         XCTAssertEqual(c.worker.requests.map { $0.limit }, [Int.max], file: file, line: line)
-        XCTAssertEqual(c.worker.requests.map { $0.weight }, [Float(0.6)], file: file, line: line)
+        XCTAssertEqual(c.worker.requests.map { $0.weight }, [Float(0)], file: file, line: line)
         XCTAssertEqual(c.worker.mutations, 0, file: file, line: line)
         XCTAssertEqual(c.translator.calls, 0, file: file, line: line)
         XCTAssertEqual(c.actions.counts, SearchToolsReviewActions.Counts(),

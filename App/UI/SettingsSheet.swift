@@ -30,7 +30,7 @@ struct SettingsSheet: View {
             Form {
                 Section {
                     NavigationLink(value: Route.translation) {
-                        LabeledContent("搜索增强", value: state.chineseSearchEnabled ? "自动" : "关闭")
+                        Text("搜索增强")
                             .frame(minHeight: 44)
                     }
                     .accessibilityIdentifier(Route.translation.accessibilityIdentifier)
@@ -97,23 +97,6 @@ struct AdvancedSettingsView: View {
             if state.debugToolsEnabled {
                 DisclosureGroup(isExpanded: $advancedExpanded) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("地点权重")
-                            .font(.subheadline.weight(.semibold))
-                        Text(state.locationWeight, format: .percent.precision(.fractionLength(0)))
-                            .font(.title2.weight(.semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(IQStyle.accent)
-                        Slider(value: $state.locationWeight, in: 0...1, step: 0.01) {
-                            Text("地点权重")
-                        }
-                        .accessibilityValue(state.locationWeight.formatted(.percent.precision(.fractionLength(0))))
-                        .accessibilityIdentifier("location-weight")
-                        Text("0% 只比较图像，100% 只比较地点标签。权重影响排序，不限制可搜索的地点。")
-                            .font(.footnote)
-                            .foregroundStyle(IQStyle.secondary)
-                        Text("地点标签来自照片自带的定位信息，不使用你的实时位置，也不直接用坐标排序。")
-                            .font(.footnote)
-                            .foregroundStyle(IQStyle.secondary)
                         Text(placeAvailability)
                             .font(.footnote)
                             .foregroundStyle(IQStyle.secondary)
@@ -236,4 +219,3 @@ struct AdvancedSettingsView: View {
     }
 }
 // Cleanup threshold editing now lives in SimilarCleanupThresholdControls.
-

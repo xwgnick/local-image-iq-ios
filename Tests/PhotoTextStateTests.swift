@@ -369,6 +369,7 @@ final class PhotoTextStateTests: XCTestCase {
             let c = await ready(enabled: enabled)
             c.state.query = PhotoTextStateFixtures.chinese
             c.state.locationWeight = 0.37
+            c.state.locationSearchEnabled = true
             c.worker.searchResponse = PhotoTextStateFixtures.response(textUsed: enabled)
             c.state.searchFilters = .init(albumID: "text-state-album", imageKind: .screenshots)
             c.state.search()
@@ -616,6 +617,7 @@ final class PhotoTextStateTests: XCTestCase {
         await state.waitUntilIdle()
         state.query = "  TEST legacy vector query\n"
         state.locationWeight = 0.37
+        state.locationSearchEnabled = true
         state.search()
         await state.waitUntilIdle()
         XCTAssertFalse(state.textSearchEnabled)

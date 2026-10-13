@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 final class SearchPhotoTextPresentation: ObservableObject {
     @Published var showingIntroduction = false
+    @Published var showingLocationIntroduction = false
 }
 
 /// OFF->ON requests one incremental OCR update through AppState. Merely
@@ -15,6 +16,7 @@ struct SearchPhotoTextTools: View {
     let openFilters: () -> Void
     @StateObject private var presentation: SearchPhotoTextPresentation
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .caption2) private var subtitleSize: CGFloat = 11
 
     init(state: AppState, filtersDisabled: Bool = false,
          presentation: SearchPhotoTextPresentation? = nil,
@@ -29,7 +31,7 @@ struct SearchPhotoTextTools: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            toolsLayout {
+            HStack {
                 Button(action: openFilters) {
                     Label(state.searchFilters.isEmpty ? "筛选" : "已筛选",
                           systemImage: "line.3.horizontal.decrease")
@@ -39,27 +41,16 @@ struct SearchPhotoTextTools: View {
                 .disabled(state.isBusy || filtersDisabled)
                 .accessibilityIdentifier("open-search-filters")
                 .background { measuredFrame(.filters) }
-                HStack(spacing: 0) {
-                    Text("文本（ocr）增强搜索").font(.caption2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .accessibilityHidden(true)
-                        .background { measuredFrame(.label) }
-                    Button { presentation.showingIntroduction = true } label: {
-                        Image(systemName: "info.circle").font(.system(size: 17))
-                            .frame(width: 44, height: 44).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("文本（ocr）增强搜索介绍")
-                    .accessibilityIdentifier("photo-text-search-info")
-                    .background { measuredFrame(.info) }
-                    Toggle("文本（ocr）增强搜索", isOn: $state.textSearchEnabled)
-                        .labelsHidden().toggleStyle(.switch)
-                        .accessibilityLabel("文本（ocr）增强搜索")
-                        .accessibilityIdentifier("photo-text-search-enabled")
-                        .fixedSize().frame(minWidth: 51, minHeight: 44)
-                        .contentShape(Rectangle())
-                        .background { measuredFrame(.toggle) }
+                Spacer()
+            }
+            toolsLayout {
+                enhancement(title: "OCR 增强", subtitle: "搜索照片中的文字",
+                            enabled: $state.textSearchEnabled, location: false) {
+                    presentation.showingIntroduction = true
+                }
+                enhancement(title: "地点增强", subtitle: "搜索某地点的照片",
+                            enabled: $state.locationSearchEnabled, location: true) {
+                    presentation.showingLocationIntroduction = true
                 }
             }
             if !state.searchFilters.isEmpty {
@@ -71,7 +62,7 @@ struct SearchPhotoTextTools: View {
             }
         }
         .tint(IQStyle.accent)
-        .onChange(of: presentation.showingIntroduction, initial: true) { _, presented in
+        .onChange(of: introductionPresented, initial: true) { _, presented in
             onPresentedSurfaceChanged(presented)
         }
         .sheet(isPresented: $presentation.showingIntroduction) {
@@ -97,12 +88,102 @@ struct SearchPhotoTextTools: View {
             }
             .tint(IQStyle.accent)
         }
+        .sheet(isPresented: $presentation.showingLocationIntroduction) {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        Text("把照片拍摄地点也作为搜索线索。").font(.title3.weight(.semibold))
+                        Text("适合找“上海外滩的夜景”“杭州西湖边的照片”等包含地点的回忆。默认关闭，开启后参与结果排序。")
+                        Text("默认地点权重 0.6，可在「设置 → 搜索增强」调整。关闭增强不会清除已保存的地点标签。")
+                        Text("地点来自照片自带的定位信息，取决于离线地点包覆盖。不使用你的实时位置。")
+                        NavigationLink("前往搜索增强设置") {
+                            QueryTranslationSettingsView(state: state)
+                        }
+                        .frame(minHeight: 44).accessibilityIdentifier("open-location-enhancement-settings")
+                    }
+                    .padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .background(IQStyle.background).foregroundStyle(IQStyle.text)
+                .navigationTitle("地点增强").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("完成") { presentation.showingLocationIntroduction = false }
+                            .frame(minWidth: 44, minHeight: 44)
+                            .accessibilityIdentifier("close-location-info")
+                    }
+                }
+            }
+            .tint(IQStyle.accent)
+        }
     }
 
-    private var toolsLayout: AnyLayout {
-        dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-            : AnyLayout(HStackLayout(spacing: 8))
+    private var introductionPresented: Bool {
+        presentation.showingIntroduction || presentation.showingLocationIntroduction
+    }
+
+    private func enhancement(title: String, subtitle: String, enabled: Binding<Bool>,
+                             location: Bool, info: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Text(title).font(.caption.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background { measuredFrame(location ? .locationLabel : .label) }
+                Spacer(minLength: 0)
+                Button(action: info) {
+                    Image(systemName: "info.circle").font(.system(size: 13))
+                        .background { measuredFrame(location ? .locationInfoGlyph : .infoGlyph) }
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(location ? "地点增强介绍" : "文本（ocr）增强搜索介绍")
+                .accessibilityIdentifier(location ? "location-search-info" : "photo-text-search-info")
+                .background { measuredFrame(location ? .locationInfo : .info) }
+            }
+            HStack(spacing: 4) {
+                Text(subtitle).font(.system(size: subtitleSize))
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(IQStyle.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background { measuredFrame(location ? .locationSubtitle : .subtitle) }
+                Toggle(title, isOn: enabled)
+                    .labelsHidden().toggleStyle(.switch)
+                    .accessibilityLabel(location ? "地点增强" : "文本（ocr）增强搜索")
+                    .accessibilityIdentifier(location ? "location-search-enabled" : "photo-text-search-enabled")
+                    .fixedSize().frame(minWidth: 51, minHeight: 44)
+                    .background { measuredFrame(location ? .locationToggle : .toggle) }
+            }
+        }
+        .padding(.leading, 12).padding(.trailing, 4).padding(.bottom, 4)
+        .frame(maxWidth: .infinity)
+        .background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(IQStyle.line, lineWidth: 1))
+    }
+
+    private var toolsLayout: SearchEnhancementsLayout {
+        SearchEnhancementsLayout(stacked: dynamicTypeSize.isAccessibilitySize)
+    }
+
+    struct SearchEnhancementsLayout: Layout {
+        let stacked: Bool
+        private func vertical(_ width: CGFloat) -> Bool { stacked || width < 340 }
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            let width = proposal.width ?? 353
+            let columnWidth = vertical(width) ? width : (width - 8) / 2
+            let heights = subviews.map { $0.sizeThatFits(.init(width: columnWidth, height: nil)).height }
+            return CGSize(width: width, height: vertical(width) ? heights.reduce(0, +) + 8 : heights.max() ?? 0)
+        }
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            let columnWidth = vertical(bounds.width) ? bounds.width : (bounds.width - 8) / 2
+            var y = bounds.minY
+            for (index, subview) in subviews.enumerated() {
+                let height = subview.sizeThatFits(.init(width: columnWidth, height: nil)).height
+                subview.place(at: CGPoint(x: bounds.minX + (vertical(bounds.width) ? 0 : CGFloat(index) * (columnWidth + 8)),
+                                         y: y), anchor: .topLeading,
+                              proposal: .init(width: columnWidth, height: height))
+                if vertical(bounds.width) { y += height + 8 }
+            }
+        }
     }
 
     private var filterSummary: String {
@@ -120,7 +201,10 @@ struct SearchPhotoTextTools: View {
     }
 }
 
-enum SearchPhotoTextElement: Hashable { case filters, label, info, toggle }
+enum SearchPhotoTextElement: Hashable {
+    case filters, label, info, toggle, subtitle, infoGlyph
+    case locationLabel, locationInfo, locationToggle, locationSubtitle, locationInfoGlyph
+}
 struct SearchPhotoTextFrames: PreferenceKey {
     static var defaultValue: [SearchPhotoTextElement: CGRect] = [:]
     static func reduce(value: inout [SearchPhotoTextElement: CGRect], nextValue: () -> [SearchPhotoTextElement: CGRect]) {

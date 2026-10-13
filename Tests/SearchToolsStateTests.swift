@@ -12,6 +12,73 @@ import ImageIQCore
 /// ResultPhotoActionsState's separate 14 tests own the mutation/share contracts.
 @MainActor
 final class SearchToolsStateTests: XCTestCase {
+    func testLocationDefaultOffAndSavedWeightOnlyAppliesWhenEnabledIncludingFilterRerun() async throws {
+        let worker = SearchToolsWorker()
+        let state = AppState(worker: worker, authorizationStatus: { .authorized },
+                             queryTranslator: SearchToolsTranslator())
+        addTeardownBlock { await state.waitUntilIdle() }
+        XCTAssertFalse(state.locationSearchEnabled)
+        XCTAssertEqual(state.locationWeight, 0.6)
+        XCTAssertEqual(state.effectiveLocationWeight, 0)
+        state.refresh()
+        await state.waitUntilIdle()
+        state.query = SearchToolsFixtures.english
+        state.search()
+        await state.waitUntilIdle()
+        XCTAssertEqual(worker.textRequests.last?.weight, 0)
+        state.locationWeight = 0.37
+        XCTAssertEqual(state.effectiveLocationWeight, 0)
+        state.locationSearchEnabled = true
+        XCTAssertTrue(state.results.isEmpty)
+        state.search()
+        await state.waitUntilIdle()
+        XCTAssertEqual(worker.textRequests.last?.weight, Float(0.37))
+        state.applySearchFilters(.init(imageKind: .screenshots))
+        await state.waitUntilIdle()
+        XCTAssertEqual(worker.textRequests.last?.weight, Float(0.37))
+        state.locationSearchEnabled = false
+        state.search()
+        await state.waitUntilIdle()
+        XCTAssertEqual(worker.textRequests.last?.weight, 0)
+        XCTAssertEqual(state.locationWeight, 0.37, "Disabling does not erase the saved weight")
+        XCTAssertEqual(worker.mutationCalls, 0, "Location toggles do not index or clear photos")
+    }
+
+    func testLocationPreferenceSurvivesNewStateWithoutRunningPhotoWork() throws {
+        let name = "TEST.location-enhancement.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let first = AppState(worker: SearchToolsLegacyWorker(), authorizationStatus: { .notDetermined },
+                             locationSearchPreferences: defaults)
+        XCTAssertFalse(first.locationSearchEnabled)
+        first.locationWeight = 0.23
+        first.locationSearchEnabled = true
+        let restored = AppState(worker: SearchToolsLegacyWorker(), authorizationStatus: { .notDetermined },
+                                locationSearchPreferences: defaults)
+        XCTAssertTrue(restored.locationSearchEnabled)
+        XCTAssertEqual(restored.locationWeight, 0.23)
+        XCTAssertEqual(restored.effectiveLocationWeight, 0.23)
+        XCTAssertNil(restored.activity)
+        restored.locationSearchEnabled = false
+        let off = AppState(worker: SearchToolsLegacyWorker(), authorizationStatus: { .notDetermined },
+                           locationSearchPreferences: defaults)
+        XCTAssertFalse(off.locationSearchEnabled)
+        XCTAssertEqual(off.locationWeight, 0.23)
+        XCTAssertEqual(off.effectiveLocationWeight, 0)
+    }
+
+    func testMalformedPersistedLocationWeightReportsRecoveryRatherThanUsingInvalidWeight() throws {
+        let name = "TEST.location-enhancement.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(2.0, forKey: "locationWeight.v1")
+        let state = AppState(worker: SearchToolsLegacyWorker(), authorizationStatus: { .notDetermined },
+                             locationSearchPreferences: defaults)
+        XCTAssertEqual(state.locationWeight, 0.6)
+        XCTAssertNotNil(state.errorMessage)
+        XCTAssertNil(defaults.object(forKey: "locationWeight.v1"))
+    }
+
     func testDefaultsAndLegacyWorkerUseDynamicEmptyFilterCompatibilityOnly() async throws {
         let worker = SearchToolsLegacyWorker()
         let translator = SearchToolsTranslator()
@@ -24,6 +91,7 @@ final class SearchToolsStateTests: XCTestCase {
         state.refresh()
         await state.waitUntilIdle()
         state.query = "  TEST legacy query\n"
+        state.locationSearchEnabled = true
         state.locationWeight = 0.37
         state.search()
         await state.waitUntilIdle()
@@ -514,6 +582,7 @@ final class SearchToolsStateTests: XCTestCase {
 
     private func ready() async -> SearchToolsContext {
         let c = SearchToolsContext()
+        c.state.locationSearchEnabled = true
         addTeardownBlock { await c.releaseAndDrain() }
         c.state.refresh()
         await c.state.waitUntilIdle()

@@ -8,7 +8,8 @@ struct LocalImageIQApp: App {
         startupHistory: StartupHistoryStore(defaults: .standard),
         startupContext: { StartupContext.current() },
         textSearchPreferences: .standard,
-        queryHistoryStore: QueryHistoryStore())
+        queryHistoryStore: QueryHistoryStore(),
+        locationSearchPreferences: .standard)
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {

@@ -29,7 +29,7 @@ struct PhotoResultsGrid<Thumbnail: View>: View {
     private var spacing: CGFloat { compact ? 3 : 6 }
 
     var body: some View {
-        LazyVGrid(columns: columns(count: compact ? 5 : 2), spacing: spacing) {
+        LazyVGrid(columns: columns(count: compact ? 3 : 2), spacing: spacing) {
             ForEach(Array(hits.enumerated()), id: \.element.id) { offset, hit in
                 tile(hit, rank: offset + 1, aspectRatio: compact ? 1 : 4.0 / 5.0)
             }

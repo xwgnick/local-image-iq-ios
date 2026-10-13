@@ -201,6 +201,24 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(state.isBusy)
     }
 
+    func testLocationToggleInvalidatesInFlightSearchWithoutChangingStoredWeight() async {
+        let started = expectation(description: "Search started")
+        let worker = StateTestWorker(holding: .search, started: started)
+        let state = AppState(worker: worker, authorizationStatus: { .authorized })
+        state.refresh()
+        await state.waitUntilIdle()
+        state.query = "Synthetic query"
+        state.search()
+        await fulfillment(of: [started], timeout: 3)
+        state.locationSearchEnabled = true
+        await worker.release()
+        await state.waitUntilIdle()
+        XCTAssertTrue(state.results.isEmpty)
+        XCTAssertFalse(state.isBusy)
+        XCTAssertEqual(state.locationWeight, 0.6)
+        XCTAssertEqual(state.effectiveLocationWeight, 0.6)
+    }
+
     func testIndexCancellationRetainsProgressAndPassesCloudOptOut() async {
         let started = expectation(description: "Index saved first record")
         let worker = StateTestWorker(holding: .index, started: started)

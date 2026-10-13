@@ -133,7 +133,21 @@ final class AppState: ObservableObject {
     var searchSuggestions: [SearchQuerySuggestion] {
         RecentSearchQueries.suggestions(for: recentSearchQueries)
     }
-    @Published var locationWeight: Double = 0.6 { didSet { if oldValue != locationWeight { searchSettingsChanged() } } }
+    @Published var locationSearchEnabled = false {
+        didSet {
+            guard oldValue != locationSearchEnabled else { return }
+            locationSearchPreferences?.set(locationSearchEnabled, forKey: Self.locationSearchPreferenceKey)
+            searchSettingsChanged()
+        }
+    }
+    @Published var locationWeight: Double = 0.6 {
+        didSet {
+            guard oldValue != locationWeight else { return }
+            locationSearchPreferences?.set(locationWeight, forKey: Self.locationWeightPreferenceKey)
+            searchSettingsChanged()
+        }
+    }
+    var effectiveLocationWeight: Double { locationSearchEnabled ? locationWeight : 0 }
     /// Page size, not a global Top-K cutoff. Existing preference changes still invalidate a search.
     @Published var resultLimit = 12 { didSet { if oldValue != resultLimit { searchSettingsChanged() } } }
     @Published var allowICloudDownload = false {
@@ -161,6 +175,9 @@ final class AppState: ObservableObject {
     private static let translationPreferenceKey = "chineseSearchEnabled.v1"
     private let textSearchPreferences: UserDefaults?
     private static let textSearchPreferenceKey = "photoTextSearchEnabled.v1"
+    private let locationSearchPreferences: UserDefaults?
+    private static let locationSearchPreferenceKey = "locationSearchEnabled.v1"
+    private static let locationWeightPreferenceKey = "locationWeight.v1"
     private let worker: any PhotoWorkServicing
     private let authorizationStatus: () -> PHAuthorizationStatus
     private var operationTask: Task<Void, Never>?
@@ -179,7 +196,8 @@ final class AppState: ObservableObject {
          }, textSearchPreferences: UserDefaults? = nil,
          syncService: (any PhotoSyncServicing)? = nil,
          indexAccess: IndexAccessCoordinator? = nil,
-         queryHistoryStore: (any QueryHistoryStoring)? = nil) {
+         queryHistoryStore: (any QueryHistoryStoring)? = nil,
+         locationSearchPreferences: UserDefaults? = nil) {
         self.library = library
         // Default/test instances are memory-only. Only the production app root
         // opts into query persistence; ordinary preferences never hold queries.
@@ -217,6 +235,18 @@ final class AppState: ObservableObject {
         }
         self.translationPreferences = translationPreferences
         self.textSearchPreferences = textSearchPreferences
+        self.locationSearchPreferences = locationSearchPreferences
+        var locationPreferenceIssue: String?
+        _locationSearchEnabled = Published(initialValue:
+            locationSearchPreferences?.object(forKey: Self.locationSearchPreferenceKey) as? Bool ?? false)
+        if let saved = locationSearchPreferences?.object(forKey: Self.locationWeightPreferenceKey) as? Double {
+            if saved.isFinite, (0...1).contains(saved) {
+                _locationWeight = Published(initialValue: saved)
+            } else {
+                locationSearchPreferences?.removeObject(forKey: Self.locationWeightPreferenceKey)
+                locationPreferenceIssue = "已保存的地点权重无效，已恢复默认 0.6。"
+            }
+        }
         let restoredTextSearch = textSearchPreferences?.object(forKey: Self.textSearchPreferenceKey) as? Bool ?? false
         // Initialize storage, not the user-change observer: saved ON must never
         // enqueue recognition at cold launch, refresh, or view reconstruction.
@@ -228,6 +258,7 @@ final class AppState: ObservableObject {
         self.authorizationStatus = authorizationStatus
         authorization = authorizationStatus()
         thumbnails = PhotoThumbnailCache(library: library)
+        if let locationPreferenceIssue { errorMessage = locationPreferenceIssue }
         photoSync.onCommitted = { [weak self] in
             self?.indexAccessChangedIfNeeded()
             self?.requestSyncSummaryRefresh()
@@ -574,7 +605,7 @@ final class AppState: ObservableObject {
     /// Execution-only API for original/translated reruns; never records history.
     func search(useOriginal: Bool = false) {
         guard canSearch else { return }
-        let text = query, weight = Float(locationWeight)
+        let text = query, weight = Float(effectiveLocationWeight)
         let filters = searchFilters
         let translate = chineseSearchEnabled && !useOriginal
         let includeText = textSearchEnabled
@@ -633,7 +664,7 @@ final class AppState: ObservableObject {
                                                                translated: false, notice: nil), seed)
             }
         } else if canRepeat, let resolution, isForeground, canRead, modelsReady {
-            let weight = Float(locationWeight)
+            let weight = Float(effectiveLocationWeight)
             let includeText = textSearchEnabled
             invalidateDisplayedPhotos()
             let reference = referenceSearchEnabled
@@ -756,7 +787,7 @@ final class AppState: ObservableObject {
         photoCheckID = token
         photoCheckReport = nil
         photoCheckIssue = nil
-        let weight = Float(locationWeight)
+        let weight = Float(effectiveLocationWeight)
         schedule(.checkingPhoto) { [worker] _ in
             .photoCheck(try await worker.checkPhoto(id: id, query: query, locationWeight: weight), token)
         }

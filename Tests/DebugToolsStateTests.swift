@@ -324,6 +324,7 @@ final class DebugToolsStateTests: XCTestCase {
         let c = context()
         c.state.query = DebugToolsFixture.original
         c.state.locationWeight = 0.37
+        c.state.locationSearchEnabled = true
         c.state.resultLimit = 12
         c.state.allowICloudDownload = true
         c.state.translationLanguage = .traditional

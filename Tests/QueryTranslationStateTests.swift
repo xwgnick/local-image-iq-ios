@@ -113,6 +113,7 @@ final class QueryTranslationStateTests: XCTestCase {
         context.state.query = original
         context.state.resultLimit = 12
         context.state.locationWeight = 0.37
+        context.state.locationSearchEnabled = true
         context.state.search()
         await drain(context)
 
@@ -310,6 +311,7 @@ final class QueryTranslationStateTests: XCTestCase {
         let state = context.state
         state.query = "小狗和白色的笔"
         state.locationWeight = 0.37
+        state.locationSearchEnabled = true
         state.search()
         await drain(context)
         let resolution = state.completedSearchQuery
@@ -685,7 +687,7 @@ final class QueryTranslationStateTests: XCTestCase {
     }
 
     private func assertLastSearch(_ context: QueryTranslationTestContext, text: String,
-                                  weight: Double = 0.6,
+                                  weight: Double = 0,
                                   file: StaticString = #filePath, line: UInt = #line) {
         guard let request = context.worker.searchRequests.last else {
             XCTFail("The worker must receive exactly the resolved search text", file: file, line: line)

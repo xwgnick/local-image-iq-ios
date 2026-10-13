@@ -457,6 +457,7 @@ final class ResultPaginationTests: XCTestCase {
     private func readyContext(count: Int = 37,
                               authorization: PHAuthorizationStatus = .authorized) async -> PaginationContext {
         let context = PaginationContext(count: count, authorization: authorization)
+        context.state.locationSearchEnabled = true
         addTeardownBlock { await context.state.waitUntilIdle() }
         context.state.refresh()
         await context.state.waitUntilIdle()
