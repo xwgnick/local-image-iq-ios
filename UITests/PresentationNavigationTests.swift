@@ -12,9 +12,17 @@ final class PresentationNavigationTests: XCTestCase {
         let info = app.buttons["location-search-info"]
         expectHittable(toggle)
         expectHittable(info)
+        func tapLocation(_ enabled: Bool) {
+            let control = app.switches["location-search-enabled"]
+            expectHittable(control)
+            expectSwitch(control, enabled: !enabled)
+            print("Location switch before tap: \(control.debugDescription)")
+            control.coordinate(withNormalizedOffset: CGVector(dx: enabled ? 0.3 : 0.7, dy: 0.5)).tap()
+            expectSwitch(control, enabled: enabled)
+        }
         // Establish a known value using the real switch, then verify restart.
         if toggle.value as? String == "1" {
-            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            tapLocation(false)
         }
         expectSwitch(toggle, enabled: false)
         info.tap()
@@ -34,15 +42,13 @@ final class PresentationNavigationTests: XCTestCase {
         back(from: "搜索增强", to: "地点增强")
         app.buttons["close-location-info"].tap()
         expectSwitch(toggle, enabled: false)
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        expectSwitch(toggle, enabled: true)
+        tapLocation(true)
         app.terminate()
         launch()
         let restored = app.switches["location-search-enabled"]
         expectHittable(restored)
         expectSwitch(restored, enabled: true)
-        restored.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        expectSwitch(restored, enabled: false)
+        tapLocation(false)
         app.terminate()
         launch()
         expectSwitch(app.switches["location-search-enabled"], enabled: false)
@@ -643,8 +649,8 @@ final class PresentationNavigationTests: XCTestCase {
             XCTAssertEqual(info.label, "文本（ocr）增强搜索介绍")
             XCTAssertGreaterThanOrEqual(info.frame.width, 44)
             XCTAssertGreaterThanOrEqual(info.frame.height, 44)
-            XCTAssertLessThanOrEqual(info.frame.maxX, toggle.frame.minX,
-                                     "The independent information button precedes the native switch")
+            XCTAssertLessThanOrEqual(info.frame.maxY, toggle.frame.minY,
+                                     "The independent information button is above the native switch")
             XCTAssertTrue(app.frame.contains(info.frame))
             XCTAssertFalse(app.staticTexts["photo-text-search-explanation"].exists)
             XCTAssertFalse(app.staticTexts["用照片里的文字进行搜索"].exists)

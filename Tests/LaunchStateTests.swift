@@ -506,6 +506,7 @@ final class LaunchStateTests: XCTestCase {
         let state = makeState(worker, authorization: .limited)
         let original = "  TEST Original MiXeD Query  "
         state.query = original
+        state.locationSearchEnabled = true
         state.locationWeight = 0.85
         state.resultLimit = 3 // Preserve a nondefault page size across launch.
         state.allowICloudDownload = true
@@ -518,6 +519,7 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertEqual(state.summary.modelVersion, summary.modelVersion)
         XCTAssertEqual(state.summary.locatedCount, 1)
         XCTAssertEqual(state.locationWeight, 0.85)
+        XCTAssertTrue(state.locationSearchEnabled)
         XCTAssertEqual(state.resultLimit, 3)
         XCTAssertTrue(state.allowICloudDownload)
         XCTAssertFalse(state.chineseSearchEnabled)
@@ -539,6 +541,7 @@ final class LaunchStateTests: XCTestCase {
         let state = makeState(worker)
         XCTAssertEqual(state.launchPhase, .pending)
         XCTAssertEqual(state.locationWeight, 0.6)
+        XCTAssertFalse(state.locationSearchEnabled)
         XCTAssertEqual(state.resultLimit, 12)
         XCTAssertFalse(state.allowICloudDownload)
         XCTAssertFalse(state.debugToolsEnabled)
@@ -574,7 +577,7 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertEqual(network, [false])
         XCTAssertEqual(request?.text, "TEST query")
         XCTAssertEqual(request?.limit, Int.max)
-        XCTAssertEqual(request?.locationWeight, Float(0.6))
+        XCTAssertEqual(request?.locationWeight, Float(0))
         XCTAssertEqual(state.locationWeight, 0.6)
         XCTAssertEqual(state.resultLimit, 12)
         XCTAssertFalse(state.allowICloudDownload)

@@ -8,14 +8,15 @@ import ImageIQCore
 
 /// App-hosted integration tests, not XCUI or a replacement result grid. Only
 /// search/model readiness and translation are faked. ContentView, its default
-/// five-column grid, PhotoThumbnailView, cache and Photos client remain real.
+/// three-column grid, PhotoThumbnailView, cache and Photos client remain real.
 /// The system Photos permission MUST be unreadable before creating AppState;
 /// an already-authorized host fails without fetching assets or changing access.
 /// No Photos seeding, permission requests, model loads, network or storage work.
 @MainActor
 final class ResultPaginationPresentationTests: XCTestCase {
     private let phone = CGSize(width: 393, height: 852)
-    // Change the actual window, not the grid or page size. Three five-column
+    private let tallPhone = CGSize(width: 393, height: 1312)
+    // Change the actual window, not the grid or page size. Four three-column
     // rows plus the real search controls put the first boundary below this viewport.
     private let shortPhone = CGSize(width: 393, height: 480)
 
@@ -90,7 +91,23 @@ final class ResultPaginationPresentationTests: XCTestCase {
         XCTAssertEqual(state.status, status)
     }
 
-    func testNormalPhoneFirstViewportAutoAppendsUntilActualBoundaryIsOffscreen() async throws {
+    func testNormalPhoneThreeColumnFirstViewportKeepsTwelveUntilScrolling() async throws {
+        let context = try await readyContext()
+        let session = try XCTUnwrap(context.state.resultSessionID)
+        var pages: [[SearchHit]] = []
+        let subscription = context.state.$results.sink { pages.append($0) }
+        defer { subscription.cancel() }
+        let hosted = try await mount(context.state, size: phone)
+        defer { hosted.close() }
+        let scroll = try verticalScroll(in: hosted)
+        try assertOffscreenBoundary(in: hosted, scroll: scroll, session: session)
+        assertPage(context, count: 12, session: session)
+        assertPageTrace(pages, expectedCounts: [12], context: context)
+        XCTAssertEqual(hosted.window.bounds.size, phone)
+        attachGeometry(hosted, scroll: scroll, count: 12, name: "phone-three-column-first")
+    }
+
+    func testTallViewportAutoAppendsUntilActualBoundaryIsOffscreen() async throws {
         let context = try await readyContext()
         let state = context.state
         let session = try XCTUnwrap(state.resultSessionID)
@@ -107,12 +124,12 @@ final class ResultPaginationPresentationTests: XCTestCase {
         }
         defer { subscription.cancel() }
 
-        let hosted = try await mount(state, size: phone, boundary: probe)
+        let hosted = try await mount(state, size: tallPhone, boundary: probe)
         defer { hosted.close() }
         let scroll = try verticalScroll(in: hosted)
         let settledCount = state.results.count
         attachGeometry(hosted, scroll: scroll, count: settledCount, name: "phone-first-settled")
-        XCTAssertEqual(hosted.window.bounds.size, phone)
+        XCTAssertEqual(hosted.window.bounds.size, tallPhone)
         XCTAssertEqual(scroll.contentOffset.y, -scroll.adjustedContentInset.top, accuracy: 1)
 
         // Do not predict grid row pitch or a final count from earlier positions.
@@ -257,12 +274,12 @@ final class ResultPaginationPresentationTests: XCTestCase {
         XCTAssertEqual(context.worker.searchCount, 1, "Scrolling must not search again", file: file, line: line)
         XCTAssertEqual(context.worker.requestedTexts, [state.query], file: file, line: line)
         XCTAssertEqual(context.worker.requestedLimits, [Int.max], file: file, line: line)
-        XCTAssertEqual(context.worker.requestedWeights, [Float(0.6)], file: file, line: line)
+        XCTAssertEqual(context.worker.requestedWeights, [Float(0)], file: file, line: line)
     }
 
     // MARK: Native hosting and event-driven layout
 
-    private func rows(_ count: Int) -> Int { (count + 4) / 5 }
+    private func rows(_ count: Int) -> Int { (count + 2) / 3 }
 
     private func assertPageTrace(_ pages: [[SearchHit]], expectedCounts: [Int],
                                  context: ResultPaginationPresentationContext,

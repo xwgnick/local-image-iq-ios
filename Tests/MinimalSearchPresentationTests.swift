@@ -13,6 +13,43 @@ import ImageIQCore
 /// Snapshots are review attachments, not a claim of physical-phone acceptance.
 @MainActor
 final class MinimalSearchPresentationTests: XCTestCase {
+    func testRestoredLocationPreferenceNativeSwitchUpdatesBindingAndSavedValue() async throws {
+        let f = try await controlsFixture(in: self)
+        let suite = "MinimalLocationSwitch.\(UUID().uuidString)"
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set(true, forKey: "locationSearchEnabled.v1")
+        preferences.set(0.37, forKey: "locationWeight.v1")
+        for initiallyEnabled in [true, false] {
+            let app = AppState(worker: f.worker, authorizationStatus: { .authorized },
+                               queryTranslator: MinimalNoTranslation(), locationSearchPreferences: preferences)
+            addTeardownBlock { @MainActor in app.enterBackground(); await app.waitUntilIdle() }
+            app.refresh()
+            await app.waitUntilIdle()
+            XCTAssertEqual(app.locationSearchEnabled, initiallyEnabled)
+            XCTAssertEqual(app.locationWeight, 0.37)
+            let measured = MinimalMeasurements()
+            let host = try mount(f, width: 393, measured: measured, app: app)
+            defer { host.close() }
+            try await waitForHome(host, measured)
+            let frame = try XCTUnwrap(measured.ocr[.locationToggle])
+            let toggle = try XCTUnwrap(controlsDescendants(host.controller.view, UISwitch.self).first {
+                let native = $0.convert($0.bounds, to: host.window)
+                return frame.contains(CGPoint(x: native.midX, y: native.midY))
+            })
+            XCTAssertEqual(toggle.isOn, initiallyEnabled)
+            toggle.setOn(!initiallyEnabled, animated: false)
+            toggle.sendActions(for: .valueChanged)
+            try await host.settle()
+            XCTAssertEqual(app.locationSearchEnabled, !initiallyEnabled)
+            XCTAssertEqual(preferences.bool(forKey: "locationSearchEnabled.v1"), !initiallyEnabled)
+            XCTAssertEqual(toggle.isOn, !initiallyEnabled)
+            XCTAssertEqual(app.locationWeight, 0.37)
+            XCTAssertEqual(app.effectiveLocationWeight, initiallyEnabled ? 0 : 0.37)
+        }
+        assertNoWork(f)
+    }
+
     func testHome393And320NativeSnapshotsOverviewAndCriticalGeometry() async throws {
         // Parent integration supplies the approved hero revision; do not pin
         // older artwork bytes while V5 is being copied. A missing resource

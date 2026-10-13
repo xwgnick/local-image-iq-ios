@@ -112,7 +112,7 @@ final class MinimalManagementPresentationTests: XCTestCase {
         try await host.waitForPage("搜索增强", depth: 2, test: self)
         await fulfillment(of: [checked], timeout: 5)
         await host.settle(test: self)
-        XCTAssertEqual(try host.rowCounts(), [4])
+        XCTAssertEqual(try host.rowCounts(), [4, 2])
         XCTAssertTrue(try host.navigation() === navigation)
         XCTAssertEqual(c.state.translationAvailability, .downloadRequired)
         XCTAssertEqual(c.translator.availabilityCalls, [.simplified])

@@ -9,18 +9,18 @@ import ImageIQCore
 /// not physical-phone/PhotoKit-quality or XCUI gesture/VoiceOver acceptance tests.
 @MainActor
 final class PhotoViewerPresentationTests: XCTestCase {
-    func testDefaultGridIsFiveSquareColumnsWithThreePointGapsAt320And393() async throws {
+    func testDefaultGridIsThreeSquareColumnsWithThreePointGapsAt320And393() async throws {
         let widths: [CGFloat] = [320, 393]
         let types: [DynamicTypeSize] = [.large, .accessibility5]
         for width in widths {
             for type in types {
-                try await checkGrid(width: width, type: type, compact: nil, columns: 5, gap: 3, aspect: 1)
+                try await checkGrid(width: width, type: type, compact: nil, columns: 3, gap: 3, aspect: 1)
             }
         }
     }
 
-    func testExplicitCompactCallerKeepsSignatureAndUsesFiveColumns() async throws {
-        try await checkGrid(width: 320, type: .large, compact: true, columns: 5, gap: 3, aspect: 1)
+    func testExplicitCompactCallerKeepsSignatureAndUsesThreeColumns() async throws {
+        try await checkGrid(width: 320, type: .large, compact: true, columns: 3, gap: 3, aspect: 1)
     }
 
     func testExplicitNoncompactLegacyCallerKeepsTwoColumnAspect() async throws {
@@ -93,7 +93,7 @@ final class PhotoViewerPresentationTests: XCTestCase {
             XCTAssertLessThanOrEqual(frame.maxX, width - 40 + tolerance)
         }
         // The production thumbnail closure/order is retained; selection markers
-        // are overlays and must not enlarge or clip the five-column layout.
+        // are overlays and must not enlarge or clip the three-column layout.
         let image = try host.capture()
         let attachment = XCTAttachment(image: image)
         attachment.name = "UIReview-search-grid-\(columns)-\(Int(width))-\(String(describing: type))"

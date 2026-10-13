@@ -17,6 +17,7 @@ final class SearchAccelerationStateTests: XCTestCase {
         XCTAssertFalse(c.state.referenceSearchEnabled)
         XCTAssertNil(c.state.searchTimingReport)
         c.state.query = AccelerationFixture.original
+        c.state.locationSearchEnabled = true
         c.state.locationWeight = 0.37
         c.state.search()
         await c.state.waitUntilIdle()
