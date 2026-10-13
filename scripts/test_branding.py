@@ -299,6 +299,10 @@ class BrandingTests(unittest.TestCase):
 
     def test_startup_uses_only_brand_image_and_background_not_visible_text(self):
         source = swift_source(ROOT / "App" / "UI" / "StartupView.swift")
+        # The home notice shares this file but is not part of the icon-only
+        # launch surface; its placement and readiness guards are checked below.
+        home_notice = self.swift_block(source, r"struct\s+LaunchPreparationNotice\s*:\s*View")
+        source = source.replace(home_notice, "", 1)
         self.assertEqual(len(re.findall(r"\bImage\s*\(", source)), 1)
         self.assertRegex(source, r"\bImage\s*\(\s*StartupAppearance\.imageName\s*\)")
         self.assertRegex(source, r"\bColor\s*\(\s*StartupAppearance\.backgroundName\s*\)")
@@ -379,12 +383,28 @@ class BrandingTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\.gesture\s*\(", source)), 1)
         self.assertNotRegex(source, r"\.(?:onTapGesture|onLongPressGesture|simultaneousGesture|highPriorityGesture)\s*(?:\(|\{)")
 
-    def test_root_keeps_ready_gate_real_start_task_and_status_bar_rule(self):
+    def test_root_uses_home_visibility_without_falsifying_model_readiness(self):
         source = swift_source(ROOT / "App" / "LocalImageIQApp.swift")
-        self.assertRegex(source, r"if\s+state\.launchPhase\s*==\s*\.ready\s*\{\s*ContentView\(\s*state:\s*state\s*\)\s*\}\s*else\s*\{\s*StartupView\(\s*state:\s*state\s*\)\s*\}")
+        self.assertRegex(source, r"if\s+state\.showsHome\s*\{\s*ContentView\(\s*state:\s*state\s*\)\s*\}\s*else\s*\{\s*StartupView\(\s*state:\s*state\s*\)\s*\}")
         self.assertRegex(source, r"\.task\s*\{\s*state\.start\(\s*\)\s*\}")
-        self.assertRegex(source, r"\.statusBarHidden\s*\(\s*state\.launchPhase\s*!=\s*\.ready\s*\)")
+        self.assertRegex(source, r"\.statusBarHidden\s*\(\s*!state\.showsHome\s*\)")
         self.assertNotRegex(source, r"\bstate\.launchPhase\s*=(?!=)")
+
+    def test_home_preparation_notice_is_separate_from_icon_only_launch_surface(self):
+        source = swift_source(ROOT / "App" / "UI" / "StartupView.swift")
+        notice = self.swift_block(source, r"struct\s+LaunchPreparationNotice\s*:\s*View")
+        self.assertRegex(notice, r"if\s+state\.activity\s*==\s*\.starting\s*\{")
+        self.assertRegex(notice, r"ProgressView\s*\(\s*value:\s*state\.startupProgress\.fraction\s*\)")
+        self.assertRegex(notice, r"if\s+state\.initialPreparation\s*\{")
+        self.assertIn('Text("首次启动耗时稍长，请耐心等待")', notice)
+        self.assertRegex(notice, r"else\s+if\s+state\.launchPhase\s*==\s*\.failed\s*\{")
+        self.assertIn('Button("重试准备搜索", action: state.retryLaunch)', notice)
+        self.assertNotRegex(notice, r"\bImage\s*\(|\bstate\.launchPhase\s*=(?!=)")
+        for component in ("StartupView", "StartupContent"):
+            self.assertNotIn("LaunchPreparationNotice",
+                             self.swift_block(source, rf"struct\s+{component}\s*:\s*View"))
+        home = swift_source(ROOT / "App" / "UI" / "ContentView.swift")
+        self.assertRegex(home, r"LaunchPreparationNotice\(\s*state:\s*state\s*\)")
 
     def test_launch_presentation_has_no_artificial_delay_calls(self):
         delay = re.compile(
