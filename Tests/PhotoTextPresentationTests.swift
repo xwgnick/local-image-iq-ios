@@ -65,7 +65,7 @@ final class PhotoTextPresentationTests: XCTestCase {
         XCTAssertEqual(c.state.textIndexProgress, PhotoTextReviewWorker.progressFixture)
         XCTAssertEqual(c.state.textIndexProgress.fraction, 0.5)
         XCTAssertEqual(c.state.textIndexProgress.summary,
-                       "已检查 12/24 · 已识别 8 · 已复用 1 · 含文字 6 · 降低分辨率 3 · 需云端 1 · 失败 1 · 已变化跳过 1")
+                       "已检查 12/24 · 已识别 8 · 已复用 1 · 含文字 6 · 降低分辨率 3 · 需云端 1 · 失败 1 · 待手动重试 0 · 已变化跳过 1")
         XCTAssertFalse(c.state.canIndexText, "A second update must not start while the worker is held")
 
         let host = try await mount(c.state)

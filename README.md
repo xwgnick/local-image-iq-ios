@@ -10,6 +10,8 @@
 
 真实 SQLite 的持久失败／重开／事务回滚及精确 7906＋1 回归已通过；半程原生导航坐标与实际 XCUI 横滑、竖滑及弹层隔离已通过。初轮还有底部提示回归，不称整轮成功；[复跑 38380410636](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38380410636) 实际手势通过，但旧照片同步圆环测量仍失败，已保持其原绘制／诊断路径，仅复用无诊断的 OCR 圆环给搜索准备。[最终定点 38382656168](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38382656168) **SUCCESS，20 项全通过**，包含真实圆环像素／布局、准备圆环不污染同步帧和 0.16.3／43 资源断言。**尚无 build43 的完整模型／全套 App／UI／设备 IPA 与下载校验结论；不要用下方 build42 下载链接当作本轮修复包。**详见[文字索引](docs/PHOTO_TEXT_SEARCH.md)、[启动准备](docs/STARTUP_SCREEN.md)、[跟手导航](docs/PRIMARY_NAVIGATION_GROUP_REUSE.md)。
 
+首轮完整 [38383963547](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38383963547) 未通过：App 2108 项中 2106 通过、1 项既有跳过、1 项失败；失败仅为文字进度完整字符串仍缺少新增的「待手动重试 0」，现已同步精确断言，不删除或放宽检查。UI 22 项中 21 通过、1 项既有跳过、零失败。首轮未生成或发布新版 IPA；继续完整复跑后才交付。
+
 ## 0.16.2 / build42 体验修正版已交付
 
 - 高清大图与搜索结果独立：图库通知仍触发原有同步，但不再把当前大图和照片顺序一起清掉。当前照片被编辑／删除、权限失效或校验竞争仍拒绝旧像素和分享；不扩大 iCloud 授权。
