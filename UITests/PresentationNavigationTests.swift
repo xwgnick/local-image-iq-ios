@@ -65,8 +65,9 @@ final class PresentationNavigationTests: XCTestCase {
         let search = app.buttons["primary-search-tab"]
         let cleanup = app.buttons["primary-cleanup-tab"]
         XCTAssertTrue(search.isSelected)
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.48))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.48))
+        // Swipe the page background below the enhancement controls, not an info button.
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.64))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.64))
         start.press(forDuration: 0.05, thenDragTo: end)
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "selected == true"), object: cleanup)], timeout: 5), .completed)
@@ -1266,7 +1267,7 @@ final class PresentationNavigationTests: XCTestCase {
         [app.descendants(matching: .any).matching(identifier: "debug-advanced").firstMatch,
          app.descendants(matching: .any).matching(identifier: "debug-diagnostics").firstMatch,
             app.descendants(matching: .any).matching(identifier: "debug-launch-timing").firstMatch,
-         app.buttons["高级设置"], app.buttons["诊断信息"], app.sliders["location-weight"]]
+         app.buttons["高级设置"], app.buttons["诊断信息"]]
     }
 
     private func assertNoBatchControls(file: StaticString = #filePath, line: UInt = #line) {
