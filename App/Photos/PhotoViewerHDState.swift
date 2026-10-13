@@ -323,7 +323,8 @@ final class PhotoViewerHDState: ObservableObject {
 
     private func same(_ lhs: PhotoViewerSnapshot, _ rhs: PhotoViewerSnapshot?) -> Bool {
         guard let rhs else { return false }
-        return lhs == rhs && lhs.revision.id.utf8.elementsEqual(rhs.revision.id.utf8)
+        return lhs.authorization == rhs.authorization && lhs.revision == rhs.revision
+            && lhs.revision.id.utf8.elementsEqual(rhs.revision.id.utf8)
     }
 
     private func check(_ ticket: UUID) throws {

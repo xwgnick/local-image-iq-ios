@@ -304,6 +304,25 @@ final class PhotoViewerHQTests: XCTestCase {
                               currentRevision: { _ in snapshot.revision })
     }
 
+    func testFreshViewerAuthorityAcceptsUnrelatedEpochButStillRejectsSelectedAssetAndRaces() throws {
+        let snapshot = fixtureSnapshot()
+        var generation: UInt64? = 4
+        try snapshot.validate(id: "viewer", authorization: { .authorized }, generation: { generation },
+                              currentRevision: { _ in snapshot.revision }, allowUnrelatedChanges: true)
+        for changed in [PhotoRevision(id: "viewer", modificationTime: 11, creationTime: 5),
+                        PhotoRevision(id: "viewer", modificationTime: 10, creationTime: 6), nil] {
+            XCTAssertThrowsError(try snapshot.validate(id: "viewer", authorization: { .authorized },
+                generation: { generation }, currentRevision: { _ in changed }, allowUnrelatedChanges: true))
+        }
+        XCTAssertThrowsError(try snapshot.validate(id: "viewer", authorization: { .limited },
+            generation: { generation }, currentRevision: { _ in snapshot.revision }, allowUnrelatedChanges: true))
+        XCTAssertThrowsError(try snapshot.validate(id: "viewer", authorization: { .authorized },
+            generation: { generation }, currentRevision: { _ in
+                generation = 5
+                return snapshot.revision
+            }, allowUnrelatedChanges: true), "A change racing the fresh asset read must still fail closed.")
+    }
+
     func testInjectedSourceFactoryDoesNotExecuteAnyReadAtConstruction() {
         let source = PhotoViewerImageSource(load: { _, _ in
             XCTFail("Construction must not request pixels")

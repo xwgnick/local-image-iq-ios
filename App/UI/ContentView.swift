@@ -181,7 +181,7 @@ struct ContentView: View {
         // Cleanup owns its access/scene observers, including while hidden. Do
         // not invalidate the same library epoch from both parent and child.
         .fullScreenCover(item: $state.selection) { selection in
-            PhotoResultsViewer(hits: state.results, initialID: selection.id,
+            PhotoGalleryViewer(ids: selection.photoIDs, initialID: selection.id,
                                library: state.library, networkAllowed: state.allowICloudDownload, state: state)
         }
         .tint(IQStyle.accent)
@@ -564,7 +564,7 @@ struct ContentView: View {
             PhotoResultsGrid(hits: state.results, compact: true, onSelect: { id in
                 isSearchFocused = false
                 if state.isSelectingResults { state.toggleResultSelection(id) }
-                else { state.selection = AppState.Selection(id: id) }
+                else { state.presentResultPhoto(id: id) }
             }, selectionMode: state.isSelectingResults, selectedIDs: state.selectedResultIDs) { photo in
                 let sessionID = state.resultSessionID
                 PhotoThumbnailView(photo: photo, cache: state.thumbnails, networkAllowed: state.allowICloudDownload,

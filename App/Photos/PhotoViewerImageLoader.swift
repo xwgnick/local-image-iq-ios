@@ -12,12 +12,16 @@ struct PhotoViewerSnapshot: Sendable, Equatable {
 
     func validate(id: String, authorization readAuthorization: () -> PHAuthorizationStatus,
                   generation readGeneration: () -> UInt64?,
-                  currentRevision: (String) -> PhotoRevision?) throws {
+                  currentRevision: (String) -> PhotoRevision?,
+                  allowUnrelatedChanges: Bool = false) throws {
         try Task.checkCancellation()
+        // A fresh exact-asset read can renew display authority across an unrelated
+        // library event. It may not span a second event or permission transition.
+        let validationGeneration = allowUnrelatedChanges ? readGeneration() : generation
         func checkAccess() throws {
             let access = readAuthorization()
             guard access == .authorized || access == .limited else { throw AppFailure.permission }
-            guard access == authorization, readGeneration() == generation else { throw CancellationError() }
+            guard access == authorization, readGeneration() == validationGeneration else { throw CancellationError() }
         }
         try checkAccess()
         guard revision.id.utf8.elementsEqual(id.utf8) else { throw CancellationError() }

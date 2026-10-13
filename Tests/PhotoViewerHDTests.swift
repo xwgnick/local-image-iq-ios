@@ -229,8 +229,8 @@ final class PhotoViewerHDTests: XCTestCase {
         XCTAssertEqual(fake.requests.count, 1)
     }
 
-    func testRevisionAuthorizationGenerationAndDeletionChangesRejectLateResults() async throws {
-        for change in 0..<6 {
+    func testRevisionAuthorizationAndDeletionChangesRejectLateResults() async throws {
+        for change in 0..<5 {
             let fake = HDFixture()
             fake.holdUpgrades = true
             let entered = expectation(description: "Upgrade held for authority change")
@@ -242,9 +242,8 @@ final class PhotoViewerHDTests: XCTestCase {
             switch change {
             case 0: fake.authorization = .denied
             case 1: fake.authorization = .limited
-            case 2: fake.generation = 9
-            case 3: fake.modification = 2
-            case 4: fake.creation = nil
+            case 2: fake.modification = 2
+            case 3: fake.creation = nil
             default: fake.missing = true
             }
             fake.complete(0, image: image(900, 1800))
@@ -264,12 +263,68 @@ final class PhotoViewerHDTests: XCTestCase {
         await state.waitForCurrentWork()
         state.requestCloudConfirmation()
         let approved = try XCTUnwrap(state.consent)
-        fake.generation = 2
+        fake.authorization = .limited
         state.confirmCloud(approved)
         XCTAssertEqual(state.phase, .access)
         XCTAssertNil(state.photo)
         XCTAssertNil(state.consent)
         XCTAssertEqual(fake.requests.map(\.cloud), [false])
+    }
+
+    func testCloudHDCompletionSurvivesUnrelatedLibraryNotificationAndKeepsPixelsAndZoom() async throws {
+        let fake = HDFixture()
+        fake.upgradeError = AppFailure.cloudOnly
+        let state = makeState(fake)
+        defer { state.stop(); fake.drain() }
+        state.open(id: "a")
+        await state.waitForCurrentWork()
+        state.requestCloudConfirmation()
+        let approved = try XCTUnwrap(state.consent)
+        fake.generation = 7
+        XCTAssertTrue(state.recheckAccess())
+        XCTAssertEqual(state.consent, approved, "Unrelated changes must not discard explicit single-photo consent.")
+        fake.upgradeError = nil
+        fake.holdUpgrades = true
+        let entered = expectation(description: "Single-photo cloud upgrade held")
+        fake.onUpgrade = { _, _, cloud in
+            XCTAssertTrue(cloud)
+            entered.fulfill()
+        }
+        state.confirmCloud(approved)
+        await fulfillment(of: [entered], timeout: 5)
+        fake.generation = 9
+        XCTAssertTrue(state.recheckAccess(), "Fresh selected-photo authority remains valid.")
+        XCTAssertEqual(state.phase, .cloud)
+        let hd = image(1800, 3600)
+        fake.complete(1, image: hd)
+        await state.waitForCurrentWork()
+        XCTAssertTrue(state.photo?.result.image === hd)
+        XCTAssertEqual(state.selectedID, "a")
+        XCTAssertEqual(state.shareQuality, .highDefinition)
+        XCTAssertEqual(state.phase, .idle)
+        state.updateDemand(viewport: viewport, displayScale: 3, zoom: 1.5)
+        fake.generation = 10
+        XCTAssertTrue(state.recheckAccess())
+        XCTAssertTrue(state.photo?.result.image === hd)
+        XCTAssertEqual(state.zoom, 1.5)
+        XCTAssertNotNil(state.makeShareRendition())
+        XCTAssertEqual(fake.requests.map(\.cloud), [false, true])
+        XCTAssertEqual(fake.initialNetworks, [false])
+    }
+
+    func testUnchangedPreviewAndCapturedMetadataCanSpanAnUnrelatedLibraryEpoch() async throws {
+        let fake = HDFixture()
+        fake.generationOnPreview = 2
+        fake.autoImage = image(900, 1800)
+        let state = makeState(fake)
+        defer { state.stop(); fake.drain() }
+        state.open(id: "a")
+        await state.waitForCurrentWork()
+        XCTAssertEqual(state.asset?.snapshot.generation, 1)
+        XCTAssertTrue(state.recheckAccess())
+        XCTAssertEqual(state.shareQuality, .highDefinition)
+        XCTAssertEqual(state.selectedID, "a")
+        XCTAssertEqual(state.phase, .idle)
     }
 
     func testReturnedWrongRevisionOrCanonicallyEquivalentIDCannotPublish() async throws {
@@ -605,6 +660,7 @@ private final class HDFixture {
     var onUpgrade: ((String, CGSize, Bool) -> Void)?
     var authorization: PHAuthorizationStatus = .authorized
     var generation: UInt64? = 1
+    var generationOnPreview: UInt64?
     var modification: Double = 1
     var creation: Double? = 1
     var missing = false
@@ -647,7 +703,7 @@ private final class HDFixture {
         validationCalls += 1
         if validationCalls == invalidateOnValidation { authorization = .denied }
         try snapshot.validate(id: snapshot.revision.id, authorization: { authorization }, generation: { generation },
-            currentRevision: { id in missing ? nil : currentSnapshot(id).revision })
+            currentRevision: { id in missing ? nil : currentSnapshot(id).revision }, allowUnrelatedChanges: true)
     }
 
     private func first(_ id: String, network: Bool) throws -> PhotoViewerImage {
@@ -655,6 +711,7 @@ private final class HDFixture {
         initialNetworks.append(network)
         initialIDs.append(id)
         if let previewError { throw previewError }
+        if let generationOnPreview { generation = generationOnPreview }
         return PhotoViewerImage(snapshot: currentSnapshot(id), result: Self.result(preview,
             stage: previewStage, degraded: false, target: CGSize(width: 224, height: 448)))
     }

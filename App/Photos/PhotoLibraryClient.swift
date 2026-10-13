@@ -501,7 +501,8 @@ final class PhotoLibraryClient: NSObject, PHPhotoLibraryChangeObserver, PhotoLib
 
     func validateViewerSnapshot(_ snapshot: PhotoViewerSnapshot, id: String) throws {
         try snapshot.validate(id: id, authorization: { Self.authorization },
-                              generation: { self.changeGeneration }, currentRevision: currentRevision(id:))
+                              generation: { self.changeGeneration }, currentRevision: currentRevision(id:),
+                              allowUnrelatedChanges: true)
     }
 
     /// Captured before the first request, including when no local preview exists.

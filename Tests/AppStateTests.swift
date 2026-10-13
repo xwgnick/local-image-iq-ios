@@ -57,12 +57,38 @@ final class AppStateTests: XCTestCase {
         state.selection = AppState.Selection(id: "synthetic-asset")
         state.libraryChanged()
         XCTAssertTrue(state.results.isEmpty)
-        XCTAssertNil(state.selection)
+        XCTAssertEqual(state.selection?.id, "synthetic-asset",
+                       "Invalidating search results must not dismiss an independently validated photo viewer.")
         await worker.release()
         await state.waitUntilIdle()
         XCTAssertTrue(state.results.isEmpty)
         let peak = await worker.peakConcurrency
         XCTAssertEqual(peak, 1)
+    }
+
+    func testViewerOwnsFrozenPhotoIDsWhileSyncRefreshesSearchAndBackgroundStillClosesIt() async throws {
+        let state = AppState(worker: StateTestWorker(photos: [
+            TestFixtures.photo(id: "TEST-viewer-a").photo,
+            TestFixtures.photo(id: "TEST-viewer-b").photo
+        ]), authorizationStatus: { .authorized })
+        state.refresh()
+        await state.waitUntilIdle()
+        state.query = "Synthetic query"
+        state.search()
+        await state.waitUntilIdle()
+        let selected = try XCTUnwrap(state.results.first?.id)
+        let originalIDs = state.results.map(\.id)
+        XCTAssertEqual(originalIDs.count, 2)
+        state.presentResultPhoto(id: selected)
+        XCTAssertEqual(state.selection?.photoIDs, originalIDs)
+        state.libraryChanged()
+        XCTAssertTrue(state.results.isEmpty)
+        XCTAssertEqual(state.selection?.id, selected)
+        XCTAssertEqual(state.selection?.photoIDs, originalIDs)
+        await state.waitUntilIdle()
+        XCTAssertEqual(state.selection?.photoIDs, originalIDs)
+        state.enterBackground()
+        XCTAssertNil(state.selection, "Background privacy must not be weakened by viewer retention.")
     }
 
     func testFinalSearchValidationFailurePublishesNeitherSummaryNorResults() async {
@@ -253,18 +279,21 @@ private actor StateTestWorker: PhotoWorkServicing {
     private let modelIssue: String?
     private let failRefresh: Bool
     private let finalValidation: @Sendable () throws -> Void
+    private let photos: [IndexedPhoto]
     private var active = 0
     private(set) var peakConcurrency = 0
     private(set) var refreshCount = 0
     private(set) var networkAllowed: Bool?
 
     init(holding: HeldOperation? = nil, started: XCTestExpectation? = nil, modelIssue: String? = nil,
-         failRefresh: Bool = false, finalValidation: @escaping @Sendable () throws -> Void = {}) {
+         failRefresh: Bool = false, finalValidation: @escaping @Sendable () throws -> Void = {},
+         photos: [IndexedPhoto] = [TestFixtures.photo().photo]) {
         self.holding = holding
         self.started = started
         self.modelIssue = modelIssue
         self.failRefresh = failRefresh
         self.finalValidation = finalValidation
+        self.photos = photos
     }
 
     func release() async { await latch.open() }
@@ -294,8 +323,7 @@ private actor StateTestWorker: PhotoWorkServicing {
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse {
         begin()
         defer { active -= 1 }
-        let photo = TestFixtures.photo().photo
-        let hits = try VectorSearch.search(query: TestFixtures.vector(), photos: [photo], limit: limit, locationWeight: locationWeight)
+        let hits = try VectorSearch.search(query: TestFixtures.vector(), photos: photos, limit: limit, locationWeight: locationWeight)
         let response = SearchResponse(summary: LibrarySummary(authorizedCount: 1, indexedCount: 1, modelVersion: "test-model"),
                                       hits: hits, validateAccess: finalValidation)
         // Hold only after preparing the response; its synchronous validator must

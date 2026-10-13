@@ -7,7 +7,14 @@ import ImageIQCore
 final class AppState: ObservableObject {
     enum Activity: Equatable { case starting, refreshing, indexing, indexingText, searching, clearing, checkingPhoto, preparingTranslation }
     enum LaunchPhase: Equatable { case pending, checkingLibrary, preparingSearch, failed, ready }
-    struct Selection: Identifiable { let id: String }
+    struct Selection: Identifiable {
+        let id: String
+        let photoIDs: [String]
+        init(id: String, photoIDs: [String]? = nil) {
+            self.id = id
+            self.photoIDs = photoIDs ?? [id]
+        }
+    }
 
     @Published private(set) var launchPhase: LaunchPhase = .pending
     @Published private(set) var homePresented = false
@@ -374,9 +381,10 @@ final class AppState: ObservableObject {
     }
 
     func refresh() {
+        let previousAuthorization = authorization
         authorization = authorizationStatus()
         library.synchronizeObservation()
-        invalidateDisplayedPhotos()
+        invalidateDisplayedPhotos(preservingViewer: canRead && isForeground && authorization == previousAuthorization)
         guard isForeground else { operationTask?.cancel(); return }
         if launchWasRequested, launchPhase != .ready {
             // Preparation now loads models + stored metadata, not a Photos
@@ -803,7 +811,12 @@ final class AppState: ObservableObject {
         if activity == .searching { cancel() }
     }
 
-    private func invalidateDisplayedPhotos() {
+    func presentResultPhoto(id: String) {
+        guard isForeground, canRead, results.contains(where: { $0.id.utf8.elementsEqual(id.utf8) }) else { return }
+        selection = Selection(id: id, photoIDs: results.map(\.id))
+    }
+
+    private func invalidateDisplayedPhotos(preservingViewer: Bool = false) {
         if let searchTiming {
             searchTimingReport = searchTiming.finish(.cancelled)
             self.searchTiming = nil
@@ -815,7 +828,9 @@ final class AppState: ObservableObject {
         similarPhotoID = nil
         isSelectingResults = false
         selectedResultIDs.removeAll()
-        results = []; selection = nil; completedQuery = nil; completedSearchQuery = nil
+        results = []
+        if !preservingViewer { selection = nil }
+        completedQuery = nil; completedSearchQuery = nil
     }
 
     private func accept(progress: IndexProgress, token: UUID) {
