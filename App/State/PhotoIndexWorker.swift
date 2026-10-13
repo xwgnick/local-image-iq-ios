@@ -959,6 +959,21 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
             try Task.checkCancellation()
         }
 
+        let validateCommit: @Sendable (PhotoRevision) throws -> Void = { [library, authorization, generation] revision in
+            try Task.checkCancellation()
+            guard library.canReadImages else { throw AppFailure.permission }
+            guard library.authorizationStatusRawValue == authorization, library.changeGeneration == generation else {
+                throw AppFailure.photo("照片访问已变化，请重新开始文字索引。")
+            }
+            let unchanged = library.currentRevision(id: revision.id) == revision
+            guard library.canReadImages else { throw AppFailure.permission }
+            guard unchanged, library.authorizationStatusRawValue == authorization,
+                  library.changeGeneration == generation else {
+                throw AppFailure.photo("照片已变化，请先更新图片索引，再重试文字索引。")
+            }
+            try Task.checkCancellation()
+        }
+
         try validate()
         // Startup has already prepared search. Only its model identity is needed.
         let manifest = try await encoders.inspectResources()
@@ -976,6 +991,8 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
         let textStore = try textStorage(readOnly: false)
         do {
             let saved = try await textStore.indexedMetadata(revisions: eligible)
+            let revisions = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            let failures = try await textStore.failures(revisions: revisions, networkAllowed: networkAllowed)
             try validate()
             var pending: [PhotoRevision] = []
             for revision in candidates {
@@ -983,6 +1000,15 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                 if eligible[revision.id] == nil {
                     state.staleSkipped += 1
                     state.completed += 1
+                } else if !retryReducedPreviews, let failure = failures[revision.id] {
+                    state.deferredFailures += 1
+                    state.lastIssue = failure.explanation
+                    state.completed += 1
+                    if let old = saved[revision.id] {
+                        state.reused += 1
+                        if old.hasText { state.withText += 1 }
+                        if old.isReduced { state.reduced += 1 }
+                    }
                 } else if let old = saved[revision.id], !old.isReduced || !retryReducedPreviews {
                     state.reused += 1
                     state.completed += 1
@@ -1009,6 +1035,12 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                     try validate(revision)
                     if PhotoImageRequestInfo.isCancellation(error) { throw CancellationError() }
                     if let failure = error as? AppFailure, case .permission = failure { throw failure }
+                    if let failure = error as? VisionPhotoTextRecognizer.Failure {
+                        switch failure {
+                        case .revisionUnavailable, .languagesUnavailable: throw failure
+                        case .imageUnavailable, .recognitionFailed: break
+                        }
+                    }
                     let cloudOnly: Bool
                     if let failure = error as? AppFailure, case .cloudOnly = failure { cloudOnly = true }
                     else { cloudOnly = PhotoImageRequestInfo.requiresNetwork(error) }
@@ -1018,6 +1050,17 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                         // The production recognizer exposes only fixed safe messages.
                         state.lastIssue = (error as? VisionPhotoTextRecognizer.Failure)?.errorDescription
                             ?? "暂时无法读取照片或完成文字识别，可稍后手动重试。"
+                        if !cloudOnly {
+                            let reason: PhotoTextFailureReason
+                            switch error as? VisionPhotoTextRecognizer.Failure {
+                            case .imageUnavailable: reason = .imageUnavailable
+                            case .recognitionFailed: reason = .recognitionFailed
+                            default: reason = .unavailable
+                            }
+                            try await textStore.saveFailure(revision, reason: reason, networkAllowed: networkAllowed) {
+                                try validateCommit(revision)
+                            }
+                        }
                     }
                     state.completed += 1
                     try validate(revision)
@@ -1031,21 +1074,7 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                                              pixelWidth: recognized.pixelWidth, pixelHeight: recognized.pixelHeight,
                                              isReduced: recognized.isReduced)
                 // Validate inside the storage actor, including before commit.
-                try await textStore.save(record) { [library, revision, authorization, generation] in
-                    try Task.checkCancellation()
-                    guard library.canReadImages else { throw AppFailure.permission }
-                    guard library.authorizationStatusRawValue == authorization,
-                          library.changeGeneration == generation else {
-                        throw AppFailure.photo("照片访问已变化，请重新开始文字索引。")
-                    }
-                    let unchanged = library.currentRevision(id: revision.id) == revision
-                    guard library.canReadImages else { throw AppFailure.permission }
-                    guard unchanged, library.authorizationStatusRawValue == authorization,
-                          library.changeGeneration == generation else {
-                        throw AppFailure.photo("照片已变化，请先更新图片索引，再重试文字索引。")
-                    }
-                    try Task.checkCancellation()
-                }
+                try await textStore.save(record) { try validateCommit(revision) }
                 try validate(revision)
                 state.recognized += 1
                 if !record.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { state.withText += 1 }

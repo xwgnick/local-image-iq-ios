@@ -109,6 +109,10 @@ actor SQLiteTextStore {
                 try db.bind(record.id, at: 1, to: statement)
                 try db.execute(statement)
             }
+            try db.statement("DELETE FROM text_failures WHERE id = ?") { statement in
+                try db.bind(record.id, at: 1, to: statement)
+                try db.execute(statement)
+            }
             try db.statement("INSERT INTO text_terms (term, record_id) VALUES (?, ?)") { statement in
                 for term in terms {
                     try Task.checkCancellation()
@@ -117,6 +121,57 @@ actor SQLiteTextStore {
                     try db.bind(record.id, at: 2, to: statement)
                     try db.execute(statement)
                 }
+            }
+            try validate()
+            try Task.checkCancellation()
+        }
+    }
+
+    func failures(revisions: [String: PhotoRevision], networkAllowed: Bool) throws -> [String: PhotoTextFailureReason] {
+        try Task.checkCancellation()
+        guard !revisions.isEmpty, let db = try database(), try db.hasFailureTable() else { return [:] }
+        return try db.statement("SELECT id, revision, creation_time, reason FROM text_failures WHERE policy = ? AND network_allowed = ?") { statement in
+            try db.bind(PhotoTextPolicy.version, at: 1, to: statement)
+            try db.bind(networkAllowed ? 1 : 0, at: 2, to: statement)
+            var result: [String: PhotoTextFailureReason] = [:]
+            while try db.next(statement) {
+                try Task.checkCancellation()
+                let id = try db.string(statement, at: 0)
+                let creation = sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2)
+                guard let revision = revisions[id], revision.modificationTime == sqlite3_column_double(statement, 1),
+                      revision.creationTime == creation else { continue }
+                guard let reason = PhotoTextFailureReason(rawValue: try db.string(statement, at: 3)) else {
+                    throw TextIndexDatabase.failure()
+                }
+                result[id] = reason
+            }
+            return result
+        }
+    }
+
+    func saveFailure(_ revision: PhotoRevision, reason: PhotoTextFailureReason, networkAllowed: Bool,
+                     validate: @escaping @Sendable () throws -> Void = {}) throws {
+        try requireWritable()
+        try Task.checkCancellation()
+        try validate()
+        guard !revision.id.isEmpty, revision.modificationTime.isFinite,
+              revision.creationTime.map(\.isFinite) ?? true else { throw TextIndexDatabase.failure() }
+        guard let db = try database(writing: true) else { throw TextIndexDatabase.failure() }
+        try db.transaction {
+            try db.statement("""
+                INSERT INTO text_failures (id, revision, creation_time, policy, reason, network_allowed)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, creation_time = excluded.creation_time,
+                    policy = excluded.policy, reason = excluded.reason, network_allowed = excluded.network_allowed
+                """) { statement in
+                try db.bind(revision.id, at: 1, to: statement)
+                try db.bind(revision.modificationTime, at: 2, to: statement)
+                if let creation = revision.creationTime { try db.bind(creation, at: 3, to: statement) }
+                else if sqlite3_bind_null(statement, 3) != SQLITE_OK { throw TextIndexDatabase.failure() }
+                try db.bind(PhotoTextPolicy.version, at: 4, to: statement)
+                try db.bind(reason.rawValue, at: 5, to: statement)
+                try db.bind(networkAllowed ? 1 : 0, at: 6, to: statement)
+                try db.execute(statement)
             }
             try validate()
             try Task.checkCancellation()
@@ -180,15 +235,25 @@ actor SQLiteTextStore {
     func counts() throws -> TextIndexCounts {
         try Task.checkCancellation()
         guard let db = try database() else { return TextIndexCounts() }
-        return try db.statement("""
-            SELECT COUNT(*), COALESCE(SUM(has_text), 0), COALESCE(SUM(is_reduced), 0)
-            FROM text_records WHERE policy = ?
-            """) { statement in
-            try db.bind(PhotoTextPolicy.version, at: 1, to: statement)
-            guard try db.next(statement) else { throw TextIndexDatabase.failure() }
-            return TextIndexCounts(records: Int(sqlite3_column_int64(statement, 0)),
-                                   withText: Int(sqlite3_column_int64(statement, 1)),
-                                   reduced: Int(sqlite3_column_int64(statement, 2)))
+        return try db.transaction(writing: false) {
+            var counts = try db.statement("""
+                SELECT COUNT(*), COALESCE(SUM(has_text), 0), COALESCE(SUM(is_reduced), 0)
+                FROM text_records WHERE policy = ?
+                """) { statement in
+                try db.bind(PhotoTextPolicy.version, at: 1, to: statement)
+                guard try db.next(statement) else { throw TextIndexDatabase.failure() }
+                return TextIndexCounts(records: Int(sqlite3_column_int64(statement, 0)),
+                                       withText: Int(sqlite3_column_int64(statement, 1)),
+                                       reduced: Int(sqlite3_column_int64(statement, 2)))
+            }
+            if try db.hasFailureTable() {
+                counts.deferredFailures = try db.statement("SELECT COUNT(*) FROM text_failures WHERE policy = ?") { statement in
+                    try db.bind(PhotoTextPolicy.version, at: 1, to: statement)
+                    guard try db.next(statement) else { throw TextIndexDatabase.failure() }
+                    return Int(sqlite3_column_int64(statement, 0))
+                }
+            }
+            return counts
         }
     }
 
@@ -214,6 +279,24 @@ actor SQLiteTextStore {
             }
             try db.statement("DELETE FROM text_records WHERE id = ?") { statement in
                 for id in obsolete {
+                    try db.reset(statement)
+                    try db.bind(id, at: 1, to: statement)
+                    try db.execute(statement)
+                }
+            }
+            let obsoleteFailures = try db.statement("SELECT id, revision, policy FROM text_failures") { statement -> [String] in
+                var ids: [String] = []
+                while try db.next(statement) {
+                    try Task.checkCancellation()
+                    let id = try db.string(statement, at: 0)
+                    let policy = try db.string(statement, at: 2)
+                    if revisions[id] != sqlite3_column_double(statement, 1)
+                        || policy != PhotoTextPolicy.version { ids.append(id) }
+                }
+                return ids
+            }
+            try db.statement("DELETE FROM text_failures WHERE id = ?") { statement in
+                for id in obsoleteFailures {
                     try db.reset(statement)
                     try db.bind(id, at: 1, to: statement)
                     try db.execute(statement)
@@ -292,6 +375,11 @@ final class TextIndexDatabase {
                             FOREIGN KEY (record_id) REFERENCES text_records(id) ON DELETE CASCADE) WITHOUT ROWID;
                         CREATE INDEX IF NOT EXISTS text_terms_by_record ON text_terms(record_id);
                         CREATE INDEX IF NOT EXISTS text_records_by_policy ON text_records(policy);
+                        CREATE TABLE IF NOT EXISTS text_failures (
+                            id TEXT PRIMARY KEY NOT NULL, revision REAL NOT NULL, creation_time REAL,
+                            policy TEXT NOT NULL, reason TEXT NOT NULL
+                                CHECK(reason IN ('imageUnavailable', 'recognitionFailed', 'unavailable')),
+                            network_allowed INTEGER NOT NULL CHECK(network_allowed IN (0, 1)));
                         PRAGMA user_version = 1;
                         """)
                 }
@@ -306,6 +394,13 @@ final class TextIndexDatabase {
     }
 
     deinit { if let handle { sqlite3_close(handle) } }
+
+    func hasFailureTable() throws -> Bool {
+        try statement("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'text_failures'") { statement in
+            guard try next(statement) else { throw Self.failure() }
+            return sqlite3_column_int(statement, 0) == 1
+        }
+    }
 
     private static func protect(_ url: URL) throws {
         try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],

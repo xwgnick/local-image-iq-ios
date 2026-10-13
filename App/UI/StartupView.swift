@@ -27,34 +27,84 @@ struct StartupView: View {
 @MainActor
 struct LaunchPreparationNotice: View {
     @ObservedObject var state: AppState
+    var isPresented = true
+    var onPresentedSurfaceChanged: (Bool) -> Void = { _ in }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .subheadline) private var labelSize: CGFloat = 14
+    @State private var detailsPresented = false
 
     var body: some View {
-        if state.activity == .starting {
-            VStack(spacing: 6) {
-                Text("正在准备搜索，完成后即可使用")
-                    .font(.caption).foregroundStyle(IQStyle.secondary)
-                ProgressView(value: state.startupProgress.fraction)
-                    .tint(IQStyle.accent)
-                    .accessibilityLabel("搜索准备进度")
-                if state.initialPreparation {
-                    Text("首次启动耗时稍长，请耐心等待")
-                        .font(.caption2).foregroundStyle(IQStyle.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("initial-preparation-hint")
+        let metrics = PhotoSyncCapsuleMetrics(fontSize: labelSize,
+                                             accessibility: dynamicTypeSize.isAccessibilitySize)
+        let shown = isPresented && !detailsPresented
+            && (state.activity == .starting || state.launchPhase == .failed)
+        IndexSyncReservationLayout(metrics: metrics) {
+            if shown {
+                HStack(spacing: 0) {
+                    Button {
+                        onPresentedSurfaceChanged(true)
+                        detailsPresented = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            if state.activity == .starting {
+                                PhotoSyncProgressRing(fraction: state.startupProgress.fraction, reportsGeometry: false)
+                            } else {
+                                Image(systemName: "exclamationmark.circle").foregroundStyle(IQStyle.accent)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(state.activity == .starting ? "正在准备搜索" : "搜索准备未完成")
+                                    .font(.system(size: labelSize, weight: .medium)).lineLimit(2)
+                                if state.initialPreparation && state.activity == .starting && !dynamicTypeSize.isAccessibilitySize {
+                                    Text("首次启动耗时稍长，请耐心等待")
+                                        .font(.caption2).foregroundStyle(IQStyle.secondary)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
+                                        .accessibilityIdentifier("initial-preparation-hint")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(state.initialPreparation
+                        ? "首次启动耗时稍长，请耐心等待；查看搜索准备详情" : "查看搜索准备详情")
+                    if state.launchPhase == .failed {
+                        Button("重试", action: state.retryLaunch)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .accessibilityIdentifier("retry-search-preparation")
+                    }
+                }
+                .foregroundStyle(IQStyle.text).tint(IQStyle.accent)
+                .background(IQStyle.surface, in: Capsule())
+                .overlay(Capsule().strokeBorder(IQStyle.line, lineWidth: 1))
+                .accessibilityIdentifier("search-preparation-notice")
+            }
+        }
+        .allowsHitTesting(shown).accessibilityHidden(!shown)
+        .sheet(isPresented: $detailsPresented, onDismiss: { onPresentedSurfaceChanged(false) }) {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(state.activity == .starting ? "正在准备搜索，完成后即可使用" :
+                             (state.launchIssue ?? "搜索已准备好，可以开始使用。"))
+                        if state.initialPreparation { Text("首次启动耗时稍长，请耐心等待") }
+                        Text("准备期间可以先查看首页、图库和设置；搜索与索引操作会在准备完成后开放。")
+                            .font(.footnote).foregroundStyle(IQStyle.secondary)
+                    }
+                    .padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .background(IQStyle.background).foregroundStyle(IQStyle.text)
+                .navigationTitle("搜索准备").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("完成") { detailsPresented = false }
+                    }
                 }
             }
-            .padding(.horizontal, 24).padding(.vertical, 8)
-            .accessibilityIdentifier("search-preparation-notice")
-        } else if state.launchPhase == .failed {
-            VStack(spacing: 6) {
-                Text(state.launchIssue ?? "搜索准备未完成，请重试。")
-                    .font(.caption).foregroundStyle(IQStyle.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("重试准备搜索", action: state.retryLaunch)
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("retry-search-preparation")
-            }
-            .padding(.horizontal, 24).padding(.vertical, 8)
+            .tint(IQStyle.accent)
         }
     }
 }

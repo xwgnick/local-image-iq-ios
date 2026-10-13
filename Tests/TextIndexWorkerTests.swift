@@ -223,26 +223,55 @@ final class TextIndexWorkerTests: XCTestCase {
                 }
             }
         }
-        for _ in 0..<2 {
+        let restartedWorker = PhotoIndexWorker(library: c.library, encoders: c.encoders,
+            directory: c.directory, resolver: resolver, textRecognizer: recognizer)
+        for (iteration, worker) in [c.worker, restartedWorker].enumerated() {
             let trace = TextWorkerProgress()
-            let summary = try await c.worker.indexText(networkAllowed: false, retryReducedPreviews: false) {
+            let summary = try await worker.indexText(networkAllowed: false, retryReducedPreviews: false) {
                 await trace.append($0)
             }
             let progress = await trace.values()
-            XCTAssertEqual(progress.first?.completed, 7906)
+            XCTAssertEqual(progress.first?.completed, iteration == 0 ? 7906 : 7907)
             let final = try XCTUnwrap(progress.last)
             XCTAssertEqual(final.completed, 7907)
             XCTAssertEqual(final.reused, 7906)
-            XCTAssertEqual(final.failed, 1)
-            XCTAssertEqual(final.lastIssue, VisionPhotoTextRecognizer.Failure.imageUnavailable.errorDescription)
+            XCTAssertEqual(final.failed, iteration == 0 ? 1 : 0)
+            XCTAssertEqual(final.deferredFailures, iteration == 0 ? 0 : 1)
+            XCTAssertEqual(final.lastIssue, iteration == 0
+                ? VisionPhotoTextRecognizer.Failure.imageUnavailable.errorDescription
+                : PhotoTextFailureReason.imageUnavailable.explanation)
             XCTAssertTrue(final.completionDetail.contains("7906/7907"))
             XCTAssertEqual(summary.textIndexCounts.records, 7906)
+            XCTAssertEqual(summary.textIndexCounts.deferredFailures, 1)
             let absent = try await saved(unreadableID, in: c)
             XCTAssertNil(absent, "An unreadable photo cannot be marked indexed to suppress a warning.")
         }
         let requests = await recognizer.requests
-        XCTAssertEqual(requests.count, 2)
-        XCTAssertEqual(requests.map(\.id), [unreadableID, unreadableID])
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.map(\.id), [unreadableID])
+    }
+
+    func testManualUpdateRetriesPersistedFailureAndClearsItOnlyAfterSuccess() async throws {
+        let c = try context()
+        let store = SQLiteTextStore(directory: c.directory)
+        try await store.saveFailure(PhotoRevision(id: "a", modificationTime: 123, creationTime: 100),
+                                    reason: .recognitionFailed, networkAllowed: false)
+        await store.close()
+        let automatic = TextWorkerProgress()
+        _ = try await c.worker.indexText(networkAllowed: false, retryReducedPreviews: false) {
+            await automatic.append($0)
+        }
+        let deferred = await automatic.values()
+        XCTAssertEqual(deferred.last?.deferredFailures, 1)
+        let before = await c.recognizer.requests
+        XCTAssertTrue(before.isEmpty)
+        let summary = try await c.worker.indexText(networkAllowed: false, retryReducedPreviews: true) { _ in }
+        let after = await c.recognizer.requests
+        XCTAssertEqual(after.map(\.id), ["a"])
+        XCTAssertEqual(summary.textIndexCounts.records, 1)
+        XCTAssertEqual(summary.textIndexCounts.deferredFailures, 0)
+        let record = try await saved("a", in: c)
+        XCTAssertNotNil(record)
     }
 
     func testColdReopenOf7900OldReducedRecordsReusesInOneProgressUpdate() async throws {

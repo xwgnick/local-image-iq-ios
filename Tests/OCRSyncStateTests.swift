@@ -5,6 +5,36 @@ import Combine
 /// Pure event state, no clocks, worker, Photos, storage, models or network.
 @MainActor
 final class OCRSyncStateTests: XCTestCase {
+    func testRecordedFailureDoesNotRepeatNoticeButRetainsManualRecovery() throws {
+        let state = OCRSyncState()
+        state.userChangedEnabled(true)
+        state.updateAvailability(ready: true)
+        let run = try XCTUnwrap(state.takeReadyRequest())
+        state.accept(.init(total: 7907, completed: 7907, reused: 7906, deferredFailures: 1), token: run)
+        state.finish(token: run, completion: .completed)
+        XCTAssertEqual(state.phase, .failed)
+        XCTAssertEqual(state.progress.deferredFailures, 1)
+        XCTAssertTrue(state.terminalHidden)
+        XCTAssertFalse(state.canShow)
+        XCTAssertTrue(state.canRetry)
+        XCTAssertTrue(state.completionDetail.contains("手动更新"))
+        state.requestUpdate()
+        XCTAssertFalse(state.terminalHidden)
+        XCTAssertNotNil(state.takeReadyRequest())
+    }
+
+    func testOperationalFailureIsNotSilencedByPreviouslyRecordedPhotoFailure() throws {
+        let state = OCRSyncState()
+        state.userChangedEnabled(true)
+        state.updateAvailability(ready: true)
+        let run = try XCTUnwrap(state.takeReadyRequest())
+        state.accept(.init(total: 2, completed: 1, deferredFailures: 1), token: run)
+        state.finish(token: run, completion: .failed, issue: "文字索引无法读写，请稍后重试。")
+        XCTAssertEqual(state.phase, .failed)
+        XCTAssertTrue(state.canShow)
+        XCTAssertFalse(state.terminalHidden)
+    }
+
     func testPartial7907ResultAutomaticallyHidesButRetainsFailureAndRetry() async throws {
         let gate = OCRTerminalDelayGate()
         let entered = expectation(description: "terminal delay started")

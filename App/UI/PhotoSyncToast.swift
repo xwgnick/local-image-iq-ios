@@ -227,15 +227,19 @@ private struct PhotoSyncReservationLayout: Layout {
 
 struct PhotoSyncProgressRing: View {
     let fraction: Double
+    var reportsGeometry = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var fill: some View {
+        Circle().trim(from: 0, to: min(1, max(0, fraction)))
+            .stroke(IQStyle.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .rotationEffect(.degrees(-90))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: fraction)
+    }
     var body: some View {
         ZStack {
             Circle().stroke(IQStyle.line, lineWidth: 2)
-            Circle().trim(from: 0, to: min(1, max(0, fraction)))
-                .stroke(IQStyle.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: fraction)
-                .toastFrame(.fill)
+            if reportsGeometry { fill.toastFrame(.fill) }
+            else { fill }
         }
         .padding(1) // Keep the complete 2pt stroke inside the actual 14pt view.
         .frame(width: 14, height: 14)

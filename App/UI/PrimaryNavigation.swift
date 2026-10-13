@@ -15,25 +15,50 @@ enum PrimaryPage: String, CaseIterable, Identifiable {
 @MainActor
 final class PrimaryNavigationPresentation: ObservableObject {
     @Published private(set) var page: PrimaryPage = .search
+    @Published private(set) var dragOffset: CGFloat = 0
 
     func select(_ page: PrimaryPage, switchingDisabled: Bool = false) {
         guard !switchingDisabled, self.page != page else { return }
+        dragOffset = 0
         self.page = page
     }
 
-    func selectSwipe(horizontal: CGFloat, vertical: CGFloat, switchingDisabled: Bool = false) {
-        guard horizontal.isFinite, vertical.isFinite,
-              abs(horizontal) >= 80, abs(horizontal) > abs(vertical) * 1.7 else { return }
+    func updateSwipe(horizontal: CGFloat, vertical: CGFloat, width: CGFloat, switchingDisabled: Bool = false) {
+        guard !switchingDisabled, width.isFinite, width > 0,
+              horizontal.isFinite, vertical.isFinite, abs(horizontal) > abs(vertical) * 1.7 else {
+            dragOffset = 0
+            return
+        }
+        dragOffset = page == .search ? max(-width, min(0, horizontal)) : min(width, max(0, horizontal))
+    }
+
+    func cancelSwipe() { dragOffset = 0 }
+
+    func selectSwipe(horizontal: CGFloat, vertical: CGFloat, predictedHorizontal: CGFloat? = nil,
+                     width: CGFloat = 0, switchingDisabled: Bool = false) {
+        defer { dragOffset = 0 }
+        guard !switchingDisabled, horizontal.isFinite, vertical.isFinite, width.isFinite, width >= 0,
+              abs(horizontal) > abs(vertical) * 1.7 else { return }
+        let threshold = max(80, width * 0.25)
+        let projected = predictedHorizontal ?? horizontal
+        guard projected.isFinite,
+              abs(horizontal) >= threshold
+                || (abs(horizontal) >= 30 && projected * horizontal > 0 && abs(projected) >= threshold) else { return }
         if page == .search, horizontal < 0 { select(.cleanup, switchingDisabled: switchingDisabled) }
         else if page == .cleanup, horizontal > 0 { select(.search, switchingDisabled: switchingDisabled) }
+    }
+
+    func offset(for target: PrimaryPage, width: CGFloat) -> CGFloat {
+        (target == page ? 0 : (target == .search ? -width : width)) + dragOffset
     }
 }
 
 struct RetainedPrimaryPage: ViewModifier {
     let active: Bool
+    var visible = false
     func body(content: Content) -> some View {
         content
-            .opacity(active ? 1 : 0)
+            .opacity(active || visible ? 1 : 0)
             .allowsHitTesting(active)
             // This outer hint does not cross NavigationStack's native AX
             // boundary. Each page also installs an inner native anchor below.

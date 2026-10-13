@@ -11,6 +11,8 @@ struct ContentView: View {
     @StateObject private var layoutDelivery = SearchLayoutDelivery()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @GestureState private var primaryDragActive = false
     @State private var showFilters = false
     @State private var showAlbumAction = false
     @State private var albumActionIDs: [String] = []
@@ -40,6 +42,14 @@ struct ContentView: View {
             || displayedTranslation != nil
     }
     private var isSearchPageAccessible: Bool { isSearchPageActive && !hasPresentedSurface }
+    private var primarySwipeAvailable: Bool {
+        !hasPresentedSurface && !keyboardVisible && state.isForeground
+            && !switchingDisabled && !state.isSelectingResults && !similarCleanup.isSelecting
+            && (isSearchPageActive || cleanupAllowsPrimarySwipe)
+    }
+    private var pageAnimation: Animation? {
+        reduceMotion ? nil : .interactiveSpring(response: 0.32, dampingFraction: 0.88)
+    }
 
     init(state: AppState, photoActionService: (any PhotoLibraryActions)? = nil,
          similarCleanupState: SimilarPhotoCleanupState? = nil,
@@ -61,30 +71,49 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                searchPage.modifier(RetainedPrimaryPage(active: navigation.page == .search))
-                SimilarPhotoCleanupSheet(state: similarCleanup, appState: state,
-                                        embedded: true, isPageActive: navigation.page == .cleanup,
-                                        accessibilityActive: !hasPresentedSurface,
-                                        openLibrary: openLibrary, openSettings: openSettings,
-                                        onPresentedSurfaceChanged: { cleanupSurfacePresented = $0 },
-                                        onPrimarySwipeAvailabilityChanged: { cleanupAllowsPrimarySwipe = $0 })
-                    .modifier(RetainedPrimaryPage(active: navigation.page == .cleanup))
+            GeometryReader { geometry in
+                ZStack {
+                    searchPage.modifier(RetainedPrimaryPage(active: navigation.page == .search, visible: true))
+                        .offset(x: navigation.offset(for: .search, width: geometry.size.width))
+                    SimilarPhotoCleanupSheet(state: similarCleanup, appState: state,
+                                            embedded: true, isPageActive: navigation.page == .cleanup,
+                                            accessibilityActive: !hasPresentedSurface,
+                                            openLibrary: openLibrary, openSettings: openSettings,
+                                            onPresentedSurfaceChanged: { cleanupSurfacePresented = $0 },
+                                            onPrimarySwipeAvailabilityChanged: { cleanupAllowsPrimarySwipe = $0 })
+                        .modifier(RetainedPrimaryPage(active: navigation.page == .cleanup, visible: true))
+                        .offset(x: navigation.offset(for: .cleanup, width: geometry.size.width))
+                }
+                // Allocate the actual remaining height to both retained navigation
+                // trees, rather than relying on a root inset crossing their bounds.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .simultaneousGesture(DragGesture(minimumDistance: 30)
+                    .updating($primaryDragActive) { _, active, _ in active = true }
+                    .onChanged { value in
+                        var transaction = Transaction()
+                        transaction.animation = nil
+                        withTransaction(transaction) {
+                            navigation.updateSwipe(horizontal: value.translation.width, vertical: value.translation.height,
+                                                   width: geometry.size.width, switchingDisabled: !primarySwipeAvailable)
+                        }
+                    }
+                    .onEnded { value in
+                        withAnimation(pageAnimation) {
+                            navigation.selectSwipe(horizontal: value.translation.width, vertical: value.translation.height,
+                                                   predictedHorizontal: value.predictedEndTranslation.width,
+                                                   width: geometry.size.width, switchingDisabled: !primarySwipeAvailable)
+                        }
+                    })
             }
-            // Allocate the actual remaining height to both retained navigation
-            // trees, rather than relying on a root inset crossing their bounds.
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
-                guard !hasPresentedSurface, !keyboardVisible, state.isForeground,
-                      !switchingDisabled, !state.isSelectingResults,
-                      !similarCleanup.isSelecting,
-                      isSearchPageActive || cleanupAllowsPrimarySwipe else { return }
-                navigation.selectSwipe(horizontal: value.translation.width, vertical: value.translation.height)
-            })
+            .onChange(of: primaryDragActive) { _, active in
+                if !active { withAnimation(pageAnimation) { navigation.cancelSwipe() } }
+            }
+            .onChange(of: primarySwipeAvailable) { _, available in
+                if !available { withAnimation(pageAnimation) { navigation.cancelSwipe() } }
+            }
 
             VStack(spacing: 0) {
-                LaunchPreparationNotice(state: state)
                 // The shared footer is outside both page trees. Cleanup still
                 // owns its separate selection controls inside its own page.
                 if isSearchPageActive {
@@ -100,7 +129,7 @@ struct ContentView: View {
                                      accessibilityActive: !hasPresentedSurface) { page in
                     guard !switchingDisabled else { return }
                     isSearchFocused = false
-                    navigation.select(page)
+                    withAnimation(pageAnimation) { navigation.select(page) }
                 }
                 .rootBottomFrame(.navigation)
             }

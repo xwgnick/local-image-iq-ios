@@ -1,9 +1,8 @@
 import SwiftUI
 
 /// Mount this ONE region in the root footer in place of PhotoSyncToast, not in
-/// addition to it. Both sheet owners stay mounted while the mutually exclusive
-/// capsules share the same reservation. A live photo job has display priority;
-/// otherwise pending/running/terminal OCR is shown until dismissed.
+/// addition to it. All sheet owners stay mounted while mutually exclusive
+/// capsules share one reservation: preparation, then a live photo job, then OCR.
 @MainActor
 struct IndexSyncFooter: View {
     @ObservedObject private var state: AppState
@@ -22,12 +21,15 @@ struct IndexSyncFooter: View {
     }
 
     var showsOCR: Bool {
-        ocr.canShow && photo.phase != .checking && photo.phase != .updating && photo.phase != .cancelling
+        !showsPreparation && ocr.canShow && photo.phase != .checking && photo.phase != .updating && photo.phase != .cancelling
     }
+    var showsPreparation: Bool { state.activity == .starting || state.launchPhase == .failed }
 
     var body: some View {
         ZStack {
-            PhotoSyncToast(state: photo, isPresented: isPresented && !showsOCR,
+            LaunchPreparationNotice(state: state, isPresented: isPresented && showsPreparation,
+                                    onPresentedSurfaceChanged: onPresentedSurfaceChanged)
+            PhotoSyncToast(state: photo, isPresented: isPresented && !showsOCR && !showsPreparation,
                            onPresentedSurfaceChanged: onPresentedSurfaceChanged)
             OCRSyncToast(state: ocr, isPresented: isPresented && showsOCR,
                          cancel: state.cancelOCRSync, retry: state.retryOCRSync,
@@ -100,7 +102,7 @@ struct OCRSyncToast: View {
         let metrics = PhotoSyncCapsuleMetrics(fontSize: labelSize,
                                              accessibility: dynamicTypeSize.isAccessibilitySize)
         let shown = isPresented && state.canShow && !detailsPresented
-        OCRSyncReservationLayout(metrics: metrics) {
+        IndexSyncReservationLayout(metrics: metrics) {
             ZStack {
                 if shown {
                     capsule
@@ -230,7 +232,7 @@ struct OCRSyncToast: View {
     }
 }
 
-private struct OCRSyncReservationLayout: Layout {
+struct IndexSyncReservationLayout: Layout {
     let metrics: PhotoSyncCapsuleMetrics
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         CGSize(width: proposal.width ?? 256, height: metrics.reservationHeight)

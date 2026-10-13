@@ -5,6 +5,115 @@ import ImageIQCore
 @testable import LocalImageIQ
 
 final class TextIndexStoreTests: XCTestCase {
+    func testFailureSurvivesReopeningAndMatchesExactRevisionCreationAndNetwork() async throws {
+        let (store, directory) = try makeStore()
+        let revision = PhotoRevision(id: "a", modificationTime: 1, creationTime: 100)
+        try await store.saveFailure(revision, reason: .recognitionFailed, networkAllowed: false)
+        await store.close()
+        let reader = SQLiteTextStore(directory: directory, readOnly: true)
+        let failures = try await reader.failures(revisions: ["a": revision], networkAllowed: false)
+        let counts = try await reader.counts()
+        XCTAssertEqual(failures["a"], .recognitionFailed)
+        XCTAssertEqual(counts.records, 0)
+        XCTAssertEqual(counts.deferredFailures, 1)
+        let networkChanged = try await reader.failures(revisions: ["a": revision], networkAllowed: true)
+        let photoChanged = try await reader.failures(revisions: [
+            "a": PhotoRevision(id: "a", modificationTime: 2, creationTime: 100)
+        ], networkAllowed: false)
+        let creationChanged = try await reader.failures(revisions: [
+            "a": PhotoRevision(id: "a", modificationTime: 1, creationTime: nil)
+        ], networkAllowed: false)
+        XCTAssertTrue(networkChanged.isEmpty)
+        XCTAssertTrue(photoChanged.isEmpty)
+        XCTAssertTrue(creationChanged.isEmpty)
+        await reader.close()
+        try await store.reconcile(revisions: [:])
+        let cleared = try await store.counts()
+        XCTAssertEqual(cleared, TextIndexCounts())
+    }
+
+    func testFailurePreservesPreviousReducedTextAndSuccessClearsFailure() async throws {
+        let (store, _) = try makeStore()
+        let previous = fixture(reduced: true)
+        try await store.save(previous)
+        try await store.saveFailure(PhotoRevision(id: "a", modificationTime: 1, creationTime: nil),
+                                    reason: .imageUnavailable, networkAllowed: false)
+        let retained = try await store.record(id: "a")
+        try assertRecord(retained, equals: previous)
+        let incomplete = try await store.counts()
+        XCTAssertEqual(incomplete.records, 1)
+        XCTAssertEqual(incomplete.withText, 1)
+        XCTAssertEqual(incomplete.deferredFailures, 1)
+        try await store.save(fixture())
+        let complete = try await store.counts()
+        XCTAssertEqual(complete.deferredFailures, 0)
+        XCTAssertEqual(complete.records, 1)
+    }
+
+    func testFailureUpdateAndSuccessRemovalRollBackWhenCommitValidationFails() async throws {
+        let (store, _) = try makeStore()
+        let original = fixture(reduced: true)
+        let revision = PhotoRevision(id: "a", modificationTime: 1, creationTime: nil)
+        try await store.save(original)
+        try await store.saveFailure(revision, reason: .imageUnavailable, networkAllowed: false)
+        for replacingWithSuccess in [false, true] {
+            let counter = TextStoreValidationCounter()
+            let validate: @Sendable () throws -> Void = {
+                if counter.next() == 2 { throw AppFailure.permission }
+            }
+            do {
+                if replacingWithSuccess {
+                    try await store.save(fixture(), validate: validate)
+                } else {
+                    try await store.saveFailure(revision, reason: .recognitionFailed,
+                                                networkAllowed: false, validate: validate)
+                }
+                XCTFail("The commit guard must reject an access change.")
+            } catch {
+                guard let failure = error as? AppFailure, case .permission = failure else {
+                    XCTFail("Unexpected validation failure: \(error)")
+                    continue
+                }
+            }
+            XCTAssertEqual(counter.count, 2)
+            let failures = try await store.failures(revisions: ["a": revision], networkAllowed: false)
+            XCTAssertEqual(failures["a"], .imageUnavailable)
+            let retained = try await store.record(id: "a")
+            try assertRecord(retained, equals: original)
+        }
+    }
+
+    func testLegacyVersionOneReadOnlyDoesNotCreateFailureTableAndWriterAddsIt() async throws {
+        let (store, directory) = try makeStore()
+        try await store.save(fixture())
+        await store.close()
+        try rawSQL("DROP TABLE text_failures", at: directory)
+        let before = try snapshot(directory)
+        let revision = PhotoRevision(id: "b", modificationTime: 1, creationTime: nil)
+        let reader = SQLiteTextStore(directory: directory, readOnly: true)
+        let failures = try await reader.failures(revisions: ["b": revision], networkAllowed: false)
+        let oldCounts = try await reader.counts()
+        await reader.close()
+        XCTAssertTrue(failures.isEmpty)
+        XCTAssertEqual(oldCounts.records, 1)
+        XCTAssertEqual(oldCounts.deferredFailures, 0)
+        XCTAssertEqual(try snapshot(directory), before)
+        try await store.saveFailure(revision, reason: .unavailable, networkAllowed: false)
+        let newCounts = try await store.counts()
+        XCTAssertEqual(newCounts.records, 1)
+        XCTAssertEqual(newCounts.deferredFailures, 1)
+        await store.close()
+        try withRaw(directory) { db in
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &statement, nil) == SQLITE_OK else {
+                throw TextIndexDatabase.failure()
+            }
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_ROW else { throw TextIndexDatabase.failure() }
+            XCTAssertEqual(sqlite3_column_int(statement, 0), 1)
+        }
+    }
+
     private func makeStore() throws -> (SQLiteTextStore, URL) {
         let directory = try TestFixtures.temporaryDirectory()
         let store = SQLiteTextStore(directory: directory)

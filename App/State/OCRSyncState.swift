@@ -6,7 +6,7 @@ import Combine
 @MainActor
 final class OCRSyncState: ObservableObject {
     enum Phase: Equatable { case idle, waiting, checking, updating, cancelling, cancelled, completed, failed }
-    enum Completion { case completed, cancelled, failed }
+    enum Completion: Equatable { case completed, cancelled, failed }
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var progress = TextIndexProgress()
@@ -163,8 +163,13 @@ final class OCRSyncState: ObservableObject {
         case .failed: phase = .failed
         case .completed:
             // A returned scan with skipped/failed photos is not full success.
-            phase = progress.failed > 0 || progress.cloudSkipped > 0 || progress.staleSkipped > 0
+            phase = progress.incompleteCount > 0
                 ? .failed : .completed
+        }
+        if completion == .completed, phase == .failed, progress.deferredFailures > 0,
+           progress.failed == 0, progress.cloudSkipped == 0, progress.staleSkipped == 0 {
+            terminalHidden = true
+            return
         }
         scheduleTerminalHide()
     }

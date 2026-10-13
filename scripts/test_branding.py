@@ -394,17 +394,23 @@ class BrandingTests(unittest.TestCase):
         source = swift_source(ROOT / "App" / "UI" / "StartupView.swift")
         notice = self.swift_block(source, r"struct\s+LaunchPreparationNotice\s*:\s*View")
         self.assertRegex(notice, r"if\s+state\.activity\s*==\s*\.starting\s*\{")
-        self.assertRegex(notice, r"ProgressView\s*\(\s*value:\s*state\.startupProgress\.fraction\s*\)")
-        self.assertRegex(notice, r"if\s+state\.initialPreparation\s*\{")
+        self.assertRegex(notice, r"PhotoSyncProgressRing\s*\(\s*fraction:\s*state\.startupProgress\.fraction\s*,\s*reportsGeometry:\s*false\s*\)")
+        self.assertRegex(notice, r"IndexSyncReservationLayout\s*\(\s*metrics:\s*metrics\s*\)")
+        self.assertNotRegex(notice, r"\bProgressView\s*\(")
+        self.assertRegex(notice, r"if\s+state\.initialPreparation\b")
         self.assertIn('Text("首次启动耗时稍长，请耐心等待")', notice)
-        self.assertRegex(notice, r"else\s+if\s+state\.launchPhase\s*==\s*\.failed\s*\{")
-        self.assertIn('Button("重试准备搜索", action: state.retryLaunch)', notice)
-        self.assertNotRegex(notice, r"\bImage\s*\(|\bstate\.launchPhase\s*=(?!=)")
+        self.assertRegex(notice, r"if\s+state\.launchPhase\s*==\s*\.failed\s*\{")
+        self.assertIn('Button("重试", action: state.retryLaunch)', notice)
+        self.assertEqual(len(re.findall(r"\bImage\s*\(", notice)), 1)
+        self.assertIn('Image(systemName: "exclamationmark.circle")', notice)
+        self.assertNotRegex(notice, r"\bstate\.launchPhase\s*=(?!=)")
         for component in ("StartupView", "StartupContent"):
             self.assertNotIn("LaunchPreparationNotice",
                              self.swift_block(source, rf"struct\s+{component}\s*:\s*View"))
         home = swift_source(ROOT / "App" / "UI" / "ContentView.swift")
-        self.assertRegex(home, r"LaunchPreparationNotice\(\s*state:\s*state\s*\)")
+        self.assertNotIn("LaunchPreparationNotice", home)
+        footer = swift_source(ROOT / "App" / "UI" / "OCRSyncToast.swift")
+        self.assertRegex(footer, r"LaunchPreparationNotice\(\s*state:\s*state\s*,\s*isPresented:\s*isPresented\s*&&\s*showsPreparation")
 
     def test_launch_presentation_has_no_artificial_delay_calls(self):
         delay = re.compile(

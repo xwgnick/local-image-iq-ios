@@ -8,11 +8,66 @@ import ImageIQCore
 /// Native presentation only: real ContentView/embedded cleanup/Settings, with
 /// synthetic metadata services and an unreadable real Photos client. No engine,
 /// OCR, storage, network, authorization changes or deletion (even fake deletion).
-/// Four UIReview captures, not goldens or a physical nonempty-cleanup E2E claim.
+/// UIReview captures, not goldens or a physical nonempty-cleanup E2E claim.
 /// Geometry uses public SwiftUI preferences/UIKit, never private AX traversal.
 @MainActor
 final class PrimaryNavigationPresentationTests: XCTestCase {
     private let phone = CGSize(width: 393, height: 852)
+
+    func testSwipeTracksDistanceAndHandlesCancellationVelocityAndDisabledState() {
+        let navigation = PrimaryNavigationPresentation()
+        navigation.updateSwipe(horizontal: -150, vertical: 5, width: phone.width)
+        XCTAssertEqual(navigation.page, .search)
+        XCTAssertEqual(navigation.dragOffset, -150)
+        XCTAssertEqual(navigation.offset(for: .search, width: phone.width), -150)
+        XCTAssertEqual(navigation.offset(for: .cleanup, width: phone.width), phone.width - 150)
+        navigation.cancelSwipe()
+        XCTAssertEqual(navigation.dragOffset, 0)
+        navigation.updateSwipe(horizontal: -150, vertical: 200, width: phone.width)
+        XCTAssertEqual(navigation.dragOffset, 0)
+        navigation.updateSwipe(horizontal: -150, vertical: 0, width: phone.width, switchingDisabled: true)
+        XCTAssertEqual(navigation.dragOffset, 0)
+        navigation.selectSwipe(horizontal: -50, vertical: 0, predictedHorizontal: 200, width: phone.width)
+        XCTAssertEqual(navigation.page, .search)
+        navigation.selectSwipe(horizontal: -35, vertical: 0, predictedHorizontal: -200, width: phone.width)
+        XCTAssertEqual(navigation.page, .cleanup)
+        XCTAssertEqual(navigation.dragOffset, 0)
+        navigation.updateSwipe(horizontal: phone.width * 2, vertical: 0, width: phone.width)
+        XCTAssertEqual(navigation.dragOffset, phone.width)
+        navigation.selectSwipe(horizontal: 150, vertical: 0, width: phone.width)
+        XCTAssertEqual(navigation.page, .search)
+    }
+
+    func testHalfDragMovesBothRealNavigationTreesAdjacentlyWithoutActivatingCleanup() async throws {
+        let c = try await context()
+        let host = try await mountContent(c)
+        defer { host.close() }
+        let search = try XCTUnwrap(descendants(host.controller.view, of: PrimarySearchScrollAnchorView.self)
+            .first?.owningNavigationController?.viewIfLoaded)
+        let cleanupAnchor = try XCTUnwrap(descendants(host.controller.view, of: PrimaryPageAccessibilityAnchorView.self)
+            .first { !($0 is PrimarySearchScrollAnchorView) })
+        let cleanup = try XCTUnwrap(cleanupAnchor.owningNavigationController?.viewIfLoaded)
+        let searchBefore = search.convert(search.bounds, to: host.window)
+        let cleanupBefore = cleanup.convert(cleanup.bounds, to: host.window)
+        let drag = -phone.width / 2
+        c.navigation.updateSwipe(horizontal: drag, vertical: 0, width: phone.width)
+        try await settle(host)
+        let searchDuring = search.convert(search.bounds, to: host.window)
+        let cleanupDuring = cleanup.convert(cleanup.bounds, to: host.window)
+        XCTAssertEqual(searchDuring.minX, searchBefore.minX + drag, accuracy: pixel(host))
+        XCTAssertEqual(cleanupDuring.minX, cleanupBefore.minX + drag, accuracy: pixel(host))
+        XCTAssertEqual(searchDuring.maxX, cleanupDuring.minX, accuracy: pixel(host))
+        XCTAssertEqual(c.navigation.page, .search)
+        XCTAssertTrue(cleanup.accessibilityElementsHidden)
+        XCTAssertFalse(c.cleanup.hasScanned)
+        XCTAssertTrue(c.grouping.thresholds.isEmpty)
+        try capture(host, name: "main-navigation-half-drag")
+        c.navigation.cancelSwipe()
+        try await settle(host)
+        XCTAssertEqual(search.convert(search.bounds, to: host.window).minX, searchBefore.minX, accuracy: pixel(host))
+        XCTAssertEqual(cleanup.convert(cleanup.bounds, to: host.window).minX, cleanupBefore.minX, accuracy: pixel(host))
+        assertNoSideEffects(c)
+    }
 
     func testPrimarySwipeDirectionThresholdAndDisabledStateKeepNavigationPredictable() {
         let navigation = PrimaryNavigationPresentation()

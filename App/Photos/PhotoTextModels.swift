@@ -31,10 +31,22 @@ struct PhotoTextIndexMetadata: Sendable {
     let hasText: Bool
 }
 
+enum PhotoTextFailureReason: String, Sendable {
+    case imageUnavailable, recognitionFailed, unavailable
+    var explanation: String {
+        switch self {
+        case .imageUnavailable: return "暂时无法读取这张照片以识别文字。"
+        case .recognitionFailed: return "这张照片暂时无法完成本机文字识别。"
+        case .unavailable: return "暂时无法读取照片或完成文字识别。"
+        }
+    }
+}
+
 struct TextIndexCounts: Sendable, Equatable {
     var records = 0
     var withText = 0
     var reduced = 0
+    var deferredFailures = 0
 }
 
 struct TextIndexProgress: Sendable, Equatable {
@@ -46,10 +58,11 @@ struct TextIndexProgress: Sendable, Equatable {
     var reduced = 0
     var cloudSkipped = 0
     var failed = 0
+    var deferredFailures = 0
     var staleSkipped = 0
     var lastIssue: String?
 
-    var incompleteCount: Int { cloudSkipped + failed + staleSkipped }
+    var incompleteCount: Int { cloudSkipped + failed + deferredFailures + staleSkipped }
     var completionTitle: String {
         incompleteCount > 0 ? "文字索引：\(incompleteCount) 张未完成" : "文字索引已更新"
     }
@@ -58,6 +71,9 @@ struct TextIndexProgress: Sendable, Equatable {
         if cloudSkipped > 0 { reasons.append("\(cloudSkipped) 张需要从 iCloud 读取，当前未允许下载。") }
         if staleSkipped > 0 { reasons.append("\(staleSkipped) 张照片已变化，请先更新图片索引。") }
         if failed > 0 { reasons.append("\(failed) 张未能识别。\(lastIssue ?? "暂时无法读取照片或完成文字识别，可稍后手动重试。")") }
+        if deferredFailures > 0 {
+            reasons.append("\(deferredFailures) 张暂时无法识别，已记录待处理；普通开关不会反复重试，手动更新或照片变化后再试。")
+        }
         return "已完成 \(max(0, completed - incompleteCount))/\(total) 张；已保存的文字仍可搜索。" + reasons.joined()
     }
 
@@ -68,7 +84,7 @@ struct TextIndexProgress: Sendable, Equatable {
 
     /// Counters only: neither photo identifiers nor recognized text belong in UI progress.
     var summary: String {
-        "已检查 \(completed)/\(total) · 已识别 \(recognized) · 已复用 \(reused) · 含文字 \(withText) · 降低分辨率 \(reduced) · 需云端 \(cloudSkipped) · 失败 \(failed) · 已变化跳过 \(staleSkipped)"
+        "已检查 \(completed)/\(total) · 已识别 \(recognized) · 已复用 \(reused) · 含文字 \(withText) · 降低分辨率 \(reduced) · 需云端 \(cloudSkipped) · 失败 \(failed) · 待手动重试 \(deferredFailures) · 已变化跳过 \(staleSkipped)"
     }
 }
 
