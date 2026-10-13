@@ -22,7 +22,7 @@ final class PhotoCheckPresentationTests: XCTestCase {
         state.checkPhoto(id: PhotoCheckFixtures.photoID, query: PhotoCheckFixtures.checkQuery)
         await state.waitUntilIdle()
         let observed = await worker.observations()
-        XCTAssertEqual(observed.checkRequests.first?.weight, 0)
+        XCTAssertEqual(observed.checkRequests.first?.locationWeight, 0)
         XCTAssertEqual(state.photoCheckReport?.locationWeight, 0)
         XCTAssertEqual(state.locationWeight, 0.37)
     }
