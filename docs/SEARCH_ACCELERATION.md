@@ -16,6 +16,8 @@
 
 以下 build 27 数据与交付状态仅保留为历史，当前修正以本节最新原生记录为准；原生成功不等于已发新版 IPA或已达到真机速度目标。
 
+2026-10-13 补记：修正已进入 0.16.1／build41，[完整原生运行 38304428330](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38304428330) SUCCESS，App 2087 通过＋1 既有跳过，UI 20 通过＋1 既有跳过，Core 79 通过。[修正版 IPA](https://github.com/xwgnick/local-image-iq-ios/releases/download/ci-38304428330-1/LocalImageIQ-0.16.1-build41-iphoneos-unsigned.ipa) 已发布、完整下载并核验 SHA 和全量 CRC；这替代上文定点阶段“尚未生成 IPA”的交付状态，不替代真机验收。完整运行同一合成基准 SQL 11361.034 ms、恢复 4524.263 ms（2.511×），仍非手机端到端结果。
+
 **DELIVERED：0.9.0 / build 27 已完成原生验证、设备构建、发布和本地 IPA 校验，是当前已交付版本。**最终功能源码 `ca5422c9473fed58a938120e3643c6de4f19e47c`；[CI 37468042819](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37468042819)／[job 112283955268](https://github.com/xwgnick/local-image-iq-ios/actions/runs/37468042819/job/112283955268) **SUCCESS**。该 run 为 attempt 1，是功能整体第四轮验证；**第三轮也已 SUCCESS，不是四次失败**。前三轮之间 App 生产代码未变、只修测试；第四轮依据第二轮初步冷路径基准修改 bulk pack/unpack、共享去重地点数据及 Double 矩阵批量构建。
 
 > **首搜冷建回退，冷路径目标未达成：**最终合成基准首次 SQLite 建缓存 **19,863.360208 ms**，同查询原路径 **11,943.924667 ms**；原／新加速比仅 **0.6013×**，即新路径耗时约 **1.66 倍**。同进程驻留后的 3 个不同查询中位数为 **13,351.559875 → 197.506458 ms（67.600624×）**；新 worker 的 binary 首读 **5,712.517833 ms（同查询 2.0908×）**，仍不是设备重启实测。**已经证明的是合成 warm 检索组件收益，不是所有搜索 10×；真机端到端 10× 仍未验证，首搜继续优化待完成。**
