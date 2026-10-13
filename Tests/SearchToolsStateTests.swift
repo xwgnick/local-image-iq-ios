@@ -13,7 +13,7 @@ import ImageIQCore
 @MainActor
 final class SearchToolsStateTests: XCTestCase {
     func testLocationDefaultOffAndSavedWeightOnlyAppliesWhenEnabledIncludingFilterRerun() async throws {
-        let worker = SearchToolsWorker()
+        let worker = SearchToolsWorker(access: SearchToolsAccess())
         let state = AppState(worker: worker, authorizationStatus: { .authorized },
                              queryTranslator: SearchToolsTranslator())
         addTeardownBlock { await state.waitUntilIdle() }
