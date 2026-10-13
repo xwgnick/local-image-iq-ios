@@ -235,14 +235,16 @@ final class ResultPaginationTests: XCTestCase {
         await search(context)
         let session = try XCTUnwrap(context.state.resultSessionID)
         let access = context.access.snapshot
-        context.state.selection = AppState.Selection(id: context.state.results[0].id)
+        context.state.presentResultPhoto(id: context.state.results[0].id)
+        let viewer = context.state.selection
+        XCTAssertNotNil(viewer)
         context.state.libraryChanged()
-        assertCleared(context.state)
+        assertCleared(context.state, retainedViewer: viewer)
         context.state.loadMoreResults(sessionID: session, after: 12)
-        assertCleared(context.state)
+        assertCleared(context.state, retainedViewer: viewer)
         await context.state.waitUntilIdle()
         context.state.loadMoreResults(sessionID: session, after: 12)
-        assertCleared(context.state)
+        assertCleared(context.state, retainedViewer: viewer)
         XCTAssertEqual(context.access.snapshot, access)
         XCTAssertEqual(context.worker.counts.refreshes, 2)
         XCTAssertEqual(context.worker.counts.searches, 1)
@@ -499,14 +501,16 @@ final class ResultPaginationTests: XCTestCase {
                       "An explicit page validator must bypass the legacy full-response validator", file: file, line: line)
     }
 
-    private func assertCleared(_ state: AppState, file: StaticString = #filePath, line: UInt = #line) {
+    private func assertCleared(_ state: AppState, retainedViewer: AppState.Selection? = nil,
+                               file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(state.results.isEmpty, file: file, line: line)
         XCTAssertNil(state.resultSessionID, file: file, line: line)
         XCTAssertEqual(state.totalResultCount, 0, file: file, line: line)
         XCTAssertFalse(state.hasMoreResults, file: file, line: line)
         XCTAssertNil(state.completedQuery, file: file, line: line)
         XCTAssertNil(state.completedSearchQuery, file: file, line: line)
-        XCTAssertNil(state.selection, file: file, line: line)
+        XCTAssertEqual(state.selection?.id, retainedViewer?.id, file: file, line: line)
+        XCTAssertEqual(state.selection?.photoIDs, retainedViewer?.photoIDs, file: file, line: line)
     }
 
     private func assertSummary(_ actual: LibrarySummary, equals expected: LibrarySummary,

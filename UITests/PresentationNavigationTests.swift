@@ -723,9 +723,25 @@ final class PresentationNavigationTests: XCTestCase {
         expectAbsent(libraryDone)
         assertHomeOptIn()
         expectSwitch(toggle, enabled: true)
-        expectHittable(syncDetails)
-        XCTAssertEqual(syncDetails.label, "文字更新已取消", "Cancelling the request preserves the ON preference")
+        let hiddenTerminal = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: syncDetails)
+        XCTAssertEqual(XCTWaiter.wait(for: [hiddenTerminal], timeout: 8), .completed,
+                       "A cancelled terminal notice must disappear instead of remaining on the home screen.")
         expectAbsent(app.buttons["cancel-ocr-sync"])
+        app.buttons["open-library"].tap()
+        expectHittable(libraryDone)
+        openLibraryPage("library-text-index", title: "文本索引")
+        form = try sheetForm()
+        scrollTo(textStatus, in: form)
+        XCTAssertEqual(textStatus.label, "文字更新已取消", "Auto-hiding the notice preserves its Library result.")
+        scrollTo(update, in: form, allowDisabled: true)
+        XCTAssertEqual(update.label, "重试文字索引")
+        XCTAssertFalse(update.isEnabled)
+        assertNoWorkOrPermissionPrompt()
+        back(from: "文本索引", to: "我的图库")
+        libraryDone.tap()
+        expectAbsent(libraryDone)
+        expectSwitch(toggle, enabled: true)
 
         // ON is a real persisted preference, unlike session-only debug tools.
         // Relaunch through the unchanged full-model readiness/Photos-reset helper.

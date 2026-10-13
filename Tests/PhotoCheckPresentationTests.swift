@@ -487,6 +487,8 @@ final class PhotoCheckPresentationTests: XCTestCase {
         let state = await searchedState(worker: worker)
         let cancelled = expectation(description: "Replacement cancels the suspended check")
         await startHeldCheck(state, worker: worker, cancelled: cancelled)
+        let viewer = state.selection
+        XCTAssertNotNil(viewer)
         if throughBackground {
             state.enterBackground()
             assertNoGallery(state)
@@ -495,7 +497,7 @@ final class PhotoCheckPresentationTests: XCTestCase {
             state.refresh()
         }
         XCTAssertEqual(state.activity, .refreshing)
-        assertNoGallery(state)
+        assertNoGallery(state, retainedViewer: throughBackground ? nil : viewer)
         assertNoCheckResultOrError(state)
         await fulfillment(of: [cancelled], timeout: 3)
         let suspended = await worker.observations()
@@ -516,7 +518,7 @@ final class PhotoCheckPresentationTests: XCTestCase {
         XCTAssertFalse(state.isBusy)
         XCTAssertEqual(state.query, PhotoCheckFixtures.galleryQuery)
         XCTAssertEqual(state.summary.indexedCount, 512)
-        assertNoGallery(state)
+        assertNoGallery(state, retainedViewer: throughBackground ? nil : viewer)
         assertNoCheckResultOrError(state)
     }
 
@@ -573,10 +575,12 @@ final class PhotoCheckPresentationTests: XCTestCase {
         XCTAssertEqual(state.allowICloudDownload, before.allowICloudDownload, file: file, line: line)
     }
 
-    private func assertNoGallery(_ state: AppState, file: StaticString = #filePath, line: UInt = #line) {
+    private func assertNoGallery(_ state: AppState, retainedViewer: AppState.Selection? = nil,
+                                 file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(state.results.isEmpty, file: file, line: line)
         XCTAssertNil(state.completedQuery, file: file, line: line)
-        XCTAssertNil(state.selection, file: file, line: line)
+        XCTAssertEqual(state.selection?.id, retainedViewer?.id, file: file, line: line)
+        XCTAssertEqual(state.selection?.photoIDs, retainedViewer?.photoIDs, file: file, line: line)
     }
 
     private func assertNoCheckResultOrError(_ state: AppState, file: StaticString = #filePath, line: UInt = #line) {

@@ -30,6 +30,7 @@
 - 新增冻结多张照片 ID／搜索刷新保留查看会话、单张云端高清完成前后无关通知保留图片／缩放／分享、预览与元数据跨无关 generation 的合成原生回归；这些测试不代表真机 PhotoKit 或 iCloud 验收。
 - 源码 `d164829` 的 [定点原生运行 38342798591](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38342798591) 中，App 共 325 项／0 失败，包含上述高清回归、既有访问保护及 OCR／启动测试。整个 run 仍失败：后续 UI runner 被模拟器 FrontBoard 拒绝启动，未执行 UI 测试；不把 App 通过冒充整轮通过。后续校准搜索失效测试的独立查看会话期望，源码 `8dccb5a` 的 [复跑 38343662761](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38343662761) **SUCCESS**：`SearchToolsStateTests` 和真实 XCUI 主页面左右滑／垂直滚动／弹层隔离测试均通过。
 - 下一修正版版本预备为 **0.16.2／build 42**；完整原生测试、设备包构建及下载完整性校验尚未完成，不能将其当成已交付 IPA。
+- 前两轮完整验证未通过：[38344862328](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38344862328) 的品牌源码检查仍要求旧启动门槛，已区分图标启动页与首页准备提示，并保留原图标布局约束；[38345194659](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38345194659) 已通过源码／Core 79 项／真实模型转换，但 App 2097 项中两项旧刷新测试产生 5 次「必须清空 viewer selection」失败，UI 22 项中一项旧测试仍要求取消 OCR 提示常驻。两边各有 1 项既有跳过。现保留全部搜索失效、取消排空、后台清屏断言，并增加冻结查看 ID 的精确期望；UI 改为实际等待提示消失，再检查图库仍保留取消状态与重试入口。失败运行没有可交付 IPA，不能称为发布成功。
 
 ## 3. 批量分享：临时渲染 JPEG，不是原资源导出
 
