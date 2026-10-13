@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var showLibrary = false
     @State private var showSettings = false
     @State private var cleanupSurfacePresented = false
+    @State private var cleanupAllowsPrimarySwipe = false
     @State private var photoTextSurfacePresented = false
     @State private var syncSurfacePresented = false
     @State private var displayedTranslation: String?
@@ -66,15 +67,24 @@ struct ContentView: View {
                                         embedded: true, isPageActive: navigation.page == .cleanup,
                                         accessibilityActive: !hasPresentedSurface,
                                         openLibrary: openLibrary, openSettings: openSettings,
-                                        onPresentedSurfaceChanged: { cleanupSurfacePresented = $0 })
+                                        onPresentedSurfaceChanged: { cleanupSurfacePresented = $0 },
+                                        onPrimarySwipeAvailabilityChanged: { cleanupAllowsPrimarySwipe = $0 })
                     .modifier(RetainedPrimaryPage(active: navigation.page == .cleanup))
             }
             // Allocate the actual remaining height to both retained navigation
             // trees, rather than relying on a root inset crossing their bounds.
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
+            .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
+                guard !hasPresentedSurface, !keyboardVisible, state.isForeground,
+                      !switchingDisabled, !state.isSelectingResults,
+                      !similarCleanup.isSelecting,
+                      isSearchPageActive || cleanupAllowsPrimarySwipe else { return }
+                navigation.selectSwipe(horizontal: value.translation.width, vertical: value.translation.height)
+            })
 
             VStack(spacing: 0) {
+                LaunchPreparationNotice(state: state)
                 // The shared footer is outside both page trees. Cleanup still
                 // owns its separate selection controls inside its own page.
                 if isSearchPageActive {
@@ -100,6 +110,7 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(IQStyle.background)
+        .onAppear { state.homeDidAppear() }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             keyboardVisible = true
         }
@@ -459,6 +470,7 @@ struct ContentView: View {
     }
 
     var homeSubtitle: String {
+        if state.activity == .starting { return "正在准备搜索，图库与设置可以先查看" }
         guard state.canRead else { return "选择照片，开始在本机搜索" }
         guard state.summary.indexStatisticsKnown else { return "索引统计待刷新" }
         return "已索引 \(state.summary.indexedCount.formatted()) 张照片"
@@ -475,6 +487,7 @@ struct ContentView: View {
     }
 
     var libraryTitle: String {
+        if state.activity == .starting { return "正在准备搜索" }
         if state.activity == .indexing { return "正在更新索引" }
         if state.activity == .refreshing { return "正在刷新索引统计" }
         if !state.canRead { return "选择照片" }

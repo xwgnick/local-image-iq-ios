@@ -14,6 +14,27 @@ import ImageIQCore
 final class PrimaryNavigationPresentationTests: XCTestCase {
     private let phone = CGSize(width: 393, height: 852)
 
+    func testPrimarySwipeDirectionThresholdAndDisabledStateKeepNavigationPredictable() {
+        let navigation = PrimaryNavigationPresentation()
+        for (horizontal, vertical) in [(CGFloat(-40), CGFloat(0)), (-90, 90), (-100, 300), (100, 0)] {
+            navigation.selectSwipe(horizontal: horizontal, vertical: vertical)
+            XCTAssertEqual(navigation.page, .search)
+        }
+        navigation.selectSwipe(horizontal: -100, vertical: 10, switchingDisabled: true)
+        XCTAssertEqual(navigation.page, .search)
+        navigation.selectSwipe(horizontal: -100, vertical: 10)
+        XCTAssertEqual(navigation.page, .cleanup)
+        navigation.selectSwipe(horizontal: -100, vertical: 0)
+        XCTAssertEqual(navigation.page, .cleanup)
+        navigation.selectSwipe(horizontal: 100, vertical: 0, switchingDisabled: true)
+        XCTAssertEqual(navigation.page, .cleanup)
+        navigation.selectSwipe(horizontal: 100, vertical: 10)
+        XCTAssertEqual(navigation.page, .search)
+        navigation.selectSwipe(horizontal: .nan, vertical: 0)
+        navigation.selectSwipe(horizontal: -.infinity, vertical: 0)
+        XCTAssertEqual(navigation.page, .search)
+    }
+
     func testDefaultSearchAndEqualPrimaryTargetsWithoutBackgroundGrouping() async throws {
         let c = try await context()
         let host = try await mountContent(c)

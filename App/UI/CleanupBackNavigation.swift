@@ -197,6 +197,7 @@ struct CleanupNavigationUITestHost: View {
     let isPageActive: Bool
     let accessibilityActive: Bool
     let onPresentedSurfaceChanged: (Bool) -> Void
+    let onPrimarySwipeAvailabilityChanged: (Bool) -> Void
     @StateObject private var cleanup = SimilarPhotoCleanupState(
         grouping: CleanupNavigationFixtureGroups(), deletion: CleanupNavigationFixtureDeletion())
     @StateObject private var browser = SimilarPhotoGroupBrowser()
@@ -214,7 +215,8 @@ struct CleanupNavigationUITestHost: View {
                         .font(.caption).foregroundStyle(.black))
                 ) }, isPageActive: isPageActive,
                 accessibilityActive: accessibilityActive && isPageActive,
-                onPresentedSurfaceChanged: onPresentedSurfaceChanged)
+                onPresentedSurfaceChanged: onPresentedSurfaceChanged,
+                onPrimarySwipeAvailabilityChanged: onPrimarySwipeAvailabilityChanged)
                 .task {
                     guard !started else { return }
                     started = true

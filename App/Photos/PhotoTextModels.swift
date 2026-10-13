@@ -47,6 +47,19 @@ struct TextIndexProgress: Sendable, Equatable {
     var cloudSkipped = 0
     var failed = 0
     var staleSkipped = 0
+    var lastIssue: String?
+
+    var incompleteCount: Int { cloudSkipped + failed + staleSkipped }
+    var completionTitle: String {
+        incompleteCount > 0 ? "文字索引：\(incompleteCount) 张未完成" : "文字索引已更新"
+    }
+    var completionDetail: String {
+        var reasons: [String] = []
+        if cloudSkipped > 0 { reasons.append("\(cloudSkipped) 张需要从 iCloud 读取，当前未允许下载。") }
+        if staleSkipped > 0 { reasons.append("\(staleSkipped) 张照片已变化，请先更新图片索引。") }
+        if failed > 0 { reasons.append("\(failed) 张未能识别。\(lastIssue ?? "暂时无法读取照片或完成文字识别，可稍后手动重试。")") }
+        return "已完成 \(max(0, completed - incompleteCount))/\(total) 张；已保存的文字仍可搜索。" + reasons.joined()
+    }
 
     var fraction: Double {
         guard total > 0 else { return 0 }

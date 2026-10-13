@@ -17,11 +17,23 @@ final class OCRSyncState: ObservableObject {
     @Published private(set) var currentRunning = false
     @Published private(set) var enabled: Bool
     @Published private(set) var ready = false
+    @Published private(set) var terminalHidden = false
+    @Published private(set) var failureMessage: String?
     private var generation: UUID?
     private var pendingRetryReducedPreviews = false
     private(set) var retryReducedPreviews = false
+    private let completionDelay: @Sendable () async throws -> Void
+    private var completionTask: Task<Void, Never>?
+    private var completionToken: UUID?
 
-    var canShow: Bool { phase != .idle }
+    var canShow: Bool { phase != .idle && !terminalHidden }
+    var completionTitle: String {
+        progress.incompleteCount > 0 ? progress.completionTitle : "文字索引未完成"
+    }
+    var completionDetail: String {
+        if progress.incompleteCount > 0 { return progress.completionDetail }
+        return failureMessage ?? "本次文字检查未完成，已完成记录保留；可在图库查看详情并手动重试。"
+    }
     var canCancel: Bool { (pending || currentRunning) && phase != .cancelling }
     var canRetry: Bool {
         enabled && ready && !pending && !currentRunning
@@ -32,7 +44,37 @@ final class OCRSyncState: ObservableObject {
     }
 
     /// Restoring a preference is deliberately not a toggle event.
-    init(enabled: Bool = false) { self.enabled = enabled }
+    init(enabled: Bool = false, completionDelay: @escaping @Sendable () async throws -> Void = {
+        try await Task.sleep(for: .seconds(6))
+    }) {
+        self.enabled = enabled
+        self.completionDelay = completionDelay
+    }
+
+    deinit { completionTask?.cancel() }
+
+    private func resetTerminalDisplay() {
+        completionTask?.cancel()
+        completionTask = nil
+        completionToken = nil
+        terminalHidden = false
+        failureMessage = nil
+    }
+
+    private func scheduleTerminalHide() {
+        let token = UUID()
+        completionToken = token
+        let delay = completionDelay
+        completionTask = Task { @MainActor [weak self] in
+            do { try await delay() }
+            catch { return }
+            guard !Task.isCancelled, let self, self.completionToken == token,
+                  !self.currentRunning, !self.pending else { return }
+            self.terminalHidden = true
+            self.completionTask = nil
+            self.completionToken = nil
+        }
+    }
 
     func userChangedEnabled(_ value: Bool) {
         guard enabled != value else { return }
@@ -45,6 +87,7 @@ final class OCRSyncState: ObservableObject {
     /// running, non-cancelled update already satisfies a duplicate request.
     func requestUpdate(retryReducedPreviews: Bool = false) {
         guard enabled, !currentRunning || phase == .cancelling else { return }
+        resetTerminalDisplay()
         pending = true
         pendingRetryReducedPreviews = pendingRetryReducedPreviews || retryReducedPreviews
         if !currentRunning {
@@ -77,7 +120,7 @@ final class OCRSyncState: ObservableObject {
         pending = false
         pendingRetryReducedPreviews = false
         if currentRunning { phase = .cancelling }
-        else { phase = .cancelled }
+        else { phase = .cancelled; scheduleTerminalHide() }
     }
 
     /// A never-admitted toggle intent can wait through background/readiness
@@ -102,18 +145,19 @@ final class OCRSyncState: ObservableObject {
         if phase != .cancelling { phase = .updating }
     }
 
-    func finish(token: UUID, completion: Completion) {
+    func finish(token: UUID, completion: Completion, issue: String? = nil) {
         guard generation == token else { return }
         let stopping = phase == .cancelling
         generation = nil
         currentRunning = false
+        failureMessage = issue
         if pending {
             progress = TextIndexProgress()
             totalKnown = false
             phase = .waiting
             return
         }
-        if stopping { phase = .cancelled; return }
+        if stopping { phase = .cancelled; scheduleTerminalHide(); return }
         switch completion {
         case .cancelled: phase = .cancelled
         case .failed: phase = .failed
@@ -122,10 +166,12 @@ final class OCRSyncState: ObservableObject {
             phase = progress.failed > 0 || progress.cloudSkipped > 0 || progress.staleSkipped > 0
                 ? .failed : .completed
         }
+        scheduleTerminalHide()
     }
 
     func dismiss() {
         guard !currentRunning, !pending else { return }
+        resetTerminalDisplay()
         phase = .idle
     }
 }

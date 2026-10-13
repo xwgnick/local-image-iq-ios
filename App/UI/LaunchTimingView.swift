@@ -50,12 +50,12 @@ struct LaunchTimingContent: View {
     static let parallelNote = "并行总等待包含排队、各任务启动时间差，以及结束或取消时等待全部任务退出，因此可能长于最慢子任务。但准备中断会立即冻结记录，不含其后共享任务继续加载或退出的时间。子任务记录的是经过时间，不是 CPU 用时；时间重叠，不相加，也不计入总耗时加总。"
 
     static func totalLabel(for report: LaunchTimingReport) -> String {
-        report.outcome == .ready ? "到首页就绪" : "到本次准备结束"
+        report.outcome == .ready ? "到搜索就绪" : "到本次准备结束"
     }
 
     static func scope(for report: LaunchTimingReport) -> String {
         report.outcome == .ready
-            ? "从 App 开始准备到发布首页就绪；不含 iOS 启动进程及首帧绘制"
+            ? "从 App 开始准备到搜索就绪；首页已提前显示，不含 iOS 启动进程及首帧绘制"
             : "从 App 开始准备到本次准备结束；不含 iOS 启动进程及首帧绘制"
     }
 
@@ -151,6 +151,11 @@ struct LaunchTimingContent: View {
             Text(Self.totalLabel(for: report))
                 .font(.caption)
                 .foregroundStyle(IQStyle.secondary)
+            if let seconds = report.homePresentedSeconds {
+                Text("首页视图出现：\(LaunchTimingReport.duration(seconds))")
+                    .font(.caption).monospacedDigit().foregroundStyle(IQStyle.secondary)
+                    .accessibilityIdentifier("launch-timing-home-presented")
+            }
             slowest(report)
             Text(Self.scope(for: report))
                 .font(.caption)

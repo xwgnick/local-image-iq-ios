@@ -432,6 +432,7 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
         timing?.mark(.places)
         let metadata = geography()
         timing?.startupProgress?.complete(.places)
+        async let savedTextStatistics = storedTextCounts()
         let manifest: ModelManifest
         do {
             try Task.checkCancellation()
@@ -450,7 +451,7 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
         catch is CancellationError { throw CancellationError() }
         catch {
             try Task.checkCancellation()
-            let textCounts = try await storedTextCounts()
+            let textCounts = try await savedTextStatistics
             return LibrarySummary(modelIssue: error.localizedDescription,
                                   placesDescription: metadata.coverageDescription,
                                   textIndexCounts: textCounts.counts,
@@ -464,7 +465,7 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
         timing?.mark(.counts)
         let counts = try await reader().storedCounts(modelVersion: cacheVersion, geographyVersion: metadata.version)
         try Task.checkCancellation()
-        let textCounts = try await storedTextCounts()
+        let textCounts = try await savedTextStatistics
         try Task.checkCancellation()
         timing?.startupProgress?.complete(.counts)
         timing?.mark(.publish)
@@ -1012,7 +1013,12 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                     if let failure = error as? AppFailure, case .cloudOnly = failure { cloudOnly = true }
                     else { cloudOnly = PhotoImageRequestInfo.requiresNetwork(error) }
                     if !networkAllowed && cloudOnly { state.cloudSkipped += 1 }
-                    else { state.failed += 1 }
+                    else {
+                        state.failed += 1
+                        // The production recognizer exposes only fixed safe messages.
+                        state.lastIssue = (error as? VisionPhotoTextRecognizer.Failure)?.errorDescription
+                            ?? "暂时无法读取照片或完成文字识别，可稍后手动重试。"
+                    }
                     state.completed += 1
                     try validate(revision)
                     await progress(state)

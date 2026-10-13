@@ -1,9 +1,61 @@
 import XCTest
+import Combine
 @testable import LocalImageIQ
 
 /// Pure event state, no clocks, worker, Photos, storage, models or network.
 @MainActor
 final class OCRSyncStateTests: XCTestCase {
+    func testPartial7907ResultAutomaticallyHidesButRetainsFailureAndRetry() async throws {
+        let gate = OCRTerminalDelayGate()
+        let entered = expectation(description: "terminal delay started")
+        let hidden = expectation(description: "terminal display hidden")
+        let state = OCRSyncState(completionDelay: {
+            entered.fulfill()
+            await gate.wait()
+        })
+        let observer = state.$terminalHidden.filter { $0 }.sink { _ in hidden.fulfill() }
+        defer { observer.cancel() }
+        state.userChangedEnabled(true)
+        state.updateAvailability(ready: true)
+        let run = try XCTUnwrap(state.takeReadyRequest())
+        state.accept(.init(total: 7907, completed: 7907, reused: 7906, failed: 1,
+                           lastIssue: "暂时无法读取照片以识别文字，请重试更新照片文字。"), token: run)
+        state.finish(token: run, completion: .completed)
+        XCTAssertEqual(state.phase, .failed)
+        XCTAssertTrue(state.canShow)
+        XCTAssertEqual(state.completionTitle, "文字索引：1 张未完成")
+        XCTAssertTrue(state.completionDetail.contains("7906/7907"))
+        XCTAssertTrue(state.completionDetail.contains("暂时无法读取照片"))
+        await fulfillment(of: [entered], timeout: 3)
+        await gate.open()
+        await fulfillment(of: [hidden], timeout: 3)
+        XCTAssertFalse(state.canShow)
+        XCTAssertEqual(state.phase, .failed, "Hiding a notice must not erase the actual outcome.")
+        XCTAssertTrue(state.canRetry)
+        XCTAssertTrue(state.enabled)
+        XCTAssertNil(state.takeReadyRequest())
+        state.requestUpdate()
+        XCTAssertTrue(state.canShow)
+        XCTAssertFalse(state.terminalHidden)
+        XCTAssertNotNil(state.takeReadyRequest())
+    }
+
+    func testCloudAndStaleFailuresExplainTheirOwnRecoveryWithoutFalseSuccess() throws {
+        for progress in [TextIndexProgress(total: 2, completed: 2, reused: 1, cloudSkipped: 1),
+                         TextIndexProgress(total: 2, completed: 2, reused: 1, staleSkipped: 1)] {
+            let state = OCRSyncState()
+            state.userChangedEnabled(true)
+            state.updateAvailability(ready: true)
+            let run = try XCTUnwrap(state.takeReadyRequest())
+            state.accept(progress, token: run)
+            state.finish(token: run, completion: .completed)
+            XCTAssertEqual(state.phase, .failed)
+            XCTAssertEqual(state.completionTitle, "文字索引：1 张未完成")
+            XCTAssertTrue(state.completionDetail.contains(progress.cloudSkipped > 0 ? "iCloud" : "先更新图片索引"))
+            XCTAssertTrue(state.completionDetail.contains("已保存的文字仍可搜索"))
+        }
+    }
+
     func testManualQualityRetryDoesNotLeakIntoNextToggleAfterDrain() throws {
         let state = OCRSyncState()
         state.userChangedEnabled(true)
@@ -16,6 +68,20 @@ final class OCRSyncStateTests: XCTestCase {
         state.finish(token: manual, completion: .cancelled)
         XCTAssertNotNil(state.takeReadyRequest())
         XCTAssertFalse(state.retryReducedPreviews)
+    }
+
+    private actor OCRTerminalDelayGate {
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var opened = false
+        func wait() async {
+            if opened { return }
+            await withCheckedContinuation { continuation = $0 }
+        }
+        func open() {
+            opened = true
+            continuation?.resume()
+            continuation = nil
+        }
     }
 
     func testSavedOnAndRepeatedReadyNeverCreateIntent() {

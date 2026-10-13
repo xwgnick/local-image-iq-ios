@@ -28,6 +28,8 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertFalse(state.modelsReady)
         XCTAssertFalse(state.canIndex)
         XCTAssertFalse(state.canSearch)
+        XCTAssertTrue(state.showsHome, "Library/settings are reachable while models are still preparing.")
+        state.homeDidAppear()
         XCTAssertEqual(state.summary.indexedCount, 0)
         XCTAssertFalse(state.summary.authorizedCountKnown)
 
@@ -37,6 +39,7 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertEqual(state.activity, .starting)
         XCTAssertEqual(state.summary.indexedCount, 0, "A stage is not a completed summary.")
         XCTAssertFalse(state.canSearch)
+        XCTAssertTrue(state.showsHome)
         XCTAssertTrue(state.launchTimings.isEmpty, "In-flight attempts are not completed reports.")
 
         await hold.finish.open()
@@ -118,6 +121,7 @@ final class LaunchStateTests: XCTestCase {
         await state.waitUntilIdle()
 
         XCTAssertEqual(state.launchPhase, .failed)
+        XCTAssertTrue(state.showsHome, "A model failure must not replace the usable home with a launch logo.")
         XCTAssertEqual(state.summary.modelIssue, rawIssue)
         XCTAssertEqual(state.errorMessage, rawIssue)
         let message = try XCTUnwrap(state.launchIssue)

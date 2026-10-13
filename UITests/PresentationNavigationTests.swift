@@ -18,6 +18,32 @@ final class PresentationNavigationTests: XCTestCase {
         app = nil
     }
 
+    func testHorizontalSwipesSwitchPrimaryPagesButSheetAndVerticalScrollDoNot() throws {
+        launch()
+        let search = app.buttons["primary-search-tab"]
+        let cleanup = app.buttons["primary-cleanup-tab"]
+        XCTAssertTrue(search.isSelected)
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.48))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.48))
+        start.press(forDuration: 0.05, thenDragTo: end)
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"), object: cleanup)], timeout: 5), .completed)
+        end.press(forDuration: 0.05, thenDragTo: start)
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"), object: search)], timeout: 5), .completed)
+        let verticalStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.70))
+        let verticalEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.40))
+        verticalStart.press(forDuration: 0.05, thenDragTo: verticalEnd)
+        XCTAssertTrue(search.isSelected)
+        app.buttons["open-settings"].tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+        start.press(forDuration: 0.05, thenDragTo: end)
+        XCTAssertTrue(app.navigationBars["设置"].exists)
+        app.buttons["close-settings"].tap()
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        XCTAssertTrue(search.isSelected)
+    }
+
     func testHomeAndUnauthorizedLibraryNavigation() throws {
         launch()
         // Verify the real launch's settled outcome, not whether a possibly
@@ -435,7 +461,7 @@ final class PresentationNavigationTests: XCTestCase {
         let seconds = try XCTUnwrap(Double(total.label.replacingOccurrences(of: " 秒", with: "")))
         XCTAssertGreaterThan(seconds, 0, "Read the actual timed preparation, not a fixture or placeholder")
         XCTAssertTrue(app.staticTexts["本进程首次启动 · 准备完成"].exists)
-        XCTAssertTrue(app.staticTexts["从 App 开始准备到发布首页就绪；不含 iOS 启动进程及首帧绘制"].exists)
+        XCTAssertTrue(app.staticTexts["从 App 开始准备到搜索就绪；首页已提前显示，不含 iOS 启动进程及首帧绘制"].exists)
         XCTAssertFalse(app.alerts.firstMatch.exists, "Opening diagnostics must not request Photos access")
         attach("launch-timing-live")
 

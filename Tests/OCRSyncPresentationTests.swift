@@ -37,7 +37,7 @@ final class OCRSyncPresentationTests: XCTestCase {
             let run = try XCTUnwrap(state.takeReadyRequest())
             state.accept(.init(total: 4, completed: 4, recognized: failed ? 3 : 4, failed: failed ? 1 : 0), token: run)
             state.finish(token: run, completion: .completed)
-            XCTAssertEqual(toast(state).compactTitle, failed ? "文字索引未完成" : "文字索引已更新")
+            XCTAssertEqual(toast(state).compactTitle, failed ? "文字索引：1 张未完成" : "文字索引已更新")
             XCTAssertNil(state.fraction)
             XCTAssertTrue(state.canRetry)
         }

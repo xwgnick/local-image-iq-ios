@@ -75,7 +75,7 @@ struct OCRSyncToast: View {
         case .cancelling: return "正在取消文字更新"
         case .cancelled: return "文字更新已取消"
         case .completed: return "文字索引已更新"
-        case .failed: return "文字索引未完成"
+        case .failed: return state.completionTitle
         }
     }
 
@@ -88,7 +88,7 @@ struct OCRSyncToast: View {
         case .cancelling: return "正在等待当前识别和存储停止，已经成功提交的记录会保留。"
         case .cancelled: return "已完成记录保留，不会自动重试。开启文字搜索后可手动重试。"
         case .completed: return "本次增量检查已完成。降低分辨率的记录可在以后显式更新时再尝试。"
-        case .failed: return "部分项目或本次检查未完成。已完成记录保留，不会自动重试；请检查照片权限、图片索引及下方计数。iCloud 设置没有改变。"
+        case .failed: return state.completionDetail + "提示会自动收起，详情仍可在图库查看；不会自动重试，也不会改变 iCloud 设置。"
         }
     }
 

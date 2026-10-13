@@ -20,6 +20,13 @@ final class PrimaryNavigationPresentation: ObservableObject {
         guard !switchingDisabled, self.page != page else { return }
         self.page = page
     }
+
+    func selectSwipe(horizontal: CGFloat, vertical: CGFloat, switchingDisabled: Bool = false) {
+        guard horizontal.isFinite, vertical.isFinite,
+              abs(horizontal) >= 80, abs(horizontal) > abs(vertical) * 1.7 else { return }
+        if page == .search, horizontal < 0 { select(.cleanup, switchingDisabled: switchingDisabled) }
+        else if page == .cleanup, horizontal > 0 { select(.search, switchingDisabled: switchingDisabled) }
+    }
 }
 
 struct RetainedPrimaryPage: ViewModifier {

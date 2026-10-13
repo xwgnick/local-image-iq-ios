@@ -24,6 +24,41 @@ struct StartupView: View {
     }
 }
 
+@MainActor
+struct LaunchPreparationNotice: View {
+    @ObservedObject var state: AppState
+
+    var body: some View {
+        if state.activity == .starting {
+            VStack(spacing: 6) {
+                Text("正在准备搜索，完成后即可使用")
+                    .font(.caption).foregroundStyle(IQStyle.secondary)
+                ProgressView(value: state.startupProgress.fraction)
+                    .tint(IQStyle.accent)
+                    .accessibilityLabel("搜索准备进度")
+                if state.initialPreparation {
+                    Text("首次启动耗时稍长，请耐心等待")
+                        .font(.caption2).foregroundStyle(IQStyle.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("initial-preparation-hint")
+                }
+            }
+            .padding(.horizontal, 24).padding(.vertical, 8)
+            .accessibilityIdentifier("search-preparation-notice")
+        } else if state.launchPhase == .failed {
+            VStack(spacing: 6) {
+                Text(state.launchIssue ?? "搜索准备未完成，请重试。")
+                    .font(.caption).foregroundStyle(IQStyle.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("重试准备搜索", action: state.retryLaunch)
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("retry-search-preparation")
+            }
+            .padding(.horizontal, 24).padding(.vertical, 8)
+        }
+    }
+}
+
 /// Normally icon-only; the parent may supply real completed-step progress for a
 /// slow preparation. Failure remains icon-only with the original recovery actions.
 /// Rendering never starts work, requests permission or advances launch state.

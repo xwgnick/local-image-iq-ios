@@ -12,7 +12,11 @@ extension XCTestCase {
         let homeOrStartupError = XCTNSPredicateExpectation(
             predicate: NSPredicate { object, _ in
                 guard let application = object as? XCUIApplication else { return false }
-                return application.buttons["open-settings"].exists
+                let preparing = application.descendants(matching: .any)
+                    .matching(identifier: "search-preparation-notice").firstMatch.exists
+                let failed = application.buttons["retry-search-preparation"].exists
+                return (application.buttons["open-settings"].exists && !preparing)
+                    || failed
                     || application.descendants(matching: .any)
                         .matching(identifier: "startup-recovery-icon").firstMatch.exists
             }, object: app)
@@ -24,7 +28,8 @@ extension XCTestCase {
 
         let recoveryIcon = app.descendants(matching: .any)
             .matching(identifier: "startup-recovery-icon").firstMatch
-        if recoveryIcon.exists {
+        let inlineFailure = app.buttons["retry-search-preparation"]
+        if recoveryIcon.exists || inlineFailure.exists {
             let requireModels = ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"]
             guard requireModels == "0" else {
                 let message = requireModels == "1"
@@ -37,8 +42,10 @@ extension XCTestCase {
             // Only an explicitly model-free test run may use this real recovery
             // action. Keep evidence of the error; never tap/retry the icon.
             attachLaunchDiagnostics(in: app, message: "Explicit model-free run (IMAGEIQ_REQUIRE_MODELS=0): opening home after startup error")
-            XCTAssertTrue(recoveryIcon.isHittable)
-            recoveryIcon.press(forDuration: 1.2)
+            if recoveryIcon.exists {
+                XCTAssertTrue(recoveryIcon.isHittable)
+                recoveryIcon.press(forDuration: 1.2)
+            }
         }
 
         // Retain the existing 10-second home-control wait, including after the

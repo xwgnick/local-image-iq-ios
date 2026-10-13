@@ -5,6 +5,24 @@ import XCTest
 
 /// Deterministic recorder tests: no wall-clock delays, models or Photos calls.
 final class LaunchTimingTests: XCTestCase {
+    func testHomeAppearanceIsIndependentOfSearchReadinessAndDoesNotSplitWallStages() throws {
+        let clock = LaunchTimingTestClock(100)
+        let recorder = LaunchTimingRecorder(kind: .cold, now: { clock.now() })
+        clock.advance(by: 0.1)
+        recorder.homePresented()
+        clock.advance(by: 1)
+        recorder.homePresented()
+        recorder.mark(.models)
+        clock.advance(by: 16)
+        let report = try XCTUnwrap(recorder.finish(.ready))
+        XCTAssertEqual(try XCTUnwrap(report.homePresentedSeconds), 0.1, accuracy: 0.000001)
+        XCTAssertEqual(report.totalSeconds, 17.1, accuracy: 0.000001)
+        XCTAssertEqual(report.rows.map(\.stage), [.entry, .models])
+        assertPartition(report)
+        recorder.homePresented()
+        XCTAssertNil(recorder.finish(.ready))
+    }
+
     func testMarksPartitionElapsedTimeWithoutOverlappingModelParentAndChildRows() throws {
         let clock = LaunchTimingTestClock(100)
         let recorder = LaunchTimingRecorder(kind: .cold, now: { clock.now() })

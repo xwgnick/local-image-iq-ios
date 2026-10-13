@@ -22,6 +22,7 @@ struct SimilarPhotoCleanupSheet: View {
     private let openLibrary: () -> Void
     private let openSettings: () -> Void
     private let onPresentedSurfaceChanged: (Bool) -> Void
+    private let onPrimarySwipeAvailabilityChanged: (Bool) -> Void
     @State private var previousInput: CleanupPresentationInput?
     @State private var hasRequestedGrouping = false
     @State private var confirmationIntent: SimilarPhotoDeletionIntent?
@@ -37,7 +38,8 @@ struct SimilarPhotoCleanupSheet: View {
          embedded: Bool = false, isPageActive: Bool = true,
          accessibilityActive: Bool = true,
          openLibrary: @escaping () -> Void = {}, openSettings: @escaping () -> Void = {},
-         onPresentedSurfaceChanged: @escaping (Bool) -> Void = { _ in }) {
+         onPresentedSurfaceChanged: @escaping (Bool) -> Void = { _ in },
+         onPrimarySwipeAvailabilityChanged: @escaping (Bool) -> Void = { _ in }) {
         self.state = state
         self.appState = appState
         _photoSync = ObservedObject(wrappedValue: appState.photoSync)
@@ -52,6 +54,7 @@ struct SimilarPhotoCleanupSheet: View {
         self.openLibrary = openLibrary
         self.openSettings = openSettings
         self.onPresentedSurfaceChanged = onPresentedSurfaceChanged
+        self.onPrimarySwipeAvailabilityChanged = onPrimarySwipeAvailabilityChanged
     }
 
     private var libraryReady: Bool {
@@ -75,6 +78,13 @@ struct SimilarPhotoCleanupSheet: View {
             && scenePhase == .active && state.displayActive && protectedDataAvailable && appState.isForeground
     }
 
+    private var primarySwipeAvailable: Bool {
+        (!embedded || isPageActive) && accessibilityActive && !hasPresentedSurface
+            && appState.isForeground && scenePhase == .active
+            && browser.detailRoute == nil && browser.zoomFlight == nil
+            && browser.heldPhotoID == nil && !browser.selectionMode && !state.isSelecting && !state.isDeleting
+    }
+
     private var actionLayout: AnyLayout {
         dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
@@ -85,7 +95,8 @@ struct SimilarPhotoCleanupSheet: View {
         #if DEBUG
         if embedded, ProcessInfo.processInfo.environment["IMAGEIQ_CLEANUP_NAVIGATION_FIXTURE"] == "1" {
             CleanupNavigationUITestHost(appState: appState, isPageActive: isPageActive,
-                accessibilityActive: accessibilityActive, onPresentedSurfaceChanged: onPresentedSurfaceChanged)
+                accessibilityActive: accessibilityActive, onPresentedSurfaceChanged: onPresentedSurfaceChanged,
+                onPrimarySwipeAvailabilityChanged: onPrimarySwipeAvailabilityChanged)
         } else {
             cleanupBody
         }
@@ -295,6 +306,9 @@ struct SimilarPhotoCleanupSheet: View {
         }
         .onChange(of: hasPresentedSurface, initial: true) { _, presented in
             onPresentedSurfaceChanged(presented)
+        }
+        .onChange(of: primarySwipeAvailable, initial: true) { _, available in
+            onPrimarySwipeAvailabilityChanged(available)
         }
         .onChange(of: presentationInput, initial: true) { _, input in updateLifecycle(input) }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in

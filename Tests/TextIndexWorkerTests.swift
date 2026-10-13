@@ -198,6 +198,53 @@ final class TextIndexWorkerTests: XCTestCase {
         XCTAssertEqual(requests.map(\.id), ["new"])
     }
 
+    func test7906SavedRowsAndOneUnreadablePhotoFinishPartiallyAndExplainRepeatedToggle() async throws {
+        let savedIDs = (0..<7906).map { "saved-\($0)" }
+        let unreadableID = "unreadable-last"
+        let ids = savedIDs + [unreadableID]
+        let recognizer = TextWorkerRecognizer { id, _, _ in
+            XCTAssertEqual(id, unreadableID)
+            throw VisionPhotoTextRecognizer.Failure.imageUnavailable
+        }
+        let c = try context(ids, rows: ids.map { row($0, vector: []) }, recognizer: recognizer)
+        do {
+            let db = try TextIndexDatabase(directory: c.directory, readOnly: false)
+            try db.transaction {
+                try db.statement("""
+                    INSERT INTO text_records (id, revision, policy, text, pixel_width, pixel_height, is_reduced, has_text)
+                    VALUES (?, 123, ?, '', 640, 480, 0, 0)
+                    """) { statement in
+                    for id in savedIDs {
+                        try db.reset(statement)
+                        try db.bind(id, at: 1, to: statement)
+                        try db.bind(PhotoTextPolicy.version, at: 2, to: statement)
+                        try db.execute(statement)
+                    }
+                }
+            }
+        }
+        for _ in 0..<2 {
+            let trace = TextWorkerProgress()
+            let summary = try await c.worker.indexText(networkAllowed: false, retryReducedPreviews: false) {
+                await trace.append($0)
+            }
+            let progress = await trace.values()
+            XCTAssertEqual(progress.first?.completed, 7906)
+            let final = try XCTUnwrap(progress.last)
+            XCTAssertEqual(final.completed, 7907)
+            XCTAssertEqual(final.reused, 7906)
+            XCTAssertEqual(final.failed, 1)
+            XCTAssertEqual(final.lastIssue, VisionPhotoTextRecognizer.Failure.imageUnavailable.errorDescription)
+            XCTAssertTrue(final.completionDetail.contains("7906/7907"))
+            XCTAssertEqual(summary.textIndexCounts.records, 7906)
+            let absent = try await saved(unreadableID, in: c)
+            XCTAssertNil(absent, "An unreadable photo cannot be marked indexed to suppress a warning.")
+        }
+        let requests = await recognizer.requests
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.map(\.id), [unreadableID, unreadableID])
+    }
+
     func testColdReopenOf7900OldReducedRecordsReusesInOneProgressUpdate() async throws {
         let ids = (0..<7900).map { "saved-\($0)" }
         let c = try context(ids, rows: ids.map { row($0, vector: []) })
@@ -362,6 +409,8 @@ final class TextIndexWorkerTests: XCTestCase {
         XCTAssertEqual(last.failed, 1)
         XCTAssertEqual(summary.textIndexCounts.records, 1)
         XCTAssertFalse(last.summary.contains(secret))
+        XCTAssertFalse(last.completionDetail.contains(secret))
+        XCTAssertFalse(last.lastIssue?.contains(secret) ?? false)
         for id in ["a", "b", "c"] {
             let record = try await saved(id, in: c)
             XCTAssertNil(record)

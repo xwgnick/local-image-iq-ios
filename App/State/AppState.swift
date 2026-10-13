@@ -10,6 +10,9 @@ final class AppState: ObservableObject {
     struct Selection: Identifiable { let id: String }
 
     @Published private(set) var launchPhase: LaunchPhase = .pending
+    @Published private(set) var homePresented = false
+    @Published private(set) var initialPreparation = true
+    var showsHome: Bool { homePresented || launchPhase == .ready }
     @Published private(set) var launchIssue: String?
     private var launchWasRequested = false
     @Published private(set) var launchTimings: [LaunchTimingReport] = []
@@ -269,6 +272,8 @@ final class AppState: ObservableObject {
         beginLaunch(kind: .cold)
     }
 
+    func homeDidAppear() { launchTiming?.homePresented() }
+
     func retryLaunch() {
         guard launchWasRequested, launchPhase == .failed, isForeground else { return }
         beginLaunch(kind: .retry)
@@ -289,6 +294,7 @@ final class AppState: ObservableObject {
         startupProgress = steps.snapshot
         startupAttemptContext = startupContext()
         startupProgressVisible = StartupDisplayPolicy.predictsSlow(context: startupAttemptContext, history: startupHistory)
+        initialPreparation = startupProgressVisible
         let attempt = timing.id
         startupObserver = steps.observe { [weak self] snapshot in
             Task { @MainActor [weak self] in self?.accept(startupSnapshot: snapshot, attempt: attempt) }
@@ -301,6 +307,7 @@ final class AppState: ObservableObject {
         invalidateDisplayedPhotos()
         steps.complete(.entry)
         startupProgress = steps.snapshot
+        homePresented = true
         if !startupProgressVisible {
             let delay = startupVisibilityDelay
             let attempt = timing.id
@@ -975,7 +982,8 @@ final class AppState: ObservableObject {
             defer {
                 lease?.release()
                 if let ocrRun {
-                    self?.ocrSync.finish(token: ocrRun, completion: ocrCompletion)
+                    self?.ocrSync.finish(token: ocrRun, completion: ocrCompletion,
+                                         issue: self?.textIndexOperationIssue)
                     self?.refreshSyncAvailability()
                 }
             }

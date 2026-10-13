@@ -55,9 +55,9 @@ final class LaunchTimingPresentationTests: XCTestCase {
 
     func testReadyFailedAndInterruptedUseHonestMeasurementScopes() {
         let ready = report(outcome: .ready)
-        XCTAssertEqual(LaunchTimingContent.totalLabel(for: ready), "到首页就绪")
+        XCTAssertEqual(LaunchTimingContent.totalLabel(for: ready), "到搜索就绪")
         XCTAssertEqual(LaunchTimingContent.scope(for: ready),
-                       "从 App 开始准备到发布首页就绪；不含 iOS 启动进程及首帧绘制")
+                       "从 App 开始准备到搜索就绪；首页已提前显示，不含 iOS 启动进程及首帧绘制")
         for outcome in [LaunchTimingOutcome.failed, .interrupted] {
             let stopped = report(outcome: outcome)
             XCTAssertEqual(LaunchTimingContent.totalLabel(for: stopped), "到本次准备结束")

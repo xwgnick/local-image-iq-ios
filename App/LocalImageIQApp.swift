@@ -14,13 +14,13 @@ struct LocalImageIQApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if state.launchPhase == .ready {
+                if state.showsHome {
                     ContentView(state: state)
                 } else {
                     StartupView(state: state)
                 }
             }
-                .statusBarHidden(state.launchPhase != .ready)
+                .statusBarHidden(!state.showsHome)
                 .tint(IQStyle.accent)
                 .task { state.start() }
                 .onChange(of: scenePhase) { _, phase in

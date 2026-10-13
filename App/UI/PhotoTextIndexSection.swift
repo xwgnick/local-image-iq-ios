@@ -120,7 +120,7 @@ struct PhotoTextIndexStatusView: View {
         case .cancelling: return "正在取消文字更新"
         case .cancelled: return "文字更新已取消"
         case .completed: return "文字索引已更新"
-        case .failed: return "文字索引未完成"
+        case .failed: return sync.completionTitle
         }
     }
 
@@ -136,12 +136,12 @@ struct PhotoTextIndexStatusView: View {
                 : "正在等待当前识别和存储停止，已完成记录保留。停止前不能重试。"
         case .cancelled: return "已完成记录保留，不会自动重试；开启功能并就绪后可在这里手动重试。"
         case .completed: return "本次增量检查已完成。需要再次检查时可手动更新。"
-        case .failed: return "本次检查或部分项目未完成。已完成记录保留；请检查照片权限和图片索引后手动重试。"
+        case .failed: return sync.completionDetail
         }
     }
 
     var body: some View {
-        if sync.canShow {
+        if sync.phase != .idle {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.subheadline).monospacedDigit()
                     .accessibilityIdentifier("text-index-status")

@@ -61,15 +61,18 @@ struct LaunchTimingReport: Identifiable, Sendable {
     let totalSeconds: Double
     let rows: [LaunchTimingRow]
     let components: [LaunchTimingComponent]
+    let homePresentedSeconds: Double?
 
     init(id: UUID, kind: LaunchTimingKind, outcome: LaunchTimingOutcome,
-         totalSeconds: Double, rows: [LaunchTimingRow], components: [LaunchTimingComponent] = []) {
+         totalSeconds: Double, rows: [LaunchTimingRow], components: [LaunchTimingComponent] = [],
+         homePresentedSeconds: Double? = nil) {
         self.id = id
         self.kind = kind
         self.outcome = outcome
         self.totalSeconds = totalSeconds
         self.rows = rows
         self.components = components
+        self.homePresentedSeconds = homePresentedSeconds
     }
 
     // Only mutually exclusive wall rows may identify the slowest parent stage.
@@ -105,6 +108,7 @@ final class LaunchTimingRecorder: @unchecked Sendable {
     private var activeComponents: [UUID: ActiveComponent] = [:]
     private var completedComponents: [UUID: LaunchTimingComponent] = [:]
     private var finished = false
+    private var homePresentedSeconds: Double?
 
     init(kind: LaunchTimingKind, now: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
          startupProgress: StartupProgressRecorder? = nil) {
@@ -122,6 +126,13 @@ final class LaunchTimingRecorder: @unchecked Sendable {
         guard !finished, stage != next else { return }
         closeStage(at: max(last, now()))
         stage = next
+    }
+
+    func homePresented() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished, homePresentedSeconds == nil else { return }
+        homePresentedSeconds = max(0, now() - began)
     }
 
     /// The parent marks .parallelModels before spawning children, then marks
@@ -163,7 +174,8 @@ final class LaunchTimingRecorder: @unchecked Sendable {
         let totalSeconds = instant - began
         return LaunchTimingReport(id: id, kind: kind, outcome: outcome,
                                   totalSeconds: totalSeconds, rows: rows,
-                                  components: frozenComponents(totalSeconds: totalSeconds))
+                                  components: frozenComponents(totalSeconds: totalSeconds),
+                                  homePresentedSeconds: homePresentedSeconds.map { min($0, totalSeconds) })
     }
 
     // Private helpers are called only with the recorder lock held.
