@@ -38,9 +38,9 @@ final class PresentationNavigationTests: XCTestCase {
         app.buttons["open-settings"].tap()
         XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
         let settingsBar = app.navigationBars["设置"]
-        settingsBar.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+        settingsBar.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.5))
             .press(forDuration: 0.05, thenDragTo:
-                settingsBar.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)))
+                settingsBar.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5)))
         XCTAssertTrue(app.navigationBars["设置"].exists)
         app.buttons["close-settings"].tap()
         XCTAssertTrue(search.waitForExistence(timeout: 5))

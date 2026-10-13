@@ -389,7 +389,7 @@ final class SearchToolsStateTests: XCTestCase {
         assertReadOnly(c)
     }
 
-    func testQueryFiltersWeightPageSizeBackgroundAndLibraryInvalidateSelectionAndSimilarity() async throws {
+    func testQueryFiltersWeightPageSizeBackgroundAndLibraryInvalidateSearchSelectionAndSimilarity() async throws {
         for change in SearchToolsChange.allCases {
             let c = await ready()
             await search(c)
@@ -397,17 +397,20 @@ final class SearchToolsStateTests: XCTestCase {
             await c.state.waitUntilIdle()
             let old = try XCTUnwrap(c.state.resultSessionID)
             let source = try XCTUnwrap(c.state.results.first?.id)
-            c.state.selection = AppState.Selection(id: source)
+            c.state.presentResultPhoto(id: source)
+            let viewerIDs = c.state.selection?.photoIDs
             c.state.setSelectingResults(true)
             c.state.toggleResultSelection(source)
             XCTAssertNotNil(c.state.similarPhotoID)
             XCTAssertFalse(c.state.selectedResultIDs.isEmpty)
             let calls = c.worker.counts
             change.apply(to: c.state)
-            assertCleared(c.state)
+            let retainedViewer = change == .library ? source : nil
+            assertCleared(c.state, retainedViewerID: retainedViewer)
             c.state.loadMoreResults(sessionID: old, after: 12)
             await c.state.waitUntilIdle()
-            assertCleared(c.state)
+            assertCleared(c.state, retainedViewerID: retainedViewer)
+            if change == .library { XCTAssertEqual(c.state.selection?.photoIDs, viewerIDs) }
             XCTAssertEqual(c.worker.textRequests.count, calls[1])
             XCTAssertEqual(c.worker.similarRequests.count, calls[2])
             XCTAssertEqual(c.worker.refreshCalls, calls[0] + (change == .library ? 1 : 0))
@@ -599,7 +602,8 @@ final class SearchToolsStateTests: XCTestCase {
         }
     }
 
-    private func assertCleared(_ state: AppState, file: StaticString = #filePath, line: UInt = #line) {
+    private func assertCleared(_ state: AppState, retainedViewerID: String? = nil,
+                               file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(state.results.isEmpty, file: file, line: line)
         XCTAssertNil(state.resultSessionID, file: file, line: line)
         XCTAssertEqual(state.totalResultCount, 0, file: file, line: line)
@@ -610,7 +614,7 @@ final class SearchToolsStateTests: XCTestCase {
         XCTAssertFalse(state.isSelectingResults, file: file, line: line)
         XCTAssertTrue(state.selectedResultIDs.isEmpty, file: file, line: line)
         XCTAssertTrue(state.orderedSelectedResultIDs.isEmpty, file: file, line: line)
-        XCTAssertNil(state.selection, file: file, line: line)
+        XCTAssertEqual(state.selection?.id, retainedViewerID, file: file, line: line)
     }
 
     private func assertHits(_ actual: [SearchHit], _ expected: [SearchHit],
