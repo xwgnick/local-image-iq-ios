@@ -109,6 +109,21 @@ only for the large text encoder, whose native parity passed. It requires a
 distinct per-role model identity and revalidation of paired scores and actual
 IPA size. This alternative has not yet been approved or tested.
 
+The user requested measuring the actual top-five ordering impact rather than
+treating a score-error ceiling as proof of poor retrieval quality. No further
+acceptance limit has been changed and no mixed-precision switch was approved.
+The dedicated `fp16-native-ranking.yml` workflow exports both model pairs from
+the pinned checkpoint; the baseline models are compiled into the test bundle
+only through `project.fp16-diagnostic.yml`. The diagnostic compares native
+FP32 against native FP16 (not just a Torch reference), on CPU and all compute
+units using identical inputs. For every query it retains full scores/orders,
+top-one changes, top-five overlap, exact top-five order changes, pair inversions
+among shared top-five members, and baseline top-one/top-five-boundary score gaps.
+The ranker has an independent synthetic regression test. Diagnostic completion
+does not imply unchanged rankings or acceptance; data are retained as native
+test attachments. Coverage remains only six procedural images and 17 queries,
+not a representative real-photo library. No signing or upload is performed.
+
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the
 tester's device after a successful experimental delivery.

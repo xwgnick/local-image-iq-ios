@@ -1,0 +1,18 @@
+include:
+  - project.models.yml
+
+# FP32 models are test-only and never included in the application target.
+targets:
+  LocalImageIQTests:
+    sources:
+      - path: build/FP32Models/ImageEncoder.mlpackage
+        buildPhase: resources
+      - path: build/FP32Models/TextEncoder.mlpackage
+        buildPhase: resources
+      - path: build/FP32Models/model-manifest.json
+        buildPhase: resources
+schemes:
+  LocalImageIQ:
+    test:
+      environmentVariables:
+        IMAGEIQ_NATIVE_FP16_RANKING: "1"

@@ -156,6 +156,117 @@ final class GeneratedModelParityTests: XCTestCase {
         }
     }
 
+    func testNativeFP32AndFP16TopFiveRankingDiagnostics() throws {
+        guard ProcessInfo.processInfo.environment["IMAGEIQ_NATIVE_FP16_RANKING"] == "1" else {
+            throw XCTSkip("Dual-model ranking diagnostics require the explicit diagnostic project and FP32 test-only models.")
+        }
+        try withReport(computeUnits: "cpuOnly+all") { report in
+            let resources = try self.resources(report: &report)
+            try require(report.precision == "float16", "Ranking candidate must be FP16.")
+            let baseline = Bundle(for: Self.self)
+            let baselineManifestURL = try XCTUnwrap(BundleResources.url("model-manifest", extension: "json", bundle: baseline))
+            let baselineData = try Data(contentsOf: baselineManifestURL)
+            let baselineManifest = try JSONDecoder().decode(ModelManifest.self, from: baselineData)
+            let baselinePrecision = try JSONDecoder().decode(ManifestPrecision.self, from: baselineData)
+            try baselineManifest.validate()
+            try require(baselinePrecision.preprocessing.computePrecision == "float32"
+                        && baselineManifest.modelVersion == "siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b"
+                        && baselineManifest.modelVersion != resources.manifest.modelVersion,
+                        "Require the pinned FP32 baseline and a distinct FP16 candidate.")
+            let baselineImage = try XCTUnwrap(BundleResources.url("ImageEncoder", extension: "mlmodelc", bundle: baseline))
+            let baselineText = try XCTUnwrap(BundleResources.url("TextEncoder", extension: "mlmodelc", bundle: baseline))
+            report.baselineModelVersion = baselineManifest.modelVersion
+            report.coverageNote = "Diagnostic only: native FP32 versus native FP16 on the same six procedural tensors and 17 token sequences. Not real-photo quality, device performance, or acceptance."
+            for units in [MLComputeUnits.cpuOnly, .all] {
+                let original = try rankingVectors(resources, imageURL: baselineImage, textURL: baselineText, units: units)
+                let candidate = try rankingVectors(resources, imageURL: resources.imageModel,
+                                                   textURL: resources.textModel, units: units)
+                for (index, fixture) in resources.text.cases.enumerated() {
+                    func scores(_ pair: (texts: [[Float]], images: [[Float]])) -> [Double] {
+                        pair.images.map { image in
+                            zip(pair.texts[index], image).reduce(0.0) { $0 + Double($1.0) * Double($1.1) }
+                        }
+                    }
+                    report.rankings.append(try rankingMeasurement(
+                        queryID: fixture.id, units: String(describing: units),
+                        imageIDs: resources.images.cases.map(\.id),
+                        baseline: scores(original), candidate: scores(candidate)))
+                }
+            }
+            try require(report.rankings.count == 34, "Require 17 complete query rankings on each compute configuration.")
+        }
+    }
+
+    func testTopFiveRankingDiagnosticsDetectChangesAndStableTies() throws {
+        let ids = ["a", "b", "c", "d", "e", "f"]
+        let changed = try rankingMeasurement(queryID: "changed", units: "synthetic", imageIDs: ids,
+                                            baseline: [0.9, 0.8, 0.7, 0.6, 0.5, 0.4],
+                                            candidate: [0.8, 0.9, 0.7, 0.6, 0.3, 0.5])
+        XCTAssertTrue(changed.top1Changed)
+        XCTAssertTrue(changed.orderedTop5Changed)
+        XCTAssertEqual(changed.top5Overlap, 4)
+        XCTAssertEqual(changed.commonTop5PairInversions, 1)
+        XCTAssertEqual(changed.candidateOrder, ["b", "a", "c", "d", "f", "e"])
+        XCTAssertEqual(changed.baselineTop5BoundaryGap, 0.1, accuracy: 1e-10)
+        let ties = try rankingMeasurement(queryID: "ties", units: "synthetic", imageIDs: ids,
+                                         baseline: [0.5, 0.5, 0.4, 0.3, 0.2, 0.1],
+                                         candidate: [0.5, 0.5, 0.4, 0.3, 0.2, 0.1])
+        XCTAssertFalse(ties.orderedTop5Changed)
+        XCTAssertEqual(ties.top5Overlap, 5)
+        XCTAssertEqual(ties.baselineOrder, ids)
+        XCTAssertThrowsError(try rankingMeasurement(queryID: "bad", units: "synthetic",
+                                                   imageIDs: ids, baseline: [0], candidate: [0]))
+    }
+
+    private func rankingVectors(_ resources: Resources, imageURL: URL, textURL: URL,
+                                units: MLComputeUnits) throws -> (texts: [[Float]], images: [[Float]]) {
+        let texts: [[Float]] = try autoreleasepool {
+            let model = try loadModel(textURL, computeUnits: units, inputs: ["input_ids": ([1, 64], .int32)])
+            return try resources.text.cases.map { fixture in
+                try autoreleasepool { try predictText(model, ids: fixture.inputIDs).normalized }
+            }
+        }
+        let images: [[Float]] = try autoreleasepool {
+            let model = try loadModel(imageURL, computeUnits: units, inputs: ["pixel_values": (Self.imageShape, .float32)])
+            return try resources.images.cases.map { fixture in
+                try autoreleasepool {
+                    try predict(model, inputs: ["pixel_values": imageTensor(referenceTensor(fixture, resources: resources))]).normalized
+                }
+            }
+        }
+        return (texts, images)
+    }
+
+    private func rankingMeasurement(queryID: String, units: String, imageIDs: [String],
+                                    baseline: [Double], candidate: [Double]) throws -> RankingMeasurement {
+        try require(imageIDs.count > 5 && Set(imageIDs).count == imageIDs.count
+                    && baseline.count == imageIDs.count && candidate.count == imageIDs.count
+                    && baseline.allSatisfy(\.isFinite) && candidate.allSatisfy(\.isFinite),
+                    "Top-five diagnostics require finite scores for at least six unique images.")
+        func order(_ values: [Double]) -> [Int] {
+            values.indices.sorted { values[$0] == values[$1] ? $0 < $1 : values[$0] > values[$1] }
+        }
+        let left = order(baseline), right = order(candidate)
+        let leftTop = Array(left.prefix(5)), rightTop = Array(right.prefix(5))
+        let common = leftTop.filter { rightTop.contains($0) }
+        let candidateRanks = Dictionary(uniqueKeysWithValues: right.enumerated().map { ($0.element, $0.offset + 1) })
+        var inversions = 0
+        for i in common.indices {
+            for j in common.indices where j > i {
+                if let a = candidateRanks[common[i]], let b = candidateRanks[common[j]], a > b { inversions += 1 }
+            }
+        }
+        return RankingMeasurement(
+            queryID: queryID, computeUnits: units, imageIDs: imageIDs,
+            baselineScores: baseline, candidateScores: candidate,
+            baselineOrder: left.map { imageIDs[$0] }, candidateOrder: right.map { imageIDs[$0] },
+            top1Changed: left[0] != right[0], top5Overlap: common.count,
+            orderedTop5Changed: leftTop != rightTop, commonTop5PairInversions: inversions,
+            baselineTop1Gap: baseline[left[0]] - baseline[left[1]],
+            baselineTop5BoundaryGap: baseline[left[4]] - baseline[left[5]],
+            maxScoreError: zip(baseline, candidate).map { abs($0.0 - $0.1) }.max() ?? 0)
+    }
+
     func testAppEncodersModelSizedPreviewAndAllTextReferenceParity() async throws {
         // The production actor uses .all. Unlike the optional engine comparison,
         // this app-API gate runs in EVERY model-enabled build, without MainActor.
@@ -844,6 +955,23 @@ final class GeneratedModelParityTests: XCTestCase {
         let normalized: [Float]
     }
 
+    private struct RankingMeasurement: Encodable {
+        let queryID: String
+        let computeUnits: String
+        let imageIDs: [String]
+        let baselineScores: [Double]
+        let candidateScores: [Double]
+        let baselineOrder: [String]
+        let candidateOrder: [String]
+        let top1Changed: Bool
+        let top5Overlap: Int
+        let orderedTop5Changed: Bool
+        let commonTop5PairInversions: Int
+        let baselineTop1Gap: Double
+        let baselineTop5BoundaryGap: Double
+        let maxScoreError: Double
+    }
+
     private struct ManifestPrecision: Decodable {
         struct Preprocessing: Decodable { let computePrecision: String }
         struct Parity: Decodable { let acceptancePolicy: String? }
@@ -969,6 +1097,8 @@ final class GeneratedModelParityTests: XCTestCase {
         var modelBundle: String?
         var modelVersion: String?
         var precision = "float32"
+        var baselineModelVersion: String?
+        var rankings: [RankingMeasurement] = []
         var exportNativeMarkers: [String: String] = [:]
         var fixtureCounts: [String: Int] = [:]
         var coverageNote: String?

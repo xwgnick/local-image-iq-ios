@@ -141,3 +141,16 @@ test('FP16 diagnostic workflow only measures and cannot sign or upload an applic
   assert.ok(!workflow.includes('secrets.') && !workflow.includes('testflight.mjs'));
   assert.ok(!workflow.includes('xcodebuild') && !workflow.includes('altool'));
 });
+
+test('native top-five diagnostic retains FP32 models only in the test target and cannot upload', () => {
+  const workflow = fs.readFileSync(new URL('../.github/workflows/fp16-native-ranking.yml', import.meta.url), 'utf8');
+  assert.ok(workflow.includes('testNativeFP32AndFP16TopFiveRankingDiagnostics'));
+  assert.ok(workflow.includes('testTopFiveRankingDiagnosticsDetectChangesAndStableTies'));
+  assert.ok(workflow.includes('xcresulttool export attachments'));
+  assert.ok(!workflow.includes('secrets.') && !workflow.includes('testflight.mjs'));
+  assert.ok(!workflow.includes('altool') && !workflow.includes('-exportArchive'));
+  const spec = fs.readFileSync(new URL('../project.fp16-diagnostic.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  assert.ok(spec.includes('IMAGEIQ_NATIVE_FP16_RANKING: "1"'));
+  const targets = spec.split('schemes:')[0];
+  assert.deepEqual([...targets.matchAll(/^  ([A-Za-z0-9_-]+):$/gm)].map(match => match[1]), ['LocalImageIQTests']);
+});

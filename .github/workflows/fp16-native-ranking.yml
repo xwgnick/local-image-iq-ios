@@ -1,0 +1,69 @@
+name: Native FP32 versus FP16 top-five ranking diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.repository == 'xwgnick/local-image-iq-ios' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      IMAGEIQ_REQUIRE_MODELS: '1'
+      IMAGEIQ_TEST_ALL_COMPUTE_UNITS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: arm64
+      - name: Prepare baseline and candidate from the same pinned checkpoint
+        run: |
+          python -m unittest discover -s scripts -p test_static.py
+          python -m pip install shapely==2.1.2
+          python scripts/build_places.py --download
+          python -m venv .model-env
+          .model-env/bin/python -m pip install -r scripts/requirements-coreml.txt
+          .model-env/bin/python scripts/test_fp16_diagnostic.py
+          .model-env/bin/python scripts/export_models.py --download --output build/FP32Models
+          .model-env/bin/python scripts/export_models.py --download --precision float16
+          node scripts/check_project.mjs --models
+      - name: Generate diagnostic project and select simulator
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate --spec project.fp16-diagnostic.yml
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
+          node scripts/check_release.mjs --simulator "$RUNNER_TEMP/available-devices.json"
+          xcodebuild -resolvePackageDependencies -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
+            -clonedSourcePackagesDirPath build/SourcePackages
+          node scripts/prepare_legal_notices.mjs build/SourcePackages/checkouts --check
+      - name: Measure native rankings on CPU and all compute units
+        run: |
+          xcodebuild test -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath build/DerivedData -resultBundlePath build/RankingTests.xcresult \
+            -clonedSourcePackagesDirPath build/SourcePackages -disableAutomaticPackageResolution \
+            -only-testing:LocalImageIQTests/GeneratedModelParityTests/testNativeFP32AndFP16TopFiveRankingDiagnostics \
+            -only-testing:LocalImageIQTests/GeneratedModelParityTests/testTopFiveRankingDiagnosticsDetectChangesAndStableTies \
+            CODE_SIGNING_ALLOWED=NO IMAGEIQ_REQUIRE_MODELS=1
+      - name: Export synthetic ranking measurements
+        if: always()
+        run: |
+          xcrun xcresulttool export attachments --path build/RankingTests.xcresult \
+            --output-path build/fp16-native-ranking-attachments
+      - name: Retain diagnostic evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fp16-native-ranking-${{ github.run_id }}
+          path: build/fp16-native-ranking-attachments
+          if-no-files-found: error
