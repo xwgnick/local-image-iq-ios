@@ -53,10 +53,11 @@ final class MinimalSearchPresentationTests: XCTestCase {
                 defer { host.close() }
                 try await waitForHome(host, measured)
                 let image = try host.capture()
-                for (label, info, toggle) in [
-                    (SearchPhotoTextElement.label, .info, .toggle),
+                let elements: [(SearchPhotoTextElement, SearchPhotoTextElement, SearchPhotoTextElement)] = [
+                    (.label, .info, .toggle),
                     (.locationLabel, .locationInfo, .locationToggle)
-                ] {
+                ]
+                for (label, info, toggle) in elements {
                     let title = try XCTUnwrap(measured.ocr[label])
                     let icon = try XCTUnwrap(measured.ocr[info])
                     let control = try XCTUnwrap(measured.ocr[toggle])
@@ -718,36 +719,36 @@ private struct MinimalNoPhotoActions: PhotoLibraryActions {
         XCTFail("Minimal presentation must not read albums, share or mutate Photos")
         return .unexpectedWork
     }
+}
 
-    @MainActor
-    private final class MinimalHeldLaunchWorker: PhotoWorkServicing {
-        let gate = SearchRootTestGate()
-        private let summary: LibrarySummary
-        private(set) var entered = false
-        private(set) var unexpectedCalls = 0
+@MainActor
+private final class MinimalHeldLaunchWorker: PhotoWorkServicing {
+    let gate = SearchRootTestGate()
+    private let summary: LibrarySummary
+    private(set) var entered = false
+    private(set) var unexpectedCalls = 0
 
-        init(empty: Bool) {
-            summary = LibrarySummary(indexedCount: empty ? 0 : 37, modelVersion: "TEST-held-startup")
-        }
-        func refresh() async throws -> LibrarySummary { summary }
-        func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary {
-            await progress(.checkingLibrary)
-            entered = true
-            await gate.wait()
-            try Task.checkCancellation()
-            await progress(.preparingSearch)
-            return summary
-        }
-        func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary {
-            throw unexpected()
-        }
-        func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse { throw unexpected() }
-        func clear() async throws -> LibrarySummary { throw unexpected() }
-        private func unexpected() -> ControlsPresentationFailure {
-            unexpectedCalls += 1
-            XCTFail("Rendering startup must never index, clear, or search")
-            return .unexpectedWork
-        }
+    init(empty: Bool) {
+        summary = LibrarySummary(indexedCount: empty ? 0 : 37, modelVersion: "TEST-held-startup")
+    }
+    func refresh() async throws -> LibrarySummary { summary }
+    func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary {
+        await progress(.checkingLibrary)
+        entered = true
+        await gate.wait()
+        try Task.checkCancellation()
+        await progress(.preparingSearch)
+        return summary
+    }
+    func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary {
+        throw unexpected()
+    }
+    func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse { throw unexpected() }
+    func clear() async throws -> LibrarySummary { throw unexpected() }
+    private func unexpected() -> ControlsPresentationFailure {
+        unexpectedCalls += 1
+        XCTFail("Rendering startup must never index, clear, or search")
+        return .unexpectedWork
     }
 }
 
