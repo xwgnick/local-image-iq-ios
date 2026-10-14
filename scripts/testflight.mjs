@@ -163,11 +163,23 @@ async function main(mode) {
     const p12 = path.join(folder, 'distribution.p12');
     fs.writeFileSync(p12, decodeSecret(secrets.IOS_DISTRIBUTION_P12_BASE64, 'IOS_DISTRIBUTION_P12_BASE64'), { mode: 0o600 });
     fs.writeFileSync(profileFile, decodeSecret(secrets.IOS_PROVISION_PROFILE_BASE64, 'IOS_PROVISION_PROFILE_BASE64'), { mode: 0o600 });
+    // Keychain import rejects some OpenSSL 3 PBES2 exports despite a valid MAC.
+    const openssl = ['/opt/homebrew/opt/openssl@3/bin/openssl', '/usr/local/opt/openssl@3/bin/openssl'].find(fs.existsSync);
+    assert.ok(openssl, 'OpenSSL 3 is required to read the verified distribution P12');
+    const p12Password = path.join(folder, 'p12-password.txt');
+    const pem = path.join(folder, 'distribution.pem');
+    const compatibleP12 = path.join(folder, 'keychain-compatible.p12');
+    fs.writeFileSync(p12Password, secrets.IOS_DISTRIBUTION_P12_PASSWORD, { mode: 0o600 });
+    fs.writeFileSync(pem, '', { mode: 0o600 });
+    fs.writeFileSync(compatibleP12, '', { mode: 0o600 });
+    run(openssl, ['pkcs12', '-in', p12, '-passin', `file:${p12Password}`, '-noenc', '-out', pem]);
+    run(openssl, ['pkcs12', '-export', '-in', pem, '-out', compatibleP12,
+      '-passout', `file:${p12Password}`, '-keypbe', 'PBE-SHA1-3DES', '-certpbe', 'PBE-SHA1-3DES', '-macalg', 'sha1']);
     const password = randomBytes(32).toString('hex');
     run('security', ['create-keychain', '-p', password, keychain]);
     run('security', ['set-keychain-settings', '-lut', '21600', keychain]);
     run('security', ['unlock-keychain', '-p', password, keychain]);
-    run('security', ['import', p12, '-k', keychain, '-P', secrets.IOS_DISTRIBUTION_P12_PASSWORD,
+    run('security', ['import', compatibleP12, '-k', keychain, '-P', secrets.IOS_DISTRIBUTION_P12_PASSWORD,
       '-T', '/usr/bin/codesign', '-T', '/usr/bin/security']);
     run('security', ['set-key-partition-list', '-S', 'apple-tool:,apple:,codesign:', '-s', '-k', password, keychain]);
     run('security', ['list-keychains', '-d', 'user', '-s', keychain, ...previousKeychains]);

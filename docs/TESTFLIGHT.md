@@ -32,6 +32,14 @@ Only `testflight-delivery.json`, containing non-secret delivery evidence, is
 retained. This is a public source repository: audit workflow changes before
 allowing future runs to use its signing Secrets.
 
+Keychain rejected the original OpenSSL 3 PBES2 P12 during the first two
+preflights (`security import`: MAC verification failed); API authentication and
+the app lookup already passed, and no upload was attempted. The runner converts
+the original P12 with OpenSSL 3 to a temporary Keychain-compatible 3DES/SHA1 P12,
+using the same password through restricted files. This affects only the
+temporary import container, not the Apple certificate, application signature,
+API authentication or original stored P12. All intermediate files are cleaned.
+
 The final report distinguishes an attempted upload, an accepted upload and
 Apple `VALID` processing. On a failed/ambiguous upload or processing timeout,
 inspect App Store Connect and the existing run before retrying. Never blindly
