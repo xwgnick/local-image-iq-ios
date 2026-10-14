@@ -13,16 +13,7 @@ final class PresentationNavigationTests: XCTestCase {
         expectHittable(toggle)
         expectHittable(info)
         func tapLocation(_ enabled: Bool) {
-            let control = app.switches["location-search-enabled"]
-            expectHittable(control)
-            expectSwitch(control, enabled: !enabled)
-            let nativeSwitch = control.switches.firstMatch
-            XCTAssertEqual(control.switches.count, 1)
-            expectHittable(nativeSwitch)
-            let start = nativeSwitch.coordinate(withNormalizedOffset: CGVector(dx: enabled ? 0.25 : 0.75, dy: 0.5))
-            let end = nativeSwitch.coordinate(withNormalizedOffset: CGVector(dx: enabled ? 0.75 : 0.25, dy: 0.5))
-            start.press(forDuration: 0.1, thenDragTo: end)
-            expectSwitch(control, enabled: enabled)
+            dragNativeSwitch(app.switches["location-search-enabled"], enabled: enabled)
         }
         // Establish a known value using the real switch, then verify restart.
         if toggle.value as? String == "1" {
@@ -662,12 +653,7 @@ final class PresentationNavigationTests: XCTestCase {
         }
 
         func tapOptIn(_ enabled: Bool) {
-            expectHittable(toggle)
-            expectSwitch(toggle, enabled: !enabled)
-            // The identifier now belongs only to the unscaled native switch,
-            // not a Form row containing the label or the explanation.
-            toggle.coordinate(withNormalizedOffset: CGVector(dx: enabled ? 0.3 : 0.7, dy: 0.5)).tap()
-            expectSwitch(toggle, enabled: enabled)
+            dragNativeSwitch(toggle, enabled: enabled)
             assertNoWorkOrPermissionPrompt()
         }
 
@@ -1381,6 +1367,20 @@ final class PresentationNavigationTests: XCTestCase {
             }
         }
         XCTFail("Control was not reachable within eight sheet Form swipes: \(element)", file: file, line: line)
+    }
+
+    private func dragNativeSwitch(_ control: XCUIElement, enabled: Bool) {
+        expectHittable(control)
+        expectSwitch(control, enabled: !enabled)
+        let nativeSwitch = control.switches.firstMatch
+        XCTAssertEqual(control.switches.count, 1)
+        expectHittable(nativeSwitch)
+        // The identified SwiftUI wrapper includes padding; capture the inner
+        // native thumb rather than tapping a point in that larger rectangle.
+        let start = nativeSwitch.coordinate(withNormalizedOffset: CGVector(dx: enabled ? 0.25 : 0.75, dy: 0.5))
+        let end = nativeSwitch.coordinate(withNormalizedOffset: CGVector(dx: enabled ? 0.75 : 0.25, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: end)
+        expectSwitch(control, enabled: enabled)
     }
 
     private func expectSwitch(_ element: XCUIElement, enabled: Bool,

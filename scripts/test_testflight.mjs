@@ -165,6 +165,10 @@ test('TestFlight reruns real-photo acceptance with test-only FP32 models before 
   assert.ok(workflow.includes('build/testflight-native-attachments'));
   assert.ok(workflow.includes('build/testflight-real-photo.json'));
   assert.ok(workflow.includes('build/RealPhotoBenchmark/manifest.json'));
+  assert.ok(workflow.includes('-only-testing:LocalImageIQUITests/PresentationNavigationTests/testPhotoTextToggleDefersWithoutPermissionAndHasNoInlineMaintenanceButton'));
+  assert.ok(workflow.includes('-only-testing:LocalImageIQUITests/PresentationNavigationTests/testLocationEnhancementIntroductionSettingsAndRestartPersistence'));
+  assert.ok(workflow.includes("always() && steps.native.outcome != 'skipped'"));
+  assert.ok(workflow.includes('run: node scripts/testflight.mjs --ranking-check'));
   const source = fs.readFileSync(new URL('./testflight.mjs', import.meta.url), 'utf8');
   assert.ok(source.indexOf("mode === '--upload' ? readRealPhotoAcceptance()") < source.indexOf("run('xcodebuild', archiveArguments"));
   assert.ok(source.includes("xcodegen', ['generate', '--spec', 'project.testflight.yml'"));

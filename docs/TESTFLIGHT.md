@@ -272,6 +272,24 @@ same no-argument invocation as the successful real-photo diagnostic, with a
 regression test that parses both workflows' actual arguments through the
 corpus script's argument parser.
 
+Run `38613130419`, source `b6b1ce44f2548d5db5f8c8da4d79b1120afb191a`,
+job `116021330933`, completed Core 79 and App 2151 (1 existing skip),
+with zero failures. The native 240-photo comparison and diagnostic-input
+helper executed successfully; this alone does not confirm the subsequent
+per-query acceptance checker. UI executed 23 (1 existing skip), with one
+failure in the OCR opt-in test: a coordinate tap intended to turn the native
+switch OFF left its value ON and the exact-value wait timed out. No archive
+or upload was reached.
+
+The OCR test now reuses the inner native-thumb drag already validated by the
+location-persistence test; production behavior and exact state/privacy checks
+are unchanged. The full signed workflow first runs both switch-persistence
+tests with real models, then still runs the complete App/UI suite. Native
+real-photo JSON is now exported and checked without signing credentials even
+when a later UI test fails, so unrelated UI failures cannot discard the
+completed ranking/relevance evidence. Failed native/UI tests still block
+signing and upload.
+
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the
 tester's device after a successful experimental delivery.

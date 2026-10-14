@@ -75,7 +75,17 @@ jobs:
           xcodebuild -resolvePackageDependencies -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
             -clonedSourcePackagesDirPath build/SourcePackages
           node scripts/prepare_legal_notices.mjs build/SourcePackages/checkouts --check
+      - name: Verify OCR and location switch persistence before the full native suite
+        run: |
+          xcodebuild test -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath build/DerivedData -resultBundlePath build/SwitchTests.xcresult \
+            -clonedSourcePackagesDirPath build/SourcePackages -disableAutomaticPackageResolution \
+            -only-testing:LocalImageIQUITests/PresentationNavigationTests/testPhotoTextToggleDefersWithoutPermissionAndHasNoInlineMaintenanceButton \
+            -only-testing:LocalImageIQUITests/PresentationNavigationTests/testLocationEnhancementIntroductionSettingsAndRestartPersistence \
+            CODE_SIGNING_ALLOWED=NO IMAGEIQ_REQUIRE_MODELS=1 IMAGEIQ_TEST_ALL_COMPUTE_UNITS=1
       - name: Validate all native App and UI tests with real models
+        id: native
         run: |
           xcodebuild test -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
@@ -83,9 +93,14 @@ jobs:
             -clonedSourcePackagesDirPath build/SourcePackages -disableAutomaticPackageResolution \
             CODE_SIGNING_ALLOWED=NO IMAGEIQ_REQUIRE_MODELS=1 IMAGEIQ_TEST_ALL_COMPUTE_UNITS=1
       - name: Export native real-photo evidence for mandatory pre-upload acceptance
+        id: native_evidence
+        if: ${{ always() && steps.native.outcome != 'skipped' }}
         run: |
           xcrun xcresulttool export attachments --path build/TestResults.xcresult \
             --output-path build/testflight-native-attachments
+      - name: Check approved real-photo outcomes without signing credentials
+        if: ${{ always() && steps.native_evidence.outcome == 'success' }}
+        run: node scripts/testflight.mjs --ranking-check
       - name: Sign archive, verify export, upload once and confirm Apple processing
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}

@@ -158,9 +158,13 @@ function readRealPhotoAcceptance() {
     if (report.test === '-[GeneratedModelParityTests testNativeRealPhotoTopFiveRankingDiagnostics]') reports.push({ file, report });
   }
   assert.equal(reports.length, 1, 'Require exactly one native real-photo comparison report');
-  const summary = validateRealPhotoAcceptance(reports[0].report);
   const output = path.resolve('build', 'testflight-real-photo.json');
-  fs.copyFileSync(reports[0].file, output, fs.constants.COPYFILE_EXCL);
+  if (fs.existsSync(output)) {
+    assert.ok(fs.readFileSync(output).equals(fs.readFileSync(reports[0].file)), 'Retained native evidence changed');
+  } else {
+    fs.copyFileSync(reports[0].file, output, fs.constants.COPYFILE_EXCL);
+  }
+  const summary = validateRealPhotoAcceptance(reports[0].report);
   return { ...summary, reportSHA256: createHash('sha256').update(fs.readFileSync(output)).digest('hex') };
 }
 
@@ -256,6 +260,10 @@ function secretsFromEnvironment() {
 }
 
 async function main(mode) {
+  if (mode === '--ranking-check') {
+    console.log(JSON.stringify(readRealPhotoAcceptance()));
+    return;
+  }
   assert.equal(process.platform, 'darwin', 'Signing and upload require the approved macOS runner');
   assert.equal(process.env.GITHUB_REPOSITORY, 'xwgnick/local-image-iq-ios');
   assert.equal(process.env.GITHUB_REF, 'refs/heads/main', 'Never expose signing secrets to another branch');
