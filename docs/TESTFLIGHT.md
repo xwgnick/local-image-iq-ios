@@ -189,7 +189,65 @@ nDCG@5 for each model. Object presence is only a relevance proxy: no human
 semantic judgments, attribute/compositional queries, translation, personal
 library, cleanup grouping quality or real-device performance claim is made.
 This diagnostic neither changes existing acceptance gates nor signs/uploads
-build 47. Cloud execution and real-photo measurements remain pending.
+build 47.
+
+### Completed public real-photo diagnostic
+
+Run `38606281528`, source
+`8bd84fc6a86775e870cfd6a7f58499ae6614611d`, job `115997901703`,
+completed the native real-photo comparison and both metric helper tests:
+3 executed, 0 failures, no skips. This means the diagnostic executed, not that
+FP16 passed a quality acceptance gate. The corpus contains 240 unique photos,
+24 categories and 48 fixed Chinese prompts. Its SHA-256 is
+`651d5a599206f659513f18c1bc85e48912a6ccc6f6ae211c6a21cb2dbb421712`.
+
+CPU-only and all-compute configurations produced identical complete scores and
+rankings. The report contains 96 ranking and 96 relevance measurements, but
+only 48 distinct queries, with two correlated prompts per category.
+
+| Ranking agreement, per configuration | Result |
+| --- | --- |
+| Top-one result unchanged | 39/48 (81.25%) |
+| Top-five membership unchanged | 28/48 (58.33%) |
+| Exact ordered top-five unchanged | 14/48 (29.17%) |
+| Aggregate top-five overlap | 215/240 result slots (89.58%) |
+| Pair inversions among shared top-five members | 55 |
+| Maximum native FP32/FP16 score difference | 0.02077447540908979 |
+
+| Object-label relevance, per configuration | FP32 | FP16 |
+| --- | --- | --- |
+| Relevant top-five result slots | 193/240 (80.42%) | 196/240 (81.67%) |
+| Relevant first results | 41/48 (85.42%) | 40/48 (83.33%) |
+| Mean binary nDCG@5 | 0.8134834825 | 0.8239985363 |
+
+Binary nDCG@5 improved for 8 prompts, declined for 4 and was unchanged for 36.
+Declines were `boat-phrase` (0.52963 to 0.38357; relevant top-five hits 3 to 2),
+`dining table-noun` (0.85393 to 0.66084; hits remain 4),
+`cell phone-noun` (0.78601 to 0.66084; hits remain 4), and
+`cell phone-phrase` (0.68435 to 0.65481; hits remain 3).
+For example, `boat-phrase` lost the boat-labeled photo
+[`000000508101.jpg`](https://s3.amazonaws.com/images.cocodataset.org/val2017/000000508101.jpg)
+from its top five and introduced photos `000000261888.jpg` and
+`000000422836.jpg`, neither labeled with a boat. Top-one changed for
+`person-phrase`, `car-phrase`, `train-phrase`, `cat-noun`, `cat-phrase`,
+`cow-phrase`, `couch-noun`, `dining table-noun` and `cell phone-noun`;
+their baseline first/second score gaps ranged from about 0.000194 to 0.003680.
+
+Artifact `11915854432` was downloaded and its ZIP digest verified as
+`0be411da9f6f9f592b81836e61c702e4b8e9762258db7d93ae29a44787760bfc`.
+It contains the source/license manifest and native JSON measurements only,
+not photos. Full stored scores were independently re-sorted, and recorded
+top-one/top-five agreement, score errors and relevance metrics were checked
+against the corpus labels.
+
+The results demonstrate ranking changes, not uniform quality degradation:
+average top-five label precision and nDCG rose slightly, while first-result
+label relevance fell slightly and individual prompts regressed. This small,
+object-focused corpus and annotation-presence proxy cannot establish semantic
+equivalence, statistical significance or performance on a personal library.
+The existing numerical FP16 acceptance policy remains unchanged and its
+earlier native failure remains unresolved; a ranking-based experimental
+acceptance policy would need explicit approval before another build47 attempt.
 
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the
