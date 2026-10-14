@@ -56,8 +56,12 @@ Do not uninstall the existing sideloaded app. A different Bundle ID/signing team
 may install separately; preservation of that app's local index is not guaranteed
 by installing the new TestFlight identity.
 
-Current status: implementation and cloud validation pending; no TestFlight
-upload is claimed by this document.
+Current status: signed `1.0 (46)` uploaded and Apple processing confirmed
+`VALID` by run `38570734400`. Internal tester access and any export-compliance
+questions still need to be completed in App Store Connect. No App Review or
+public App Store release was requested.
+
+## Validation history
 
 Run `38552330364` passed real macOS signing preflight, Core 79, and App
 2145 (2144 passed / 1 existing device-only skip / 0 failures). UI ran 23 with
@@ -69,8 +73,8 @@ and ON/OFF restart persistence assertions remain unchanged.
 Targeted run `38560413931`, source
 `ce94543379bf3569b7891de42aa1686e7f28f22c`, executed
 `testLocationEnhancementIntroductionSettingsAndRestartPersistence` on the iOS
-simulator: 1 test passed, 0 failures, no skip. The full signed-delivery rerun
-remains pending; this targeted result alone does not claim an Apple upload.
+simulator: 1 test passed, 0 failures, no skip. This targeted result alone did
+not establish an Apple upload.
 
 Run `38561852604`, source `fa89e28e255fe372c686a1bfe590ccf72708c728`,
 passed Core 79, App 2145 (1 existing skip), and UI 23 (1 existing skip),
@@ -81,4 +85,34 @@ was attempted. The signing variant `project.testflight.yml` now scopes official
 identity and manual signing to `LocalImageIQ` only and is generated after native
 tests pass. Archive arguments pass custom variables referenced only by that
 application target, not global provisioning or bundle identity overrides.
-Actual signed archive/export/upload verification remains pending.
+The subsequent run below verifies the actual archive, export and upload.
+
+## Confirmed first TestFlight delivery
+
+- [Successful workflow run](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38570734400):
+  source `1a3a28d2bbbe595b5f80f4110d8e3ab93efabdfe`.
+- Core: 79 passed; App: 2145 executed, 2144 passed, 1 existing skip;
+  UI: 23 executed, 22 passed, 1 existing skip. Zero failures.
+- Signed arm64 Release archive and App Store export succeeded. Exported
+  identity, signature, entitlements, exact profile, privacy/legal resources,
+  Places and both production models passed validation.
+- Apple accepted the upload and confirmed `processingState=VALID` at
+  `2026-10-14T14:38:28Z`.
+- App Store Connect app ID: `6822662787`; Apple build ID:
+  `1b2233dc-8458-42cc-b99e-b65c53a609f1`.
+- Signed IPA: `1422924391` bytes, SHA-256
+  `4c055100cae06a497b28f96fffe57355f1a820d9ee3f243f273c7b6bacbb4fb8`.
+  The IPA itself is not published as a GitHub artifact.
+- [Safe delivery report artifact](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38570734400/artifacts/11903526696):
+  downloaded and its ZIP SHA-256 verified against GitHub's artifact digest,
+  `6bbcde8542284662475cbbad08bfc556d4da02c7d4c10cd119dc05f5b7b94725`.
+  The report confirms `signed=true`, `nativeValidation=true`,
+  `uploadAccepted=true`, `processingState=VALID`,
+  `publicStoreSubmission=false`.
+
+Do not rerun upload for build 46. Open App Store Connect, select the app, then
+TestFlight and `1.0 (46)`. Check export compliance based on the actual encryption
+usage before answering any questions; do not assume that local-only operation
+means no encryption. Configure an internal testing group and tester access
+there. No tester was automatically invited, and Apple processing success is not
+confirmation of installation or tester availability.
