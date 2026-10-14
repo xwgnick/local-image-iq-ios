@@ -157,9 +157,9 @@ test('FP16 delivery must change model identity and meet the actual IPA byte ceil
 });
 
 test('TestFlight reruns real-photo acceptance with test-only FP32 models before signing', () => {
-  const workflow = fs.readFileSync(new URL('../.github/workflows/testflight.yml', import.meta.url), 'utf8');
+  const workflow = fs.readFileSync(new URL('../.github/workflows/testflight.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   assert.ok(workflow.includes('export_models.py --download --precision float32 --output build/FP32Models'));
-  assert.ok(workflow.includes('prepare_real_photo_benchmark.py --download'));
+  assert.ok(workflow.includes('python scripts/prepare_real_photo_benchmark.py\n'));
   assert.ok(workflow.includes('xcodegen generate --spec project.real-photo-diagnostic.yml'));
   assert.ok(workflow.includes('xcresulttool export attachments'));
   assert.ok(workflow.includes('build/testflight-native-attachments'));

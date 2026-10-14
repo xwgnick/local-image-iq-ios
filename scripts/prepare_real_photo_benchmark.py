@@ -140,9 +140,13 @@ def prepare(output: Path, cache: Path) -> dict:
     return manifest
 
 
-if __name__ == "__main__":
+def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("build") / "RealPhotoBenchmark")
     parser.add_argument("--cache", type=Path, default=Path("build") / "coco-cache")
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+if __name__ == "__main__":
+    args = arguments()
     prepare(args.output, args.cache)

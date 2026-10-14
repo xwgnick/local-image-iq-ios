@@ -263,6 +263,15 @@ must still be at most 900 MiB. FP32 models and public photos remain test-only;
 only source/license metadata, measurements and safe delivery evidence are
 published. Build47 has not yet been signed or uploaded under this policy.
 
+The first full v2 attempt, run `38611880124` from
+`3e70e89d3828240005eaf2a86830f12066432cc1`, passed source tests, Core 79 and
+both model exports, then stopped during resource preparation: its workflow
+incorrectly passed unsupported `--download` to the corpus preparation script.
+No App/UI execution, archive or upload was reached. The workflow now uses the
+same no-argument invocation as the successful real-photo diagnostic, with a
+regression test that parses both workflows' actual arguments through the
+corpus script's argument parser.
+
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the
 tester's device after a successful experimental delivery.

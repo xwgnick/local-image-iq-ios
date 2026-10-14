@@ -63,7 +63,7 @@ jobs:
           .model-env/bin/python scripts/test_fp16_diagnostic.py
           .model-env/bin/python scripts/export_models.py --download --precision float16
           .model-env/bin/python scripts/export_models.py --download --precision float32 --output build/FP32Models
-          python scripts/prepare_real_photo_benchmark.py --download
+          python scripts/prepare_real_photo_benchmark.py
           node scripts/check_project.mjs --models
       - name: Generate project and select simulator
         run: |

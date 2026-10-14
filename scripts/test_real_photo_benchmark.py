@@ -1,9 +1,11 @@
 """Stdlib-only corpus selection tests; never downloads photos."""
 
 import copy
+from pathlib import Path
+import shlex
 import unittest
 
-from prepare_real_photo_benchmark import CATEGORIES, IMAGE_COUNT, LICENSE_URL, PER_CATEGORY, select_images
+from prepare_real_photo_benchmark import CATEGORIES, IMAGE_COUNT, LICENSE_URL, PER_CATEGORY, arguments, select_images
 
 
 def fixture():
@@ -16,6 +18,17 @@ def fixture():
 
 
 class RealPhotoSelectionTests(unittest.TestCase):
+    def test_workflows_use_arguments_supported_by_the_actual_corpus_parser(self):
+        root = Path(__file__).resolve().parents[1]
+        for name in ("testflight.yml", "fp16-native-ranking.yml"):
+            text = (root / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            commands = [line.split("python ", 1)[1] for line in text.splitlines()
+                        if "python scripts/prepare_real_photo_benchmark.py" in line]
+            self.assertEqual(len(commands), 1, name)
+            parsed = arguments(shlex.split(commands[0])[1:])
+            self.assertEqual(parsed.output, Path("build") / "RealPhotoBenchmark")
+            self.assertEqual(parsed.cache, Path("build") / "coco-cache")
+
     def test_fixed_licensed_selection_and_positive_coverage(self):
         data = fixture()
         images, labels = select_images(data)
