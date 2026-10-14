@@ -46,6 +46,36 @@ completion of this diagnostic workflow means measurements were collected, not
 that FP16 passed acceptance or was delivered. Real-photo quality is still
 outside the procedural fixture coverage.
 
+Diagnostic run `38590381626`, source
+`9d81b38a3e683ef31ced355a3b3ce2b41a474b5b`, completed all 23 fixtures
+(6 image, 17 text). Its 32 static and 3 numerical-helper tests passed.
+The measurements are:
+
+| Measurement | Image | Text |
+| --- | --- | --- |
+| Maximum raw component error vs FP32 reference | 0.043406322598457336 | 0.070577621459960938 |
+| Minimum vector cosine vs FP32 reference | 0.9997303931246716 | 0.99996642483864939 |
+| Cases failing the unchanged 0.001 raw error limit | 6/6 | 17/17 |
+| Cases failing the unchanged 0.999 cosine floor | 0/6 | 0/17 |
+| Uncompiled FP16 package bytes | 184744518 | 564752123 |
+
+Maximum paired text/image cosine score error was `0.0015915427430773788`,
+above the unchanged `0.0001` limit. Across 17 queries against six procedural
+images, top-1 and top-3 membership did not change. This is small synthetic
+coverage, not evidence of unchanged real-photo rankings or cleanup clusters.
+Combined uncompiled packages total `749496641` bytes; no IPA or actual App Store
+download size was measured.
+
+The report explicitly says `passed=false`, `diagnosticOnly=true`,
+`modelsPublished=false`, model version
+`siglip2-b16-224-v1-4db0c5989d73c0669fd1909e8e2d91502351b75390a9cee1a2bc0ba2ec3b6c62`.
+Artifact `11906514421` was downloaded and its ZIP SHA-256 checked against
+GitHub's digest:
+`ded433da54203bcd4b714e53848b5e05ce8242297c16f34c59c4168ca64cd6a3`.
+No acceptance thresholds changed, no native FP16 tests or signed archive ran,
+and no build47 upload occurred. A separate FP16 acceptance decision remains
+pending.
+
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the
 tester's device after a successful experimental delivery.
