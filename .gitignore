@@ -12,6 +12,7 @@ __pycache__/
 *.pyc
 *.sqlite*
 *.ipa
+*.p8
 *.p12
 *.mobileprovision
 .env
