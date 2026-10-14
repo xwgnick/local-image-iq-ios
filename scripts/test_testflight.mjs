@@ -154,3 +154,16 @@ test('native top-five diagnostic retains FP32 models only in the test target and
   const targets = spec.split('schemes:')[0];
   assert.deepEqual([...targets.matchAll(/^  ([A-Za-z0-9_-]+):$/gm)].map(match => match[1]), ['LocalImageIQTests']);
 });
+
+test('real-photo diagnostics are opt-in, test-only and do not publish photographs', () => {
+  const workflow = fs.readFileSync(new URL('../.github/workflows/fp16-native-ranking.yml', import.meta.url), 'utf8');
+  assert.ok(workflow.includes('type: boolean'));
+  assert.ok(workflow.includes('testNativeRealPhotoTopFiveRankingDiagnostics'));
+  assert.ok(workflow.includes('testRealPhotoRelevanceMetricsUseLabelsRatherThanBaselineRankAgreement'));
+  assert.ok(workflow.includes('build/RealPhotoBenchmark/manifest.json'));
+  assert.ok(!workflow.includes('path: build/RealPhotoBenchmark\n'));
+  const spec = fs.readFileSync(new URL('../project.real-photo-diagnostic.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  assert.ok(spec.includes('IMAGEIQ_REAL_PHOTO_RANKING: "1"'));
+  assert.deepEqual([...spec.split('schemes:')[0].matchAll(/^  ([A-Za-z0-9_-]+):$/gm)].map(match => match[1]),
+    ['LocalImageIQTests']);
+});

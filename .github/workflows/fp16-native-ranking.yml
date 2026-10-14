@@ -2,6 +2,11 @@ name: Native FP32 versus FP16 top-five ranking diagnostics
 
 on:
   workflow_dispatch:
+    inputs:
+      real_photos:
+        description: Use 240 licensed COCO photos and 48 fixed Chinese queries
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -10,7 +15,7 @@ jobs:
   diagnose:
     if: github.repository == 'xwgnick/local-image-iq-ios' && github.ref == 'refs/heads/main'
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       IMAGEIQ_REQUIRE_MODELS: '1'
@@ -29,6 +34,7 @@ jobs:
       - name: Prepare baseline and candidate from the same pinned checkpoint
         run: |
           python -m unittest discover -s scripts -p test_static.py
+          python -m unittest discover -s scripts -p test_real_photo_benchmark.py
           python -m pip install shapely==2.1.2
           python scripts/build_places.py --download
           python -m venv .model-env
@@ -37,10 +43,17 @@ jobs:
           .model-env/bin/python scripts/export_models.py --download --output build/FP32Models
           .model-env/bin/python scripts/export_models.py --download --precision float16
           node scripts/check_project.mjs --models
+      - name: Prepare pinned licensed real-photo corpus
+        if: inputs.real_photos
+        run: python scripts/prepare_real_photo_benchmark.py
       - name: Generate diagnostic project and select simulator
         run: |
           command -v xcodegen >/dev/null || brew install xcodegen
-          xcodegen generate --spec project.fp16-diagnostic.yml
+          if [ "${{ inputs.real_photos }}" = "true" ]; then
+            xcodegen generate --spec project.real-photo-diagnostic.yml
+          else
+            xcodegen generate --spec project.fp16-diagnostic.yml
+          fi
           xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
           node scripts/check_release.mjs --simulator "$RUNNER_TEMP/available-devices.json"
           xcodebuild -resolvePackageDependencies -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
@@ -48,14 +61,20 @@ jobs:
           node scripts/prepare_legal_notices.mjs build/SourcePackages/checkouts --check
       - name: Measure native rankings on CPU and all compute units
         run: |
+          selectors=("-only-testing:LocalImageIQTests/GeneratedModelParityTests/testTopFiveRankingDiagnosticsDetectChangesAndStableTies")
+          if [ "${{ inputs.real_photos }}" = "true" ]; then
+            selectors+=("-only-testing:LocalImageIQTests/GeneratedModelParityTests/testNativeRealPhotoTopFiveRankingDiagnostics")
+            selectors+=("-only-testing:LocalImageIQTests/GeneratedModelParityTests/testRealPhotoRelevanceMetricsUseLabelsRatherThanBaselineRankAgreement")
+          else
+            selectors+=("-only-testing:LocalImageIQTests/GeneratedModelParityTests/testNativeFP32AndFP16TopFiveRankingDiagnostics")
+          fi
           xcodebuild test -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -derivedDataPath build/DerivedData -resultBundlePath build/RankingTests.xcresult \
             -clonedSourcePackagesDirPath build/SourcePackages -disableAutomaticPackageResolution \
-            -only-testing:LocalImageIQTests/GeneratedModelParityTests/testNativeFP32AndFP16TopFiveRankingDiagnostics \
-            -only-testing:LocalImageIQTests/GeneratedModelParityTests/testTopFiveRankingDiagnosticsDetectChangesAndStableTies \
+            "${selectors[@]}" \
             CODE_SIGNING_ALLOWED=NO IMAGEIQ_REQUIRE_MODELS=1
-      - name: Export synthetic ranking measurements
+      - name: Export ranking measurements without publishing photographs
         if: always()
         run: |
           xcrun xcresulttool export attachments --path build/RankingTests.xcresult \
@@ -65,5 +84,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fp16-native-ranking-${{ github.run_id }}
-          path: build/fp16-native-ranking-attachments
+          path: |
+            build/fp16-native-ranking-attachments
+            build/RealPhotoBenchmark/manifest.json
           if-no-files-found: error

@@ -162,23 +162,10 @@ final class GeneratedModelParityTests: XCTestCase {
         }
         try withReport(computeUnits: "cpuOnly+all") { report in
             let resources = try self.resources(report: &report)
-            try require(report.precision == "float16", "Ranking candidate must be FP16.")
-            let baseline = Bundle(for: Self.self)
-            let baselineManifestURL = try XCTUnwrap(BundleResources.url("model-manifest", extension: "json", bundle: baseline))
-            let baselineData = try Data(contentsOf: baselineManifestURL)
-            let baselineManifest = try JSONDecoder().decode(ModelManifest.self, from: baselineData)
-            let baselinePrecision = try JSONDecoder().decode(ManifestPrecision.self, from: baselineData)
-            try baselineManifest.validate()
-            try require(baselinePrecision.preprocessing.computePrecision == "float32"
-                        && baselineManifest.modelVersion == "siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b"
-                        && baselineManifest.modelVersion != resources.manifest.modelVersion,
-                        "Require the pinned FP32 baseline and a distinct FP16 candidate.")
-            let baselineImage = try XCTUnwrap(BundleResources.url("ImageEncoder", extension: "mlmodelc", bundle: baseline))
-            let baselineText = try XCTUnwrap(BundleResources.url("TextEncoder", extension: "mlmodelc", bundle: baseline))
-            report.baselineModelVersion = baselineManifest.modelVersion
+            let baseline = try baselineModels(resources, report: &report)
             report.coverageNote = "Diagnostic only: native FP32 versus native FP16 on the same six procedural tensors and 17 token sequences. Not real-photo quality, device performance, or acceptance."
             for units in [MLComputeUnits.cpuOnly, .all] {
-                let original = try rankingVectors(resources, imageURL: baselineImage, textURL: baselineText, units: units)
+                let original = try rankingVectors(resources, imageURL: baseline.image, textURL: baseline.text, units: units)
                 let candidate = try rankingVectors(resources, imageURL: resources.imageModel,
                                                    textURL: resources.textModel, units: units)
                 for (index, fixture) in resources.text.cases.enumerated() {
@@ -195,6 +182,134 @@ final class GeneratedModelParityTests: XCTestCase {
             }
             try require(report.rankings.count == 34, "Require 17 complete query rankings on each compute configuration.")
         }
+    }
+
+    func testNativeRealPhotoTopFiveRankingDiagnostics() async throws {
+        guard ProcessInfo.processInfo.environment["IMAGEIQ_REAL_PHOTO_RANKING"] == "1" else {
+            throw XCTSkip("Public real-photo diagnostics require the explicit licensed corpus and dual-model project.")
+        }
+        try await withAsyncReport(computeUnits: "cpuOnly+all") { report in
+            let resources = try self.resources(report: &report)
+            let baseline = try baselineModels(resources, report: &report)
+            let root = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "RealPhotoBenchmark", withExtension: nil))
+            let document = try JSONDecoder().decode(RealPhotoDocument.self,
+                                                   from: Data(contentsOf: root.appendingPathComponent("manifest.json")))
+            try require(document.schemaVersion == 1 && document.dataset == "COCO2017-val-CCBY2-top5-v1"
+                        && document.annotationsSHA256 == "e8c7f7908f1d7278341fae127d0da654f102f11bd7b21d8aeefa635b8c810b6f"
+                        && document.corpusSHA256.count == 64 && document.images.count == 240
+                        && document.queries.count == 48 && Set(document.images.map(\.id)).count == 240
+                        && Set(document.queries.map(\.id)).count == 48
+                        && Set(document.queries.map(\.category)).count == 24,
+                        "Real-photo corpus identity, dimensions or coverage changed.")
+            for image in document.images {
+                try require(image.licenseURL == "https://creativecommons.org/licenses/by/2.0/"
+                            && image.file.range(of: #"^\d{12}\.jpg$"#, options: .regularExpression) != nil,
+                            "Require licensed public JPEGs with flat COCO filenames.")
+            }
+            let tokenizer = try await self.tokenizer(resources)
+            let tokens = try document.queries.map { try tokenizer.encode($0.text).inputIDs }
+            report.dataset = document.dataset
+            report.corpusSHA256 = document.corpusSHA256
+            report.fixtureCounts = ["realPhotos": 240, "chineseQueries": 48, "objectCategories": 24]
+            report.coverageNote = "Diagnostic only: 240 CC-BY COCO validation photos, 24 object classes, two fixed Chinese prompts/class. Native app JPEG preprocessing and tokenizer; object-presence labels are relevance proxies, not human judgments. No private library, translation, real-device performance or cleanup clustering evaluated."
+            let ids = document.images.map(\.id)
+            for units in [MLComputeUnits.cpuOnly, .all] {
+                let original = try realPhotoVectors(document, root: root, tokens: tokens,
+                                                    imageURL: baseline.image, textURL: baseline.text, units: units)
+                let candidate = try realPhotoVectors(document, root: root, tokens: tokens,
+                                                     imageURL: resources.imageModel, textURL: resources.textModel, units: units)
+                for (index, query) in document.queries.enumerated() {
+                    func scores(_ pair: (texts: [[Float]], images: [[Float]])) -> [Double] {
+                        pair.images.map { image in
+                            zip(pair.texts[index], image).reduce(0.0) { $0 + Double($1.0) * Double($1.1) }
+                        }
+                    }
+                    let ranking = try rankingMeasurement(queryID: query.id, units: String(describing: units),
+                                                         imageIDs: ids, baseline: scores(original), candidate: scores(candidate))
+                    let relevant = Set(document.images.filter { $0.categories.contains(query.category) }.map(\.id))
+                    try require(relevant.count >= 8, "Each query must retain at least eight annotated positives.")
+                    report.rankings.append(ranking)
+                    report.relevance.append(try relevanceMeasurement(ranking, text: query.text,
+                                                                    category: query.category, relevant: relevant))
+                }
+            }
+            try require(report.rankings.count == 96 && report.relevance.count == 96,
+                        "Require 48 complete query comparisons on each compute configuration.")
+        }
+    }
+
+    func testRealPhotoRelevanceMetricsUseLabelsRatherThanBaselineRankAgreement() throws {
+        let ids = ["a", "b", "c", "d", "e", "f"]
+        let ranking = try rankingMeasurement(queryID: "query", units: "synthetic", imageIDs: ids,
+                                            baseline: [0.9, 0.8, 0.7, 0.6, 0.5, 0.4],
+                                            candidate: [0.8, 0.7, 0.6, 0.5, 0.4, 0.9])
+        let relevance = try relevanceMeasurement(ranking, text: "query", category: "object", relevant: Set(ids.prefix(5)))
+        XCTAssertEqual(relevance.baselineTop5Relevant, 5)
+        XCTAssertEqual(relevance.candidateTop5Relevant, 4)
+        XCTAssertEqual(relevance.baselineNDCG5, 1, accuracy: 1e-10)
+        XCTAssertLessThan(relevance.candidateNDCG5, relevance.baselineNDCG5)
+        XCTAssertTrue(relevance.baselineTop1Relevant)
+        XCTAssertFalse(relevance.candidateTop1Relevant)
+        let equallyRelevant = try relevanceMeasurement(ranking, text: "query", category: "object", relevant: Set(ids))
+        XCTAssertEqual(equallyRelevant.candidateTop5Relevant, equallyRelevant.baselineTop5Relevant)
+        XCTAssertEqual(equallyRelevant.candidateNDCG5, 1, accuracy: 1e-10)
+        XCTAssertThrowsError(try relevanceMeasurement(ranking, text: "query", category: "object", relevant: []))
+    }
+
+    private func baselineModels(_ resources: Resources, report: inout Report) throws -> (image: URL, text: URL) {
+        try require(report.precision == "float16", "Ranking candidate must be FP16.")
+        let bundle = Bundle(for: Self.self)
+        let url = try XCTUnwrap(BundleResources.url("model-manifest", extension: "json", bundle: bundle))
+        let data = try Data(contentsOf: url)
+        let manifest = try JSONDecoder().decode(ModelManifest.self, from: data)
+        let precision = try JSONDecoder().decode(ManifestPrecision.self, from: data)
+        try manifest.validate()
+        try require(precision.preprocessing.computePrecision == "float32"
+                    && manifest.modelVersion == "siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b"
+                    && manifest.modelVersion != resources.manifest.modelVersion,
+                    "Require the pinned FP32 baseline and a distinct FP16 candidate.")
+        report.baselineModelVersion = manifest.modelVersion
+        return (try XCTUnwrap(BundleResources.url("ImageEncoder", extension: "mlmodelc", bundle: bundle)),
+                try XCTUnwrap(BundleResources.url("TextEncoder", extension: "mlmodelc", bundle: bundle)))
+    }
+
+    private func realPhotoVectors(_ document: RealPhotoDocument, root: URL, tokens: [[Int32]],
+                                  imageURL: URL, textURL: URL,
+                                  units: MLComputeUnits) throws -> (texts: [[Float]], images: [[Float]]) {
+        let texts: [[Float]] = try autoreleasepool {
+            let model = try loadModel(textURL, computeUnits: units, inputs: ["input_ids": ([1, 64], .int32)])
+            return try tokens.map { ids in try autoreleasepool { try predictText(model, ids: ids).normalized } }
+        }
+        let images: [[Float]] = try autoreleasepool {
+            let model = try loadModel(imageURL, computeUnits: units, inputs: ["pixel_values": (Self.imageShape, .float32)])
+            return try document.images.map { image in
+                try autoreleasepool {
+                    let data = try checkedData(root.appendingPathComponent(image.file), sha256: image.sha256)
+                    let tensor = try imageTensor(ImagePreprocessor.values(data: data))
+                    return try predict(model, inputs: ["pixel_values": tensor]).normalized
+                }
+            }
+        }
+        return (texts, images)
+    }
+
+    private func relevanceMeasurement(_ ranking: RankingMeasurement, text: String, category: String,
+                                      relevant: Set<String>) throws -> RelevanceMeasurement {
+        try require(!relevant.isEmpty && relevant.isSubset(of: Set(ranking.imageIDs)), "Invalid relevance labels.")
+        let ideal = (0..<min(5, relevant.count)).reduce(0.0) { $0 + 1 / log2(Double($1 + 2)) }
+        func gain(_ order: [String]) -> Double {
+            order.prefix(5).enumerated().reduce(0.0) {
+                $0 + (relevant.contains($1.element) ? 1 / log2(Double($1.offset + 2)) : 0)
+            } / ideal
+        }
+        return RelevanceMeasurement(
+            queryID: ranking.queryID, text: text, category: category, computeUnits: ranking.computeUnits,
+            relevantImageCount: relevant.count,
+            baselineTop5Relevant: ranking.baselineOrder.prefix(5).filter { relevant.contains($0) }.count,
+            candidateTop5Relevant: ranking.candidateOrder.prefix(5).filter { relevant.contains($0) }.count,
+            baselineTop1Relevant: relevant.contains(ranking.baselineOrder[0]),
+            candidateTop1Relevant: relevant.contains(ranking.candidateOrder[0]),
+            baselineNDCG5: gain(ranking.baselineOrder), candidateNDCG5: gain(ranking.candidateOrder))
     }
 
     func testTopFiveRankingDiagnosticsDetectChangesAndStableTies() throws {
@@ -972,6 +1087,41 @@ final class GeneratedModelParityTests: XCTestCase {
         let maxScoreError: Double
     }
 
+    private struct RealPhotoDocument: Decodable {
+        struct Photo: Decodable {
+            let id: String
+            let file: String
+            let sha256: String
+            let categories: [String]
+            let licenseURL: String
+        }
+        struct Query: Decodable {
+            let id: String
+            let text: String
+            let category: String
+        }
+        let schemaVersion: Int
+        let dataset: String
+        let annotationsSHA256: String
+        let corpusSHA256: String
+        let images: [Photo]
+        let queries: [Query]
+    }
+
+    private struct RelevanceMeasurement: Encodable {
+        let queryID: String
+        let text: String
+        let category: String
+        let computeUnits: String
+        let relevantImageCount: Int
+        let baselineTop5Relevant: Int
+        let candidateTop5Relevant: Int
+        let baselineTop1Relevant: Bool
+        let candidateTop1Relevant: Bool
+        let baselineNDCG5: Double
+        let candidateNDCG5: Double
+    }
+
     private struct ManifestPrecision: Decodable {
         struct Preprocessing: Decodable { let computePrecision: String }
         struct Parity: Decodable { let acceptancePolicy: String? }
@@ -1099,6 +1249,9 @@ final class GeneratedModelParityTests: XCTestCase {
         var precision = "float32"
         var baselineModelVersion: String?
         var rankings: [RankingMeasurement] = []
+        var dataset: String?
+        var corpusSHA256: String?
+        var relevance: [RelevanceMeasurement] = []
         var exportNativeMarkers: [String: String] = [:]
         var fixtureCounts: [String: Int] = [:]
         var coverageNote: String?

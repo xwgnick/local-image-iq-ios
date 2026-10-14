@@ -161,6 +161,36 @@ No scalar gate was relaxed, no mixed-precision switch made, and no build47
 was signed or uploaded. A representative real-photo ranking/relevance
 evaluation is still needed before a ranking-based quality acceptance decision.
 
+The user approved a public real-photo diagnostic. `fp16-native-ranking.yml`
+now has an opt-in `real_photos` boolean, leaving the synthetic diagnostic as
+the default. `prepare_real_photo_benchmark.py` uses the official COCO 2017
+validation annotations with pinned archive and JSON SHA-256, filters strictly
+to the image-level CC BY 2.0 license, and selects 240 distinct images in a fixed
+hash order, including at least eight positives for each of 24 predetermined
+object categories. Two fixed Chinese queries per category give 48 prompts;
+these are correlated prompts, not 48 independent categories. Selection and
+queries are fixed before looking at model predictions.
+
+The [COCO terms](https://cocodataset.org/dataset/termsofuse.htm) distinguish
+CC BY 4.0 annotations from each photo's Flickr license. The benchmark retains
+each photo's source/Flickr URL, license and SHA-256, records COCO annotation
+credit and the native preprocessing transformation, and publishes metadata
+and measurements only, not photographs or model bundles. License filtering
+uses the pinned COCO license record, not an invented blanket license for all
+COCO images. All photo downloads use the TLS-valid official Amazon S3 bucket
+endpoint; certificate verification is never disabled.
+
+`project.real-photo-diagnostic.yml` adds the corpus to the test target only.
+Native FP32/FP16 comparisons use the same original JPEGs through app
+preprocessing and the same native Chinese tokenizer, on CPU and all compute
+units. Results retain full score/order data, top-five drift and score gaps,
+plus annotated-object hits in the top five, top-one label relevance and binary
+nDCG@5 for each model. Object presence is only a relevance proxy: no human
+semantic judgments, attribute/compositional queries, translation, personal
+library, cleanup grouping quality or real-device performance claim is made.
+This diagnostic neither changes existing acceptance gates nor signs/uploads
+build 47. Cloud execution and real-photo measurements remain pending.
+
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the
 tester's device after a successful experimental delivery.

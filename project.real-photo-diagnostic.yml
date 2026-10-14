@@ -1,0 +1,14 @@
+include:
+  - project.fp16-diagnostic.yml
+
+targets:
+  LocalImageIQTests:
+    sources:
+      - path: build/RealPhotoBenchmark
+        type: folder
+        buildPhase: resources
+schemes:
+  LocalImageIQ:
+    test:
+      environmentVariables:
+        IMAGEIQ_REAL_PHOTO_RANKING: "1"
