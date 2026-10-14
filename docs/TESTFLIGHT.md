@@ -124,6 +124,43 @@ does not imply unchanged rankings or acceptance; data are retained as native
 test attachments. Coverage remains only six procedural images and 17 queries,
 not a representative real-photo library. No signing or upload is performed.
 
+Native ranking run `38602055699`, source
+`bbc5f92a0d6f54406988e5fa4180c83bb6cf4ab8`, executed both diagnostic tests:
+2 passed, 0 skipped, 0 failures. The attached measurement completed all
+17 queries on CPU and all compute units. Both configurations gave identical
+scores and ranking results; these are repeated configurations, not 34
+independent queries.
+
+| Per-configuration result | Count |
+| --- | --- |
+| Top-one result unchanged | 15/17 |
+| Top-five membership unchanged | 15/17 |
+| Exact ordered top-five unchanged | 8/17 |
+| Aggregate top-five overlap | 83/85 (97.65%) |
+| Pair inversions among shared top-five members | 10 |
+
+The top-one changes were `special-tokens` (baseline first/second score gap
+about `0.002331`) and `turkish-unicode-chinese` (about `0.000046`).
+Top-five membership changed for `english` and `case`: each retained four of
+five baseline results, with baseline fifth/sixth gaps about `0.002608` and
+`0.000638`. The remaining changed queries only reordered the same five images.
+The `chinese` fixture's exact top-five order did not change. These are
+tokenizer/Unicode stress queries against procedural patterns, not a realistic
+semantic retrieval benchmark; none of these counts establishes relevant-photo
+recall or user-perceived quality. Maximum native FP32/FP16 score delta was
+`0.011170408664966767`.
+
+Artifact `11914727178` was downloaded and ZIP digest verified as
+`d4908e193d61ead5cda88c93868733fefb1383bb50282d910a9eb41a275abfb5`.
+It retains complete score vectors, image orders, gaps and runtime identities.
+The FP32 baseline version is
+`siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b`;
+the FP16 candidate version is
+`siglip2-b16-224-v1-4db0c5989d73c0669fd1909e8e2d91502351b75390a9cee1a2bc0ba2ec3b6c62`.
+No scalar gate was relaxed, no mixed-precision switch made, and no build47
+was signed or uploaded. A representative real-photo ranking/relevance
+evaluation is still needed before a ranking-based quality acceptance decision.
+
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the
 tester's device after a successful experimental delivery.
