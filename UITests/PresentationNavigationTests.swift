@@ -16,8 +16,12 @@ final class PresentationNavigationTests: XCTestCase {
             let control = app.switches["location-search-enabled"]
             expectHittable(control)
             expectSwitch(control, enabled: !enabled)
-            print("Location switch before tap: \(control.debugDescription)")
-            control.coordinate(withNormalizedOffset: CGVector(dx: enabled ? 0.3 : 0.7, dy: 0.5)).tap()
+            let nativeSwitch = control.switches.firstMatch
+            XCTAssertEqual(control.switches.count, 1)
+            expectHittable(nativeSwitch)
+            let start = nativeSwitch.coordinate(withNormalizedOffset: CGVector(dx: enabled ? 0.25 : 0.75, dy: 0.5))
+            let end = nativeSwitch.coordinate(withNormalizedOffset: CGVector(dx: enabled ? 0.75 : 0.25, dy: 0.5))
+            start.press(forDuration: 0.1, thenDragTo: end)
             expectSwitch(control, enabled: enabled)
         }
         // Establish a known value using the real switch, then verify restart.

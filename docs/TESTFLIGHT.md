@@ -58,3 +58,10 @@ by installing the new TestFlight identity.
 
 Current status: implementation and cloud validation pending; no TestFlight
 upload is claimed by this document.
+
+Run `38552330364` passed real macOS signing preflight, Core 79, and App
+2145 (2144 passed / 1 existing device-only skip / 0 failures). UI ran 23 with
+1 existing skip and 1 failure: after restart the location switch's coordinate
+tap did not turn it off. No archive/upload was attempted. The UI test now
+targets the sole nested native switch with an actual thumb drag; desired-value
+and ON/OFF restart persistence assertions remain unchanged. Full rerun pending.
