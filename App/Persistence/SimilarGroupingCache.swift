@@ -109,32 +109,51 @@ struct SimilarGroupingCache: Sendable {
     let directory: URL
     // Deterministic pre-rename fault/cancellation injection for native tests.
     private let beforeCommit: @Sendable () throws -> Void
+    private let entryName: String
 
     init(directory: URL, beforeCommit: @escaping @Sendable () throws -> Void = {}) {
         self.directory = directory
         self.beforeCommit = beforeCommit
+        entryName = Self.fileName
     }
 
-    var fileURL: URL { directory.appendingPathComponent(Self.fileName) }
+    private init(directory: URL, beforeCommit: @escaping @Sendable () throws -> Void, entryName: String) {
+        self.directory = directory
+        self.beforeCommit = beforeCommit
+        self.entryName = entryName
+    }
+
+    var fileURL: URL { directory.appendingPathComponent(entryName) }
+
+    private var checkpointFile: Self {
+        Self(directory: directory, beforeCommit: beforeCommit, entryName: "similar-groups-checkpoint-v1.bin")
+    }
+
+    private func readBytes() throws -> Data? {
+        guard let directoryFD = try openDirectory() else { return nil }
+        defer { Darwin.close(directoryFD) }
+        let fd = entryName.withCString { Darwin.openat(directoryFD, $0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) }
+        guard fd >= 0 else {
+            if errno == ENOENT { return nil }
+            if errno == ELOOP || errno == ENOTDIR { throw SimilarGroupingCacheError.invalid }
+            throw SimilarGroupingCacheError.unavailable
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var info = stat()
+        guard fstat(fd, &info) == 0, Self.isRegular(info), info.st_nlink == 1 else {
+            throw SimilarGroupingCacheError.invalid
+        }
+        return try handle.readToEnd() ?? Data()
+    }
 
     func read(key: SimilarGroupingCacheKey, authorized: [String: PhotoRevision],
               indexed: [String: PhotoRevision]) throws -> SimilarGroupingCacheRead {
         try Task.checkCancellation()
         let bytes: Data
         do {
-            guard let directoryFD = try openDirectory() else { return .missing }
-            defer { Darwin.close(directoryFD) }
-            let fd = Self.fileName.withCString { Darwin.openat(directoryFD, $0, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) }
-            guard fd >= 0 else {
-                if errno == ENOENT { return .missing }
-                if errno == ELOOP || errno == ENOTDIR { return .stale }
-                throw SimilarGroupingCacheError.unavailable
-            }
-            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-            defer { try? handle.close() }
-            var info = stat()
-            guard fstat(fd, &info) == 0, Self.isRegular(info), info.st_nlink == 1 else { return .stale }
-            bytes = try handle.readToEnd() ?? Data()
+            guard let value = try readBytes() else { return .missing }
+            bytes = value
         } catch SimilarGroupingCacheError.invalid {
             return .stale // Symlink/non-directory is not first use.
         } catch {
@@ -174,6 +193,60 @@ struct SimilarGroupingCache: Sendable {
         encoder.outputFormat = .binary
         let payloadBytes = try encoder.encode(payload)
         let bytes = try encoder.encode(SimilarGroupingCacheEnvelope(payload: payloadBytes))
+        try writeBytes(bytes, validate: validate)
+    }
+
+    func readCheckpoint(key: SimilarGroupingCacheKey) throws -> SimilarGroupingCheckpointRead {
+        try Task.checkCancellation()
+        let bytes: Data
+        do {
+            guard let value = try checkpointFile.readBytes() else { return .missing }
+            bytes = value
+        } catch SimilarGroupingCacheError.invalid {
+            return .stale
+        } catch {
+            try Task.checkCancellation()
+            throw AppFailure.storage("无法读取已保存的分组进度，请解锁设备后重试。")
+        }
+        do {
+            let envelope = try PropertyListDecoder().decode(SimilarGroupingCheckpointEnvelope.self, from: bytes)
+            guard envelope.magic == "LocalImageIQ.SimilarGroupsCheckpoint", envelope.schema == 1,
+                  envelope.sha256 == Data(SHA256.hash(data: envelope.payload)) else { return .stale }
+            let payload = try PropertyListDecoder().decode(SimilarGroupingCheckpointPayload.self, from: envelope.payload)
+            try Task.checkCancellation()
+            guard payload.key == key else { return .stale }
+            return .restored(payload.state)
+        } catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            return .stale
+        }
+    }
+
+    func saveCheckpoint(_ state: SimilarGroupingCheckpointState, key: SimilarGroupingCacheKey,
+                        validate: @Sendable () throws -> Void) throws {
+        try Task.checkCancellation()
+        try validate()
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        let payload = try encoder.encode(SimilarGroupingCheckpointPayload(key: key, state: state))
+        let envelope = SimilarGroupingCheckpointEnvelope(magic: "LocalImageIQ.SimilarGroupsCheckpoint",
+            schema: 1, payload: payload, sha256: Data(SHA256.hash(data: payload)))
+        try checkpointFile.writeBytes(encoder.encode(envelope), validate: validate)
+    }
+
+    func removeCheckpoint(validate: @Sendable () throws -> Void) throws {
+        try Task.checkCancellation()
+        try validate()
+        let file = checkpointFile
+        guard let fd = try file.openDirectory() else { return }
+        defer { Darwin.close(fd) }
+        try file.requireSafeDestination(fd)
+        try validate()
+        let result = file.entryName.withCString { unlinkat(fd, $0, 0) }
+        guard result == 0 || errno == ENOENT else { throw SimilarGroupingCacheError.unavailable }
+    }
+
+    private func writeBytes(_ bytes: Data, validate: @Sendable () throws -> Void) throws {
         try Task.checkCancellation()
         try validate()
 
@@ -220,7 +293,7 @@ struct SimilarGroupingCache: Sendable {
         // Atomic same-directory publication; all throwing validation/I/O occurs
         // before rename. A failed/cancelled staging operation preserves old data.
         let status = temporaryName.withCString { from in
-            Self.fileName.withCString { to in renameat(directoryFD, from, directoryFD, to) }
+            entryName.withCString { to in renameat(directoryFD, from, directoryFD, to) }
         }
         guard status == 0 else { throw SimilarGroupingCacheError.unavailable }
     }
@@ -256,7 +329,7 @@ struct SimilarGroupingCache: Sendable {
 
     private func requireSafeDestination(_ fd: Int32) throws {
         var info = stat()
-        let status = Self.fileName.withCString { fstatat(fd, $0, &info, AT_SYMLINK_NOFOLLOW) }
+        let status = entryName.withCString { fstatat(fd, $0, &info, AT_SYMLINK_NOFOLLOW) }
         if status != 0 {
             if errno == ENOENT { return }
             throw SimilarGroupingCacheError.unavailable

@@ -71,10 +71,10 @@ struct OCRSyncToast: View {
     var title: String {
         switch state.phase {
         case .idle: return "当前没有文字索引更新"
-        case .waiting: return "文字索引等待更新"
-        case .checking: return "正在检查文字索引"
+        case .waiting: return state.lifecyclePaused ? "文字索引已保存，等待继续" : "文字索引等待更新"
+        case .checking: return state.isResuming ? "正在检查已保存的文字索引" : "正在检查文字索引"
         case .updating: return "正在更新文字索引"
-        case .cancelling: return "正在取消文字更新"
+        case .cancelling: return state.lifecyclePaused ? "正在保存文字索引进度" : "正在取消文字更新"
         case .cancelled: return "文字更新已取消"
         case .completed: return "文字索引已更新"
         case .failed: return state.completionTitle
@@ -84,9 +84,13 @@ struct OCRSyncToast: View {
     var detail: String {
         switch state.phase {
         case .idle: return "开启文字搜索不会在每次打开页面或启动应用时重复更新。"
-        case .waiting: return "等待当前任务结束，并在前台、照片权限和图片索引就绪后更新一次；不会自动请求权限。"
+        case .waiting:
+            return state.lifecyclePaused
+                ? "已完成记录保留；回到应用并确认照片权限后继续，不会重新识别有效记录。"
+                : "等待当前任务结束，并在前台、照片权限和图片索引就绪后更新一次；不会自动请求权限。"
         case .checking: return "正在检查已有文字记录，仅更新缺失或需要更新的项目，不重新计算图片索引。"
-        case .updating: return "在本机识别照片文字；有效记录直接复用。已检查数包含复用和未完成项，不等于新写入数。"
+        case .updating:
+            return "已新识别 \(state.progress.recognized) 张 · 已复用 \(state.progress.reused) 张。检查进度包含未完成项，不等于新增数量。"
         case .cancelling: return "正在等待当前识别和存储停止，已经成功提交的记录会保留。"
         case .cancelled: return "已完成记录保留，不会自动重试。开启文字搜索后可手动重试。"
         case .completed: return "本次增量检查已完成。降低分辨率的记录可在以后显式更新时再尝试。"

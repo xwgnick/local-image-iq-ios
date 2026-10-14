@@ -110,6 +110,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
     private let deletion: any PhotoDeleting
     private let preferences: UserDefaults?
     private let indexAccess: IndexAccessCoordinator?
+    private let onWorkActivityChanged: @MainActor (Bool) -> Void
     // Validators belong to this exact published result, never a later query.
     private var result: SimilarPhotoGroupingResult?
     private var resultIndexRevision: UInt64?
@@ -124,6 +125,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
     private var selectionTask: Task<Void, Never>?
     private var deletionNotice: String?
     private var isForeground = true
+    private var backgroundWorkAllowed = false
     private var hasEnteredPage = false
     private var pageReady = false
     // History is independent of visible counts: a successful zero is completed.
@@ -155,11 +157,13 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     init(grouping: any SimilarPhotoGrouping, deletion: any PhotoDeleting, preferences: UserDefaults? = nil,
-         indexAccess: IndexAccessCoordinator? = nil, browsingAccess: SimilarCleanupBrowsingAccess? = nil) {
+         indexAccess: IndexAccessCoordinator? = nil, browsingAccess: SimilarCleanupBrowsingAccess? = nil,
+         onWorkActivityChanged: @escaping @MainActor (Bool) -> Void = { _ in }) {
         self.grouping = grouping
         self.deletion = deletion
         self.preferences = preferences
         self.indexAccess = indexAccess
+        self.onWorkActivityChanged = onWorkActivityChanged
         self.browsingAccess = browsingAccess
         self.observedIndexRevision = indexAccess?.revision
         let saved = SimilarCleanupPreferences.threshold(in: preferences)
@@ -202,11 +206,13 @@ final class SimilarPhotoCleanupState: ObservableObject {
 
     /// Separate from model/index readiness. Locks/background hide pixels while
     /// retaining only recoverable navigation/data. Revocation clears it outright.
-    func setDisplayEnvironment(foreground: Bool, protectedDataAvailable: Bool, canRead: Bool, active: Bool = true) {
+    func setDisplayEnvironment(foreground: Bool, protectedDataAvailable: Bool, canRead: Bool, active: Bool = true,
+                               allowBackgroundWork: Bool = false) {
         let wasUsable = isForeground && self.protectedDataAvailable && displayAccessAvailable
         displayActive = active
         self.protectedDataAvailable = protectedDataAvailable
         displayAccessAvailable = canRead
+        backgroundWorkAllowed = allowBackgroundWork && protectedDataAvailable && canRead
         if !active {
             // Inactive is a pixel/interaction boundary, not a fake background
             // or cancellation of a submitted system mutation. Keep committed
@@ -221,7 +227,10 @@ final class SimilarPhotoCleanupState: ObservableObject {
             refreshPending = true
             return
         }
-        if !foreground || !protectedDataAvailable {
+        if !foreground, backgroundWorkAllowed {
+            isForeground = false
+            hideBrowsing()
+        } else if !foreground || !protectedDataAvailable {
             pause()
         } else if !wasUsable {
             resume()
@@ -506,6 +515,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
         requiresVisiblePage = restoring && hasEnteredPage
         isRestoring = restoring
         isGrouping = !restoring
+        onWorkActivityChanged(true)
         groupingTask = Task { @MainActor [weak self, grouping = self.grouping, indexAccess = self.indexAccess] in
             defer { self?.finishGrouping(token) }
             // Keep the entire cancelled tail, including queued replacements.
@@ -874,6 +884,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
 
     func pause() {
         isForeground = false
+        backgroundWorkAllowed = false
         if !needsAutomaticRefreshRetry, result != nil || isGrouping || isRestoring {
             refreshPending = true
         }
@@ -884,6 +895,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
 
     func resume() {
         isForeground = true
+        backgroundWorkAllowed = false
         requestBrowsingCheck()
         tryAutomaticEntry()
     }
@@ -959,7 +971,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
     }
 
     private func isCurrent(_ token: UUID) -> Bool {
-        isForeground && protectedDataAvailable && displayAccessAvailable && generation == token
+        (isForeground || backgroundWorkAllowed) && protectedDataAvailable && displayAccessAvailable && generation == token
             && (!requiresVisiblePage || (isPageVisible && pageReady))
     }
 
@@ -1004,6 +1016,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
             // Publish completion even when generation was already revoked, so
             // retry controls can become available after an uncooperative tail.
             isReadDraining = false
+            onWorkActivityChanged(false)
             tryAutomaticEntry()
         }
     }

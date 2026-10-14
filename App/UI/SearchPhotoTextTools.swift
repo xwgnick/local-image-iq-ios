@@ -156,10 +156,7 @@ struct SearchPhotoTextTools: View {
                     .background { measuredFrame(location ? .locationToggle : .toggle) }
             }
         }
-        .padding(.leading, 12).padding(.trailing, 4).padding(.bottom, 4)
         .frame(maxWidth: .infinity)
-        .background(IQStyle.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(IQStyle.line, lineWidth: 1))
     }
 
     private var toolsLayout: SearchEnhancementsLayout {
@@ -171,16 +168,16 @@ struct SearchPhotoTextTools: View {
         private func vertical(_ width: CGFloat) -> Bool { stacked || width < 340 }
         func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
             let width = proposal.width ?? 353
-            let columnWidth = vertical(width) ? width : (width - 8) / 2
+            let columnWidth = vertical(width) ? width : (width - 20) / 2
             let heights = subviews.map { $0.sizeThatFits(.init(width: columnWidth, height: nil)).height }
             return CGSize(width: width, height: vertical(width) ? heights.reduce(0, +) + 8 : heights.max() ?? 0)
         }
         func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-            let columnWidth = vertical(bounds.width) ? bounds.width : (bounds.width - 8) / 2
+            let columnWidth = vertical(bounds.width) ? bounds.width : (bounds.width - 20) / 2
             var y = bounds.minY
             for (index, subview) in subviews.enumerated() {
                 let height = subview.sizeThatFits(.init(width: columnWidth, height: nil)).height
-                subview.place(at: CGPoint(x: bounds.minX + (vertical(bounds.width) ? 0 : CGFloat(index) * (columnWidth + 8)),
+                subview.place(at: CGPoint(x: bounds.minX + (vertical(bounds.width) ? 0 : CGFloat(index) * (columnWidth + 20)),
                                          y: y), anchor: .topLeading,
                               proposal: .init(width: columnWidth, height: height))
                 if vertical(bounds.width) { y += height + 8 }

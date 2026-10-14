@@ -58,7 +58,8 @@ struct SimilarPhotoCleanupSheet: View {
     }
 
     private var libraryReady: Bool {
-        scenePhase != .background && protectedDataAvailable && appState.isForeground && appState.canRead && appState.modelsReady
+        (scenePhase != .background || appState.backgroundExecutionAllowed) && protectedDataAvailable
+            && (appState.isForeground || appState.backgroundExecutionAllowed) && appState.canRead && appState.modelsReady
             && appState.summary.indexStatisticsKnown && appState.summary.indexedCount > 0 && !appState.isBusy
     }
 
@@ -335,7 +336,8 @@ struct SimilarPhotoCleanupSheet: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             browser.hidePrivateSurfaces()
             showsConfirmation = false
-            state.pause()
+            appState.enterBackground()
+            updateLifecycle(presentationInput)
         }
         // Do not pause onDisappear: a gallery/comparison cover can disappear
         // this root without leaving cleanup. The tab input owns page activity;
@@ -347,6 +349,7 @@ struct SimilarPhotoCleanupSheet: View {
                                  ready: libraryReady, pageActive: isPageActive, phase: scenePhase,
                                  syncPhase: photoSync.phase, protectedDataAvailable: protectedDataAvailable,
                                  foreground: appState.isForeground,
+                                 backgroundWorkAllowed: appState.backgroundExecutionAllowed,
                                             displayCanRead: state.displayAccessIsReadable
                                                 ?? (thumbnailContent != nil ? true : PhotoLibraryClient.canRead))
     }
@@ -371,7 +374,7 @@ struct SimilarPhotoCleanupSheet: View {
             state.cancelRangeSelection()
             state.leavePage()
         }
-        if input.phase == .background, old?.phase != .background {
+        if input.phase == .background, !input.backgroundWorkAllowed, old?.phase != .background {
             browser.hidePrivateSurfaces()
             showsConfirmation = false
             state.cancelRangeSelection()
@@ -396,7 +399,8 @@ struct SimilarPhotoCleanupSheet: View {
         }
         state.setDisplayEnvironment(foreground: input.foreground && input.phase != .background,
                                     protectedDataAvailable: input.protectedDataAvailable, canRead: input.displayCanRead,
-                                    active: input.phase == .active)
+                                    active: input.phase == .active && input.foreground,
+                                    allowBackgroundWork: input.backgroundWorkAllowed)
         if embedded {
             if input.pageActive, old?.pageActive != true {
                 state.enterPage(ready: input.ready)
@@ -468,6 +472,17 @@ struct SimilarPhotoCleanupSheet: View {
                         .accessibilityIdentifier("similar-cleanup-restoring")
                     Spacer()
                     cancelGroupingButton
+                }
+                if state.progress.resumed > 0 {
+                    Text("已恢复 \(state.progress.resumed) 张照片的分组进度，仅继续未完成的计算。")
+                        .font(.caption).foregroundStyle(IQStyle.secondary)
+                } else if state.progress.checkpointDiscarded {
+                    Text("保存的分组进度不适用于当前照片，正在重新计算。")
+                        .font(.caption).foregroundStyle(IQStyle.secondary)
+                }
+                if state.progress.checkpointSaveFailed {
+                    Text("分组断点暂时无法保存，请保持应用在前台；中断后可能需要重新计算。")
+                        .font(.caption).foregroundStyle(IQStyle.secondary)
                 }
             } else if state.isGrouping {
                 groupingProgress
@@ -982,6 +997,7 @@ struct CleanupPresentationInput: Equatable {
     let syncPhase: PhotoSyncState.Phase
     var protectedDataAvailable = true
     var foreground = true
+    var backgroundWorkAllowed = false
     var displayCanRead = true
 
     var defersAutomaticRefresh: Bool {

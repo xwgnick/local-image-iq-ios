@@ -7,6 +7,68 @@ import XCTest
 /// No PhotoKit client, database, image pixels, AppState, network, or sleeps.
 @MainActor
 final class SimilarPhotoCleanupStateTests: XCTestCase {
+    func testFiniteBackgroundReadContinuesWithoutBrowseSelectionOrDeletionAuthority() async {
+        let gate = hold()
+        let groups = cleanupGroups()
+        let validation = CleanupValidation(photos: groups.flatMap(\.photos))
+        let grouping = CleanupGrouping { _, threshold in
+            await gate.wait()
+            return cleanupResult(groups: groups, threshold: threshold, validation: validation)
+        }
+        var activity: [Bool] = []
+        let state = SimilarPhotoCleanupState(grouping: grouping, deletion: CleanupDeletion(),
+            onWorkActivityChanged: { activity.append($0) })
+        state.scan()
+        await entered(gate)
+        state.setDisplayEnvironment(foreground: false, protectedDataAvailable: true, canRead: true,
+                                    active: false, allowBackgroundWork: true)
+        XCTAssertFalse(gate.cancelled)
+        XCTAssertTrue(state.isGrouping)
+        await grouping.emit(.init(total: 9, completed: 4, groupCount: 1, resumed: 2), call: 0)
+        XCTAssertEqual(state.progress.completed, 4)
+        XCTAssertEqual(state.progress.resumed, 2)
+        XCTAssertFalse(state.canBrowse)
+        XCTAssertFalse(state.canSelect)
+        state.selectGroup("first")
+        state.prepareDeletion()
+        XCTAssertTrue(state.selectedIDs.isEmpty)
+        XCTAssertNil(state.pendingDeletion)
+        gate.open()
+        await state.waitUntilIdle()
+        XCTAssertTrue(state.hasScanned)
+        XCTAssertEqual(state.groups.map(\.id), ["first", "second"])
+        XCTAssertFalse(state.canBrowse)
+        XCTAssertFalse(state.canSelect)
+        XCTAssertEqual(activity, [true, false])
+    }
+
+    func testLeaseExpiryOrProtectedDataLossDrainsAndRejectsLateBackgroundPublication() async {
+        for protectedDataLost in [false, true] {
+            let gate = hold()
+            let groups = cleanupGroups()
+            let validation = CleanupValidation(photos: groups.flatMap(\.photos))
+            let grouping = CleanupGrouping { _, threshold in
+                await gate.wait()
+                return cleanupResult(groups: groups, threshold: threshold, validation: validation)
+            }
+            let state = SimilarPhotoCleanupState(grouping: grouping, deletion: CleanupDeletion())
+            state.scan()
+            await entered(gate)
+            state.setDisplayEnvironment(foreground: false, protectedDataAvailable: true, canRead: true,
+                                        active: false, allowBackgroundWork: true)
+            state.setDisplayEnvironment(foreground: false, protectedDataAvailable: !protectedDataLost, canRead: true,
+                                        active: false, allowBackgroundWork: protectedDataLost)
+            XCTAssertTrue(gate.cancelled)
+            XCTAssertTrue(state.isReadDraining)
+            gate.open()
+            await state.waitUntilIdle()
+            XCTAssertFalse(state.hasScanned)
+            XCTAssertTrue(state.groups.isEmpty)
+            XCTAssertFalse(state.isReadDraining)
+            XCTAssertNil(state.pendingDeletion)
+        }
+    }
+
     func testInitializationAndNonScanLifecycleNeverStartWork() async {
         let f = fixture()
         XCTAssertEqual(f.state.threshold, SimilarPhotoGroupingPolicy.defaultThreshold)

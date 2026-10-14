@@ -210,7 +210,7 @@ final class OCRSyncStateTests: XCTestCase {
         XCTAssertNil(state.takeReadyRequest())
     }
 
-    func testPendingIntentSurvivesBackgroundButRunningJobNeverResumes() throws {
+    func testLifecyclePauseResumesOnlyAfterOldRunDrains() throws {
         let state = OCRSyncState()
         state.userChangedEnabled(true)
         state.pause()
@@ -222,8 +222,58 @@ final class OCRSyncStateTests: XCTestCase {
         state.updateAvailability(ready: true)
         XCTAssertNil(state.takeReadyRequest())
         state.finish(token: run, completion: .cancelled)
+        XCTAssertEqual(state.phase, .waiting)
+        XCTAssertTrue(state.lifecyclePaused)
+        XCTAssertNotNil(state.takeReadyRequest())
+        XCTAssertTrue(state.isResuming)
         XCTAssertNil(state.takeReadyRequest())
-        XCTAssertEqual(state.phase, .cancelled)
+    }
+
+    func testLifecyclePauseKeepsCommittedCountersAndManualQualityIntent() throws {
+        let state = OCRSyncState(enabled: true)
+        state.requestUpdate(retryReducedPreviews: true)
+        state.updateAvailability(ready: true)
+        let run = try XCTUnwrap(state.takeReadyRequest())
+        let saved = TextIndexProgress(total: 7907, completed: 7906, recognized: 5, reused: 7901)
+        state.accept(saved, token: run)
+        state.pause()
+        XCTAssertTrue(state.pendingQualityRetry)
+        state.finish(token: run, completion: .cancelled)
+        XCTAssertEqual(state.progress, saved)
+        state.updateAvailability(ready: true)
+        XCTAssertNotNil(state.takeReadyRequest())
+        XCTAssertTrue(state.retryReducedPreviews)
+        XCTAssertTrue(state.isResuming)
+    }
+
+    func testUserCancelOrOffWithdrawsLifecycleResumeEvenDuringDrain() throws {
+        for off in [false, true] {
+            let state = OCRSyncState(enabled: true)
+            state.requestUpdate()
+            state.updateAvailability(ready: true)
+            let run = try XCTUnwrap(state.takeReadyRequest())
+            state.pause()
+            if off { state.userChangedEnabled(false) } else { state.cancel() }
+            state.finish(token: run, completion: .cancelled)
+            state.updateAvailability(ready: true)
+            XCTAssertFalse(state.lifecyclePaused)
+            XCTAssertFalse(state.pending)
+            XCTAssertNil(state.takeReadyRequest())
+        }
+    }
+
+    func testRestoredInterruptedRequestDoesNotTurnSavedOnPreferenceIntoNewWork() throws {
+        let state = OCRSyncState(enabled: true)
+        state.updateAvailability(ready: true)
+        XCTAssertNil(state.takeReadyRequest())
+        state.restoreInterruptedRequest(retryReducedPreviews: true)
+        XCTAssertNotNil(state.takeReadyRequest())
+        XCTAssertTrue(state.isResuming)
+        XCTAssertTrue(state.retryReducedPreviews)
+        let disabled = OCRSyncState()
+        disabled.restoreInterruptedRequest(retryReducedPreviews: true)
+        disabled.updateAvailability(ready: true)
+        XCTAssertNil(disabled.takeReadyRequest())
     }
 
     func testFailedCancelledAndCompletedNeverRetryOnReadinessOrDuplicateTrue() throws {

@@ -118,6 +118,13 @@ final class PhotoSyncState: ObservableObject {
         await waitUntilIdle()
     }
 
+    /// Finish the admitted scan within the app's finite lease, without admitting
+    /// another scan until foreground readiness is explicitly restored.
+    func continueInBackground() {
+        ready = false
+        invalidateCompletionDisplay()
+    }
+
     /// A failed/cancelled manual mutation must not become an implicit automatic
     /// retry. Keep explicit restart available once AppState is ready; do not
     /// impose an extra refresh/recovery prerequisite or fake a user cancel.

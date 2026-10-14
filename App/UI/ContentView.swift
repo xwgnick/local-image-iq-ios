@@ -66,7 +66,8 @@ struct ContentView: View {
         _similarCleanup = StateObject(wrappedValue: similarCleanupState ?? SimilarPhotoCleanupState(
             grouping: SimilarPhotoGroupingService(library: state.library, encoders: state.groupingEncoders),
             deletion: SystemPhotoDeletionService(library: state.library), preferences: cleanupPreferences,
-            indexAccess: state.indexAccess))
+            indexAccess: state.indexAccess,
+            onWorkActivityChanged: { [weak state] in state?.setCleanupWorkRunning($0) }))
     }
 
     var body: some View {
@@ -606,7 +607,7 @@ struct ContentView: View {
             emptyCard(symbol: "magnifyingglass", title: "暂时没有可显示的照片",
                       detail: "换一种描述，或检查照片权限并手动更新索引。")
         } else {
-            if !state.canRead || (state.summary.indexStatisticsKnown && state.summary.indexedCount == 0) {
+            if !state.canRead || (state.modelsReady && state.summary.indexStatisticsKnown && state.summary.indexedCount == 0) {
                 Button(state.canRead ? "建立索引" : "选择可搜索的照片") { isSearchFocused = false; showLibrary = true }
                     .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 50)
                     .background(IQStyle.accent, in: RoundedRectangle(cornerRadius: 16))

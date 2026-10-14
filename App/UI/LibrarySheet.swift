@@ -384,7 +384,9 @@ struct LibraryMaintenanceView: View {
 
     private var scanProgress: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(state.activity == .indexing ? "本次手动索引" : "上次手动索引", systemImage: "photo.stack")
+            Label(state.activity == .indexing
+                  ? (state.imageIndexResuming ? "继续更新图片索引" : "本次手动索引") : "上次手动索引",
+                  systemImage: "photo.stack")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(IQStyle.accent)
             if state.activity == .indexing {
@@ -393,7 +395,7 @@ struct LibraryMaintenanceView: View {
                         .accessibilityLabel("已检查照片")
                         .accessibilityValue("\(state.progress.completed) 张，共 \(state.progress.total) 张")
                 } else {
-                    ProgressView("正在扫描照片以更新索引…")
+                    ProgressView(state.imageIndexResuming ? "正在检查已保存的索引…" : "正在扫描照片以更新索引…")
                 }
             }
             if state.progress.total > 0 {
@@ -401,6 +403,12 @@ struct LibraryMaintenanceView: View {
                     .font(.subheadline.weight(.medium))
             }
             LabeledContent("已完成索引", value: "\((state.progress.encoded + state.progress.reused).formatted()) 张")
+            LabeledContent("本次新增", value: "\(state.progress.encoded.formatted()) 张")
+            LabeledContent("已有记录复用", value: "\(state.progress.reused.formatted()) 张")
+            if state.imageIndexResuming {
+                Text("这是恢复检查，不是全量重建；有效记录直接复用，仅处理缺失或已变化的照片。")
+                    .font(.caption).foregroundStyle(IQStyle.secondary)
+            }
             if state.progress.cloudSkipped > 0 {
                 LabeledContent("本地预览不可用", value: "\(state.progress.cloudSkipped.formatted()) 张")
                 Text("这些照片本次尚未完成索引；允许 iCloud 后可手动更新索引重试，不保证能够下载。")

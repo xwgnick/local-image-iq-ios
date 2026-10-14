@@ -19,9 +19,12 @@ final class OCRSyncState: ObservableObject {
     @Published private(set) var ready = false
     @Published private(set) var terminalHidden = false
     @Published private(set) var failureMessage: String?
+    @Published private(set) var lifecyclePaused = false
+    @Published private(set) var isResuming = false
     private var generation: UUID?
     private var pendingRetryReducedPreviews = false
     private(set) var retryReducedPreviews = false
+    var pendingQualityRetry: Bool { pendingRetryReducedPreviews }
     private let completionDelay: @Sendable () async throws -> Void
     private var completionTask: Task<Void, Never>?
     private var completionToken: UUID?
@@ -89,6 +92,7 @@ final class OCRSyncState: ObservableObject {
         guard enabled, !currentRunning || phase == .cancelling else { return }
         resetTerminalDisplay()
         pending = true
+        lifecyclePaused = false
         pendingRetryReducedPreviews = pendingRetryReducedPreviews || retryReducedPreviews
         if !currentRunning {
             progress = TextIndexProgress()
@@ -109,6 +113,8 @@ final class OCRSyncState: ObservableObject {
         retryReducedPreviews = pendingRetryReducedPreviews
         pendingRetryReducedPreviews = false
         currentRunning = true
+        isResuming = lifecyclePaused
+        lifecyclePaused = false
         progress = TextIndexProgress()
         totalKnown = false
         phase = .checking
@@ -118,16 +124,30 @@ final class OCRSyncState: ObservableObject {
     func cancel() {
         guard pending || currentRunning else { return }
         pending = false
+        lifecyclePaused = false
+        isResuming = false
         pendingRetryReducedPreviews = false
         if currentRunning { phase = .cancelling }
         else { phase = .cancelled; scheduleTerminalHide() }
     }
 
-    /// A never-admitted toggle intent can wait through background/readiness
-    /// changes. An admitted job is cancelled, never auto-retried on foreground.
+    /// Lifecycle interruption retains intent; user cancellation and failures do not.
     func pause() {
         updateAvailability(ready: false)
-        if currentRunning { cancel() }
+        if currentRunning, phase != .cancelling {
+            pending = true
+            pendingRetryReducedPreviews = pendingRetryReducedPreviews || retryReducedPreviews
+            lifecyclePaused = true
+            phase = .cancelling
+        } else if pending {
+            lifecyclePaused = true
+        }
+    }
+
+    func restoreInterruptedRequest(retryReducedPreviews: Bool) {
+        guard enabled, !currentRunning, !pending else { return }
+        requestUpdate(retryReducedPreviews: retryReducedPreviews)
+        lifecyclePaused = true
     }
 
     /// Superseding foreground work cancels the old job but must not erase a
@@ -152,8 +172,10 @@ final class OCRSyncState: ObservableObject {
         currentRunning = false
         failureMessage = issue
         if pending {
-            progress = TextIndexProgress()
-            totalKnown = false
+            if !lifecyclePaused {
+                progress = TextIndexProgress()
+                totalKnown = false
+            }
             phase = .waiting
             return
         }

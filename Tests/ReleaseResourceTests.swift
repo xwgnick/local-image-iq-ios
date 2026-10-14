@@ -18,8 +18,8 @@ final class ReleaseResourceTests: XCTestCase {
     func testChineseBrandPreservesInstallAndDataIdentity() {
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "片刻寻")
         XCTAssertEqual(Bundle.main.bundleIdentifier, "com.example.localimageiq")
-        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String, "0.16.4")
-        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String, "44")
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String, "0.16.5")
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String, "45")
     }
 
     func testAppPrivacyManifestDeclaresOnlyActualLocalUses() throws {

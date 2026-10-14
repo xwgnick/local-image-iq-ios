@@ -67,7 +67,8 @@ final class AppState: ObservableObject {
     /// rolled-back writes, not Photos access or the current search session.
     @Published private(set) var indexSourceEpoch = UUID()
     private var lastNotifiedIndexRevision: UInt64?
-    @Published private(set) var summary = LibrarySummary()
+    @Published private(set) var summary = LibrarySummary(indexStatisticsKnown: false)
+    @Published private(set) var imageIndexResuming = false
     @Published private(set) var results: [SearchHit] = []
     private struct ResultPages {
         let id = UUID()
@@ -185,6 +186,17 @@ final class AppState: ObservableObject {
     private var photoCheckID = UUID()
     private var translationAvailabilityID = UUID()
     @Published private(set) var isForeground = true
+    @Published private(set) var backgroundExecutionAllowed = false
+    @Published private(set) var protectedDataAvailable = true
+    private let backgroundLease: (any BackgroundWorkLeasing)?
+    private var backgroundLeaseGeneration = UUID()
+    private var cleanupWorkRunning = false
+    private let workPreferences: UserDefaults?
+    private var imageResumeRequested: Bool
+    private var pausedImageOperation: UUID?
+    private static let imageResumeKey = "interruptedImageIndex.v1"
+    private static let ocrResumeKey = "interruptedTextIndex.v1"
+    private static let ocrQualityResumeKey = "interruptedTextQualityRetry.v1"
 
     init(library: PhotoLibraryClient = PhotoLibraryClient(), worker: (any PhotoWorkServicing)? = nil,
          authorizationStatus: @escaping () -> PHAuthorizationStatus = { PhotoLibraryClient.authorization },
@@ -197,8 +209,13 @@ final class AppState: ObservableObject {
          syncService: (any PhotoSyncServicing)? = nil,
          indexAccess: IndexAccessCoordinator? = nil,
          queryHistoryStore: (any QueryHistoryStoring)? = nil,
-         locationSearchPreferences: UserDefaults? = nil) {
+         locationSearchPreferences: UserDefaults? = nil,
+         workPreferences: UserDefaults? = nil,
+         backgroundLease: (any BackgroundWorkLeasing)? = nil) {
         self.library = library
+        self.workPreferences = workPreferences
+        self.backgroundLease = backgroundLease
+        imageResumeRequested = workPreferences?.bool(forKey: Self.imageResumeKey) ?? false
         // Default/test instances are memory-only. Only the production app root
         // opts into query persistence; ordinary preferences never hold queries.
         self.queryHistoryStore = queryHistoryStore
@@ -252,6 +269,10 @@ final class AppState: ObservableObject {
         // enqueue recognition at cold launch, refresh, or view reconstruction.
         _textSearchEnabled = Published(initialValue: restoredTextSearch)
         ocrSync = OCRSyncState(enabled: restoredTextSearch)
+        if workPreferences?.bool(forKey: Self.ocrResumeKey) == true {
+            ocrSync.restoreInterruptedRequest(
+                retryReducedPreviews: workPreferences?.bool(forKey: Self.ocrQualityResumeKey) ?? false)
+        }
         if let saved = translationPreferences?.object(forKey: Self.translationPreferenceKey) as? Bool {
             chineseSearchEnabled = saved
         }
@@ -268,6 +289,7 @@ final class AppState: ObservableObject {
             // only that previously unreported revision, not every successful end.
             if self?.indexAccessChangedIfNeeded() == true { self?.requestSyncSummaryRefresh() }
             self?.refreshOCRSyncAvailability()
+            self?.finishBackgroundWorkIfIdle()
         }
         photoSync.onCompleted = { [weak self] summary in
             self?.invalidateSyncSummaryRefresh()
@@ -293,12 +315,12 @@ final class AppState: ObservableObject {
     var photoCheckInitialQuery: String { completedSearchQuery?.effective ?? completedQuery ?? query }
     var canRead: Bool { authorization == .authorized || authorization == .limited }
     var modelsReady: Bool { summary.modelVersion != nil && summary.modelIssue == nil }
-    var canIndex: Bool { isForeground && canRead && modelsReady && !isBusy }
+    var canIndex: Bool { isForeground && protectedDataAvailable && canRead && modelsReady && !isBusy }
     var canIndexText: Bool {
         textSearchEnabled && canIndex && summary.indexStatisticsKnown && summary.indexedCount > 0
     }
     var canSearch: Bool {
-        isForeground && canRead && modelsReady && summary.indexStatisticsKnown && summary.indexedCount > 0 && !isBusy && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        isForeground && protectedDataAvailable && canRead && modelsReady && summary.indexStatisticsKnown && summary.indexedCount > 0 && !isBusy && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Root-view task is idempotent. Only a cold launch (or explicitly retried
@@ -416,7 +438,7 @@ final class AppState: ObservableObject {
         authorization = authorizationStatus()
         library.synchronizeObservation()
         invalidateDisplayedPhotos(preservingViewer: canRead && isForeground && authorization == previousAuthorization)
-        guard isForeground else { operationTask?.cancel(); return }
+        guard isForeground, protectedDataAvailable else { operationTask?.cancel(); return }
         if launchWasRequested, launchPhase != .ready {
             // Preparation now loads models + stored metadata, not a Photos
             // snapshot. Permission changes do not restart model initialization.
@@ -427,6 +449,11 @@ final class AppState: ObservableObject {
     }
 
     func libraryChanged() {
+        if activity == .indexing { pausedImageOperation = operationID }
+        if activity == .indexingText {
+            ocrSync.pause()
+            persistOCRResumeIntent()
+        }
         // Immediately invalidate visible/search state before waiting for an old job.
         photoLibraryEpoch = UUID()
         thumbnails.clear()
@@ -440,20 +467,88 @@ final class AppState: ObservableObject {
     }
 
     func enterBackground() {
+        guard isForeground else { return }
         isForeground = false
-        ocrSync.pause()
         syncReadinessConfirmed = false
-        refreshSyncAvailability()
+        if protectedDataAvailable,
+           activity == .indexing || activity == .indexingText || photoSyncRunning || cleanupWorkRunning {
+            let leaseID = UUID()
+            backgroundLeaseGeneration = leaseID
+            backgroundExecutionAllowed = backgroundLease?.begin { [weak self] in
+                guard self?.backgroundLeaseGeneration == leaseID else { return }
+                self?.backgroundTimeExpired()
+            } ?? false
+        }
         library.invalidateSearchSnapshot()
         translationAvailabilityID = UUID()
         if launchWasRequested, activity == .starting {
             finishLaunchTiming(launchTiming, outcome: .interrupted)
             launchPhase = .pending
         }
-        drainAndReleaseSearchMemory()
         invalidateDisplayedPhotos()
         thumbnails.clear()
-        status = "Foreground work paused. Return to the app, then index to resume."
+        if backgroundExecutionAllowed {
+            ocrSync.updateAvailability(ready: false)
+            photoSync.continueInBackground()
+            if activity != .indexing && activity != .indexingText { drainAndReleaseSearchMemory() }
+            status = "正在利用系统允许的后台时间继续处理；到期会保留进度并暂停。"
+        } else {
+            pauseBackgroundWork()
+        }
+    }
+
+    func setCleanupWorkRunning(_ running: Bool) {
+        cleanupWorkRunning = running
+        finishBackgroundWorkIfIdle()
+    }
+
+    func backgroundTimeExpired() {
+        guard !isForeground else { return }
+        backgroundExecutionAllowed = false
+        pauseBackgroundWork()
+        endBackgroundLease()
+    }
+
+    func protectedDataBecameUnavailable() {
+        protectedDataAvailable = false
+        syncReadinessConfirmed = false
+        backgroundExecutionAllowed = false
+        if launchWasRequested, activity == .starting {
+            finishLaunchTiming(launchTiming, outcome: .interrupted)
+            launchPhase = .pending
+        }
+        pauseBackgroundWork()
+        endBackgroundLease()
+    }
+
+    func protectedDataBecameAvailable() {
+        guard !protectedDataAvailable else { return }
+        protectedDataAvailable = true
+        guard isForeground else { return }
+        if launchWasRequested, launchPhase == .pending { beginLaunch(kind: .foreground) }
+        else { refresh() }
+    }
+
+    private func pauseBackgroundWork() {
+        ocrSync.pause()
+        persistOCRResumeIntent()
+        if activity == .indexing { pausedImageOperation = operationID }
+        photoSync.pause()
+        refreshSyncAvailability()
+        drainAndReleaseSearchMemory()
+        status = "后台处理已暂停，已完成记录保留；回到应用后会检查并继续未完成项。"
+    }
+
+    private func finishBackgroundWorkIfIdle() {
+        guard !isForeground, backgroundExecutionAllowed, activity == nil,
+              !photoSyncRunning, !ocrSync.currentRunning, !cleanupWorkRunning else { return }
+        backgroundExecutionAllowed = false
+        endBackgroundLease()
+    }
+
+    private func endBackgroundLease() {
+        backgroundLeaseGeneration = UUID()
+        backgroundLease?.end()
     }
 
     private func drainAndReleaseSearchMemory() {
@@ -472,6 +567,16 @@ final class AppState: ObservableObject {
         // without backgrounding. Do not cancel preparation on that transition.
         guard !isForeground else { return }
         isForeground = true
+        let continuedInBackground = backgroundExecutionAllowed
+        backgroundExecutionAllowed = false
+        endBackgroundLease()
+        guard protectedDataAvailable else { return }
+        if continuedInBackground,
+           activity == .indexing || activity == .indexingText || photoSyncRunning || cleanupWorkRunning {
+            syncReadinessConfirmed = syncLaunchSucceeded
+            refreshSyncAvailability()
+            return
+        }
         photoSync.pause()
         library.invalidateSearchSnapshot()
         if launchWasRequested, launchPhase != .ready {
@@ -490,8 +595,11 @@ final class AppState: ObservableObject {
         beginManualIndex(rebuild: true)
     }
 
-    private func beginManualIndex(rebuild: Bool) {
+    private func beginManualIndex(rebuild: Bool, resuming: Bool = false) {
         guard canIndex else { return }
+        imageIndexResuming = resuming
+        imageResumeRequested = true
+        workPreferences?.set(true, forKey: Self.imageResumeKey)
         photoLibraryEpoch = UUID()
         invalidateDisplayedPhotos()
         progress = IndexProgress()
@@ -531,6 +639,7 @@ final class AppState: ObservableObject {
 
     func cancelOCRSync() {
         ocrSync.cancel()
+        persistOCRResumeIntent()
         // Never cancel an unrelated search, Photos mutation or manual image job
         // merely because a text request was waiting behind it.
         if activity == .indexingText { operationTask?.cancel() }
@@ -547,9 +656,30 @@ final class AppState: ObservableObject {
     }
 
     private func refreshOCRSyncAvailability() {
-        ocrSync.updateAvailability(ready: canIndexText && !photoSyncRunning)
+        persistOCRResumeIntent()
+        ocrSync.updateAvailability(ready: canIndexText && !photoSyncRunning && !imageResumeRequested)
         guard let run = ocrSync.takeReadyRequest() else { return }
         beginOCRSync(run: run)
+    }
+
+    private func persistOCRResumeIntent() {
+        let continuing = textSearchEnabled && (ocrSync.pending
+            || (ocrSync.currentRunning && ocrSync.phase != .cancelling))
+        workPreferences?.set(continuing, forKey: Self.ocrResumeKey)
+        workPreferences?.set(ocrSync.pending ? ocrSync.pendingQualityRetry : ocrSync.retryReducedPreviews,
+                             forKey: Self.ocrQualityResumeKey)
+    }
+
+    private func resumeInterruptedWork() {
+        guard isForeground, protectedDataAvailable, canRead, modelsReady, !isBusy else { return }
+        if imageResumeRequested { beginManualIndex(rebuild: false, resuming: true) }
+        else { refreshOCRSyncAvailability() }
+    }
+
+    private func clearImageResumeIntent() {
+        imageResumeRequested = false
+        pausedImageOperation = nil
+        workPreferences?.removeObject(forKey: Self.imageResumeKey)
     }
 
     private func beginOCRSync(run: UUID) {
@@ -815,7 +945,9 @@ final class AppState: ObservableObject {
     }
 
     func cancel() {
+        if imageResumeRequested { clearImageResumeIntent() }
         if activity == .indexingText { ocrSync.cancel() }
+        persistOCRResumeIntent()
         operationTask?.cancel()
         // Search cancellation revokes its continuation. Cancelling an unrelated
         // diagnostic/translation task must preserve the gallery underneath it.
@@ -824,6 +956,7 @@ final class AppState: ObservableObject {
     }
 
     func clearIndex() {
+        clearImageResumeIntent()
         cancelOCRSync()
         photoLibraryEpoch = UUID()
         invalidateDisplayedPhotos()
@@ -870,7 +1003,8 @@ final class AppState: ObservableObject {
     }
 
     private func accept(textProgress: TextIndexProgress, token: UUID, ocrRun: UUID) {
-        guard token == operationID, activity == .indexingText, isForeground else { return }
+        guard token == operationID, activity == .indexingText,
+              isForeground || backgroundExecutionAllowed else { return }
         self.textIndexProgress = textProgress
         ocrSync.accept(textProgress, token: ocrRun)
     }
@@ -880,10 +1014,14 @@ final class AppState: ObservableObject {
             || activity == .indexing || activity == .clearing || activity == .indexingText
             || ocrSync.currentRunning
         return syncLaunchSucceeded && syncReadinessConfirmed && launchPhase == .ready
-            && isForeground && canRead && modelsReady && !blocksSync
+            && isForeground && protectedDataAvailable && canRead && modelsReady && !blocksSync && !imageResumeRequested
     }
 
     private func refreshSyncAvailability() {
+        if !isForeground, backgroundExecutionAllowed {
+            invalidateSyncSummaryRefresh()
+            return
+        }
         let ready = syncSummaryReady
         if !ready { invalidateSyncSummaryRefresh() }
         photoSync.updateAvailability(
@@ -1007,6 +1145,9 @@ final class AppState: ObservableObject {
                           ocrRun: UUID? = nil,
                           operation: @escaping @MainActor (UUID) async throws -> Outcome) {
         let predecessor = operationTask
+        if self.activity == .indexing, pausedImageOperation != operationID, activity != .indexing {
+            clearImageResumeIntent()
+        }
         if ocrRun == nil { ocrSync.stopRunning() }
         predecessor?.cancel()
         let token = UUID()
@@ -1030,7 +1171,12 @@ final class AppState: ObservableObject {
                 if let ocrRun {
                     self?.ocrSync.finish(token: ocrRun, completion: ocrCompletion,
                                          issue: self?.textIndexOperationIssue)
+                    self?.persistOCRResumeIntent()
                     self?.refreshSyncAvailability()
+                }
+                if self?.operationID == token {
+                    self?.finishBackgroundWorkIfIdle()
+                    self?.resumeInterruptedWork()
                 }
             }
             do {
@@ -1078,6 +1224,7 @@ final class AppState: ObservableObject {
                 case .summary(let summary, let message):
                     self.summary = summary
                     self.status = message
+                    if activity == .indexing { self.clearImageResumeIntent() }
                     if activity == .refreshing { self.syncReadinessConfirmed = true }
                 case .search(let response, let query, let seed):
                     searchMeasurement?.mark(.publication)
@@ -1138,7 +1285,10 @@ final class AppState: ObservableObject {
                 if activity == .starting || activity == .refreshing {
                     self.syncReadinessConfirmed = false
                 }
-                if activity == .indexing || activity == .clearing {
+                if activity == .indexing, self.pausedImageOperation != token {
+                    self.clearImageResumeIntent()
+                }
+                if (activity == .indexing && self.pausedImageOperation != token) || activity == .clearing {
                     // No implicit retry after failed manual work, but the user
                     // can explicitly request a fresh sync without another refresh.
                     self.photoSync.requireExplicitRestart()
@@ -1146,8 +1296,8 @@ final class AppState: ObservableObject {
                 defer { self.refreshSyncAvailability() }
                 if activity == .starting {
                     self.syncLaunchSucceeded = false
-                    self.finishLaunchTiming(timing, outcome: !self.isForeground || error is CancellationError || Task.isCancelled ? .interrupted : .failed)
-                    if !self.isForeground {
+                    self.finishLaunchTiming(timing, outcome: !self.isForeground || !self.protectedDataAvailable || error is CancellationError || Task.isCancelled ? .interrupted : .failed)
+                    if !self.isForeground || !self.protectedDataAvailable {
                         self.launchPhase = .pending
                         self.launchIssue = nil
                     } else {
@@ -1164,7 +1314,9 @@ final class AppState: ObservableObject {
                 } else if activity == .indexingText {
                     self.summary.textIndexStatisticsKnown = false
                     self.textIndexOperationIssue = error is CancellationError || Task.isCancelled
-                        ? "文字索引已暂停，已完成记录保留；手动更新可继续。"
+                        ? (self.ocrSync.lifecyclePaused
+                            ? "文字索引已暂停，已完成记录保留；回到应用后会检查并继续。"
+                            : "文字索引已取消，已完成记录保留；不会自动重试。")
                         : "文字索引未完成。请检查照片权限后重试；图片索引没有重新计算。"
                     self.status = self.textIndexOperationIssue ?? "文字索引已停止。"
                 } else if activity == .preparingTranslation {

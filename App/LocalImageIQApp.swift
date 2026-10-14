@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 @MainActor
@@ -9,7 +10,9 @@ struct LocalImageIQApp: App {
         startupContext: { StartupContext.current() },
         textSearchPreferences: .standard,
         queryHistoryStore: QueryHistoryStore(),
-        locationSearchPreferences: .standard)
+        locationSearchPreferences: .standard,
+        workPreferences: .standard,
+        backgroundLease: BackgroundWorkLease())
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -27,6 +30,12 @@ struct LocalImageIQApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .background { state.enterBackground() }
                     else if phase == .active { state.enterForeground() }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
+                    state.protectedDataBecameUnavailable()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+                    state.protectedDataBecameAvailable()
                 }
         }
     }

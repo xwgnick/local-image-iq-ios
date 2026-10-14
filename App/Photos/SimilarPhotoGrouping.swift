@@ -17,6 +17,9 @@ struct SimilarPhotoGroupingProgress: Sendable, Equatable {
     var total = 0
     var completed = 0
     var groupCount = 0
+    var resumed = 0
+    var checkpointDiscarded = false
+    var checkpointSaveFailed = false
     var fraction: Double { total == 0 ? 1 : Double(completed) / Double(total) }
 }
 
@@ -134,7 +137,9 @@ enum SimilarPhotoGrouper {
     static func compute(
         prepared: SimilarGroupingPreparedInput, threshold: Float,
         progress: @escaping @Sendable (SimilarPhotoGroupingProgress) async -> Void = { _ in },
-        checkAccess: @escaping @Sendable () throws -> Void = {}
+        checkAccess: @escaping @Sendable () throws -> Void = {},
+        checkpoint: SimilarGroupingCheckpointState? = nil,
+        saveCheckpoint: @escaping @Sendable (SimilarGroupingCheckpointState) async throws -> Void = { _ in }
     ) async throws -> SimilarGroupingComputation {
         try Task.checkCancellation()
         try SimilarPhotoGroupingPolicy.validate(threshold: threshold)
@@ -144,19 +149,27 @@ enum SimilarPhotoGrouper {
         let norms = prepared.norms
         var metrics = SimilarGroupingComputationMetrics()
         var state = SimilarPhotoGroupingProgress(total: ordered.count)
+        try checkpoint?.validate(count: ordered.count, threshold: threshold)
+        state.completed = checkpoint?.completed ?? 0
+        state.resumed = state.completed
+        state.groupCount = checkpoint?.groups.count ?? 0
         try checkAccess()
         try Task.checkCancellation()
         await progress(state)
         try Task.checkCancellation()
         try checkAccess()
 
-        var assigned = [Bool](repeating: false, count: ordered.count)
+        var assigned = checkpoint?.assigned ?? [Bool](repeating: false, count: ordered.count)
         var scores = [Float](repeating: 0, count: ordered.count)
         var seedScores = [Float](repeating: 0, count: ordered.count)
         var candidates: [Int] = []
         candidates.reserveCapacity(ordered.count)
-        var groups: [SimilarPhotoGroup] = []
-        for seed in ordered.indices {
+        var savedGroups = checkpoint?.groups ?? []
+        var groups = savedGroups.map { group in
+            SimilarPhotoGroup(id: ordered[group.members[0]].id,
+                photos: group.members.map { ordered[$0] }, minimumSimilarity: Float(bitPattern: group.minimumBits))
+        }
+        for seed in (checkpoint?.nextSeed ?? 0)..<ordered.count {
             try Task.checkCancellation()
             guard !assigned[seed] else { continue }
             try checkAccess()
@@ -226,12 +239,17 @@ enum SimilarPhotoGrouper {
             if members.count >= 2 {
                 groups.append(SimilarPhotoGroup(id: ordered[seed].id,
                                                 photos: members.map { ordered[$0] }, minimumSimilarity: minimum))
+                savedGroups.append(.init(members: members, minimumBits: minimum.bitPattern))
                 state.groupCount += 1
             }
             // Assigned members count immediately, including members skipped as
             // later seeds. Unmatched singletons count as processed candidates too.
             try Task.checkCancellation()
             try checkAccess()
+            if metrics.matrixMultiplyCount.isMultiple(of: 16) || state.completed == state.total {
+                try await saveCheckpoint(SimilarGroupingCheckpointState(nextSeed: seed + 1,
+                    assigned: assigned, groups: savedGroups))
+            }
             await progress(state)
             try Task.checkCancellation()
             try checkAccess()
@@ -375,8 +393,10 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             switch saved {
             // A previous in-memory completion with a different key is stale, not a
             // cold first entry, even if that completion could not be written to disk.
-            case .missing: return resident == nil ? .missing : .stale
-            case .stale: return .stale
+            case .missing, .stale:
+                if case .restored = try cache.readCheckpoint(key: key) { return .missing }
+                if case .missing = saved { return resident == nil ? .missing : .stale }
+                return .stale
             case .restored(let value):
                 phase = .sourceCheck
                 let baselineID = UUID()
@@ -510,8 +530,37 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
                 prepared = try SimilarGroupingPreparedInput(photos: records)
                 metrics.preparationCount = 1
             }
+            phase = .cacheRead
+            let cache = suppliedCache ?? SimilarGroupingCache(directory: location.directory)
+            let key = try SimilarGroupingCacheKey(authorized: initial, imagePayloadSignature: source.imagePayloadSignature,
+                modelVersion: cacheVersion, authorization: access.authorization, threshold: threshold)
+            var checkpoint: SimilarGroupingCheckpointState?
+            var checkpointDiscarded = false
+            switch try cache.readCheckpoint(key: key) {
+            case .missing: break
+            case .stale: checkpointDiscarded = true
+            case .restored(let saved):
+                do {
+                    try saved.validate(count: prepared.photos.count, threshold: threshold)
+                    checkpoint = saved
+                } catch SimilarGroupingCacheError.invalid {
+                    checkpointDiscarded = true
+                }
+            }
+            let discarded = checkpointDiscarded
+            let checkpointWriter = SimilarGroupingCheckpointWriter(cache: cache, key: key)
+            phase = .compute
             let computation = try await SimilarPhotoGrouper.compute(prepared: prepared, threshold: threshold,
-                progress: progress, checkAccess: validateComputeAccess)
+                progress: { value in
+                    var value = value
+                    value.checkpointDiscarded = discarded
+                    let issue = await checkpointWriter.persistenceIssue
+                    value.checkpointSaveFailed = issue != nil
+                    await progress(value)
+                }, checkAccess: validateComputeAccess, checkpoint: checkpoint,
+                saveCheckpoint: { state in
+                    try await checkpointWriter.save(state, validate: validateComputeAccess)
+                })
             let groups = computation.groups
             metrics.computation = computation.metrics
             phase = .sourceCheck
@@ -528,13 +577,11 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             phase = .indexRead
             guard finalSource == source else { throw Self.indexChanged() }
             phase = .cacheWrite
-            let key = try SimilarGroupingCacheKey(authorized: initial, imagePayloadSignature: source.imagePayloadSignature,
-                                                 modelVersion: cacheVersion, authorization: access.authorization, threshold: threshold)
             let payload = try SimilarGroupingCachePayload(groups: groups, candidateCount: eligible.count,
                 staleCount: indexed.count - eligible.count, unindexedCount: initial.count - indexed.count, key: key)
             _ = try payload.validated(authorized: initial, indexed: indexed)
-            let cache = suppliedCache ?? SimilarGroupingCache(directory: location.directory)
-            var persistenceIssue: String?
+            var persistenceIssue = await checkpointWriter.persistenceIssue
+            var completedCacheSaved = false
             do {
                 try cache.save(groups: groups, candidateCount: eligible.count, staleCount: indexed.count - eligible.count,
                                unindexedCount: initial.count - indexed.count, key: key,
@@ -549,6 +596,9 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
                                        throw SimilarCleanupDiagnostic.classify(error, phase: .sourceCheck)
                                    }
                                })
+                completedCacheSaved = true
+                persistenceIssue = nil
+                try cache.removeCheckpoint(validate: validateComputeAccess)
             } catch {
                 if error is CancellationError || Task.isCancelled { throw CancellationError() }
                      // A typed authority failure is already fatal: preserve its first
@@ -560,7 +610,9 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
                 // authorizing stale groups. Recheck BOTH authorities before recovery.
                 phase = .sourceCheck
                 try check(ticket, access: access, authority: authority)
-                persistenceIssue = "SG-CACHE-WRITE\n本次分组可正常使用，但未能保存；下次打开可能需要重新分组。"
+                persistenceIssue = completedCacheSaved
+                    ? "SG-CHECKPOINT-CLEANUP\n本次分组已保存，但旧的分组断点未能清理。"
+                    : "SG-CACHE-WRITE\n本次分组可正常使用，但未能保存；下次打开可能需要重新分组。"
             }
             phase = .sourceCheck
             try check(ticket, access: access, authority: authority)

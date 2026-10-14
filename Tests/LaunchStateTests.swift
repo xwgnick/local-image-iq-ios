@@ -31,6 +31,7 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertTrue(state.showsHome, "Library/settings are reachable while models are still preparing.")
         state.homeDidAppear()
         XCTAssertEqual(state.summary.indexedCount, 0)
+        XCTAssertFalse(state.summary.indexStatisticsKnown, "Unread launch statistics must not masquerade as an empty index.")
         XCTAssertFalse(state.summary.authorizedCountKnown)
 
         await hold.prepare.open()
@@ -46,6 +47,7 @@ final class LaunchStateTests: XCTestCase {
         await state.waitUntilIdle()
         XCTAssertEqual(phases, [.pending, .checkingLibrary, .preparingSearch, .ready])
         XCTAssertEqual(state.summary.indexedCount, 2)
+        XCTAssertTrue(state.summary.indexStatisticsKnown)
         XCTAssertFalse(state.summary.authorizedCountKnown, "Launch reads metadata, not the current Photos count.")
         XCTAssertTrue(state.modelsReady)
         XCTAssertTrue(state.canSearch)

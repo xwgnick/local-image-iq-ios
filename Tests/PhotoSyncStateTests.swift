@@ -9,6 +9,28 @@ import ImageIQCore
 /// Photos assets, model loads, storage writes, polling or timing-based ordering.
 @MainActor
 final class PhotoSyncStateTests: XCTestCase {
+    func testFiniteBackgroundContinuationDoesNotCancelCurrentScanOrAdmitAnotherBeforeForeground() async {
+        let first = SyncStateRun(result: syncResult(count: 3, encoded: 1))
+        let next = SyncStateRun(result: syncResult(count: 3, encoded: 0))
+        let service = SyncStateService([first, next])
+        let state = makeState(service)
+        state.updateAvailability(ready: true, networkAllowed: false)
+        await first.entered.wait()
+        state.continueInBackground()
+        XCTAssertEqual(first.cancelled.count, 0)
+        first.release.send()
+        await state.waitUntilIdle()
+        let backgroundCalls = await service.calls
+        XCTAssertEqual(backgroundCalls, 1)
+        XCTAssertEqual(state.phase, .completed)
+        state.updateAvailability(ready: true, networkAllowed: false)
+        await next.entered.wait()
+        next.release.send()
+        await state.waitUntilIdle()
+        let foregroundCalls = await service.calls
+        XCTAssertEqual(foregroundCalls, 2)
+    }
+
     func testBatchDeletionOfFifteenDoesNotRestartForUnrelatedPhotoKitNotifications() async {
         let initial = SyncStateRun(result: syncResult(count: 35, encoded: 0))
         let removal = PhotoSyncProgress(phase: .updating, total: 0, removed: 15)
