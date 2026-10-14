@@ -65,7 +65,8 @@ test('exported device IPA identity and SDK must match the approved official buil
 test('FP16 delivery must change model identity and meet the actual IPA byte ceiling', () => {
   assert.equal(modelPrecision, 'float16');
   const manifest = { modelVersion: `siglip2-b16-224-v1-${'a'.repeat(64)}`,
-    preprocessing: { computePrecision: 'float16' }, parity: { precision: 'float16', status: 'passed' } };
+    preprocessing: { computePrecision: 'float16' }, parity: { precision: 'float16', status: 'passed',
+      acceptancePolicy: 'fp16-normalized-experiment-v1' } };
   validateModelDelivery(manifest, maxIPABytes);
   for (const bytes of [0, -1, NaN, Infinity, 1.5, maxIPABytes + 1]) {
     assert.throws(() => validateModelDelivery(manifest, bytes));

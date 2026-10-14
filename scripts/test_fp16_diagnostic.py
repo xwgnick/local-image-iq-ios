@@ -32,6 +32,14 @@ class FP16DiagnosticTests(unittest.TestCase):
         self.assertEqual(rows[1]["candidateOrder"], ["a", "b", "c", "d"])
         self.assertEqual(rows[1]["referenceTop1Margin"], 0)
 
+    def test_fp16_policy_uses_direction_but_rejects_wrong_vectors(self):
+        reference = np.ones((1, 768), dtype=np.float32)
+        compare(reference, reference * 2, "fp16-normalized", None, 0.999)
+        with self.assertRaises(ValueError):
+            compare(reference, -reference, "opposite-direction", None, 0.999)
+        with self.assertRaises(ValueError):
+            compare(reference, reference * 2, "fp32-strict", 1e-3, 0.999)
+
     def test_ranking_rejects_invalid_shapes_and_nonfinite_scores(self):
         with self.assertRaises(ValueError):
             ranking_diagnostics(np.ones((1, 2)), np.ones((1, 3)), ["q"], ["a", "b"])

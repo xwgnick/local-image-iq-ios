@@ -117,6 +117,45 @@ final class GeneratedModelParityTests: XCTestCase {
         }
     }
 
+    func testPairedCosineScoresMatchReferenceOnCPUAndAllComputeUnits() throws {
+        try withReport(computeUnits: "cpuOnly+all") { report in
+            let resources = try self.resources(report: &report)
+            let ceiling = report.precision == "float16" ? 0.002 : 1e-4
+            for units in [MLComputeUnits.cpuOnly, .all] {
+                let texts: [[Float]] = try autoreleasepool {
+                    let model = try loadModel(resources.textModel, computeUnits: units,
+                                              inputs: ["input_ids": ([1, 64], .int32)])
+                    return try resources.text.cases.map { fixture in
+                        try autoreleasepool { try predictText(model, ids: fixture.inputIDs).normalized }
+                    }
+                }
+                let images: [[Float]] = try autoreleasepool {
+                    let model = try loadModel(resources.imageModel, computeUnits: units,
+                                              inputs: ["pixel_values": (Self.imageShape, .float32)])
+                    return try resources.images.cases.map { fixture in
+                        try autoreleasepool {
+                            let tensor = try imageTensor(referenceTensor(fixture, resources: resources))
+                            return try predict(model, inputs: ["pixel_values": tensor]).normalized
+                        }
+                    }
+                }
+                for (textIndex, text) in resources.text.cases.enumerated() {
+                    let referenceText = try EmbeddingValidation.normalizeProjection(text.referenceRaw)
+                    for (imageIndex, image) in resources.images.cases.enumerated() {
+                        let referenceImage = try EmbeddingValidation.normalizeProjection(image.referenceRaw)
+                        func score(_ lhs: [Float], _ rhs: [Float]) -> Float {
+                            Float(zip(lhs, rhs).reduce(0.0) { $0 + Double($1.0) * Double($1.1) })
+                        }
+                        try record(reference: [score(referenceText, referenceImage)],
+                                   candidate: [score(texts[textIndex], images[imageIndex])],
+                                   id: text.id + "/" + image.id, stage: "paired.\(units)",
+                                   target: "FP32 reference cosine", maxAbs: ceiling, report: &report)
+                    }
+                }
+            }
+        }
+    }
+
     func testAppEncodersModelSizedPreviewAndAllTextReferenceParity() async throws {
         // The production actor uses .all. Unlike the optional engine comparison,
         // this app-API gate runs in EVERY model-enabled build, without MainActor.
@@ -459,8 +498,17 @@ final class GeneratedModelParityTests: XCTestCase {
             throw ParityError.invalid("Missing bundled \(name).\(ext); model-enabled parity cannot skip.")
         }
         let manifestURL = try required(manifestName, "json", in: [owner])
-        let manifest = try JSONDecoder().decode(ModelManifest.self, from: Data(contentsOf: manifestURL))
+        let manifestData = try Data(contentsOf: manifestURL)
+        let manifest = try JSONDecoder().decode(ModelManifest.self, from: manifestData)
         try manifest.validate()
+        let precision = try JSONDecoder().decode(ManifestPrecision.self, from: manifestData)
+        try require(["float32", "float16"].contains(precision.preprocessing.computePrecision),
+                    "Unsupported model compute precision.")
+        if precision.preprocessing.computePrecision == "float16" {
+            try require(precision.parity.acceptancePolicy == "fp16-normalized-experiment-v1",
+                        "FP16 requires the explicitly approved experimental policy.")
+        }
+        report.precision = precision.preprocessing.computePrecision
         let imageModel = try required("ImageEncoder", "mlmodelc", in: [owner])
         let textModel = try required("TextEncoder", "mlmodelc", in: [owner])
         let tokenizerURL = try required("tokenizer", "json", in: [owner])
@@ -796,6 +844,13 @@ final class GeneratedModelParityTests: XCTestCase {
         let normalized: [Float]
     }
 
+    private struct ManifestPrecision: Decodable {
+        struct Preprocessing: Decodable { let computePrecision: String }
+        struct Parity: Decodable { let acceptancePolicy: String? }
+        let preprocessing: Preprocessing
+        let parity: Parity
+    }
+
     private func checkRawVectors(_ vectors: [Float]...) throws {
         for vector in vectors {
             try require(vector.count == 768 && vector.allSatisfy(\.isFinite)
@@ -807,7 +862,7 @@ final class GeneratedModelParityTests: XCTestCase {
                                    id: String, stage: String, conversion: Bool, report: inout Report) throws {
         for (target, reference) in [("referenceRaw", reference), ("coreMLRaw", exported)] {
             try record(reference: reference, candidate: prediction.raw, id: id, stage: stage + ".raw",
-                       target: target, maxAbs: conversion ? Self.conversionMaxAbs : nil,
+                       target: target, maxAbs: conversion && report.precision == "float32" ? Self.conversionMaxAbs : nil,
                        minCosine: conversion ? Self.conversionMinCosine : Self.nativeImageMinCosine,
                        strictCosine: conversion, report: &report)
             let normalized = try EmbeddingValidation.normalizeProjection(reference)
@@ -913,6 +968,7 @@ final class GeneratedModelParityTests: XCTestCase {
         var resourceGate: String?
         var modelBundle: String?
         var modelVersion: String?
+        var precision = "float32"
         var exportNativeMarkers: [String: String] = [:]
         var fixtureCounts: [String: Int] = [:]
         var coverageNote: String?

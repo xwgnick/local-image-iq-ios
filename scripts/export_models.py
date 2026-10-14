@@ -23,7 +23,7 @@ import tempfile
 from model_contract import (
     DIMENSION, FEATURES, IMAGE_MODEL, MAX_ABS_LIMITS, MEAN, PREPROCESS, ROOT,
     SCHEMA_VERSION, SEQUENCE_LENGTH, STD, TEXT_MODEL, TOKENIZER_FILES, VOCAB_SIZE,
-    base_manifest, model_version, query_cases, require, sha256_file,
+    FP16_SIMILARITY_MAX_ABS, acceptance_policy, base_manifest, model_version, query_cases, require, sha256_file,
     validate_document, validate_snapshot_configs, validate_tokenization, write_json,
 )
 
@@ -51,23 +51,35 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Explicitly fetch only the pinned public shared checkpoint; no token")
     parser.add_argument("--output", type=Path, default=ROOT / "Resources" / "Models")
     parser.add_argument("--precision", choices=("float32", "float16"), default="float32",
-                        help="FP16 is experimental and must pass the same numerical gates as FP32")
+                        help="FP16 uses the explicitly approved normalized-vector experimental policy")
     parser.add_argument("--diagnostic-report", type=Path,
                         help="Measure every fixture without publishing models; report existing gate failures")
     parser.add_argument("--min-cosine", type=float, default=0.999,
                         help="Each raw-vector comparison must exceed this cosine (FP32 floor .999)")
-    parser.add_argument("--conversion-max-abs", type=float, default=1e-3,
-                        help="Maximum per-component error for saved Core ML vs eager Torch")
+    parser.add_argument("--conversion-max-abs", type=float,
+                        help="FP32 only: maximum raw component error (default 1e-3); FP16 records raw error")
     parser.add_argument("--torch-max-abs", type=float, default=1e-5,
                         help="Maximum raw error for HF reference vs wrapper and eager vs trace")
-    parser.add_argument("--similarity-max-abs", type=float, default=1e-4,
-                        help="Maximum text/image cosine matrix difference vs HF reference")
+    parser.add_argument("--similarity-max-abs", type=float,
+                        help="Maximum cosine matrix error: FP32 default 1e-4, experimental FP16 default 0.002")
     parser.add_argument("--preprocess-max-abs", type=float, default=1e-6,
                         help="Maximum independent PIL/NumPy vs HF preprocessing error")
     args = parser.parse_args(argv)
+    if args.precision == "float16":
+        if args.conversion_max_abs is not None:
+            parser.error("--conversion-max-abs is FP32-only; FP16 uses the approved cosine policy")
+        limits = {**MAX_ABS_LIMITS, "similarity_max_abs": FP16_SIMILARITY_MAX_ABS}
+    else:
+        if args.conversion_max_abs is None:
+            args.conversion_max_abs = MAX_ABS_LIMITS["conversion_max_abs"]
+        limits = MAX_ABS_LIMITS
+    if args.similarity_max_abs is None:
+        args.similarity_max_abs = limits["similarity_max_abs"]
     if not math.isfinite(args.min_cosine) or not 0.999 <= args.min_cosine < 1:
         parser.error("--min-cosine must be finite and in [0.999, 1); the comparison is strict >")
-    for name, ceiling in MAX_ABS_LIMITS.items():
+    for name, ceiling in limits.items():
+        if name == "conversion_max_abs" and args.precision == "float16":
+            continue
         if not math.isfinite(getattr(args, name)) or not 0 < getattr(args, name) <= ceiling:
             parser.error(f"--{name.replace('_', '-')} must be finite, positive and <= {ceiling}")
     return args
@@ -259,7 +271,7 @@ def raw_vector(array, label: str):
     return result
 
 
-def compare(reference, candidate, label: str, max_abs: float, min_cosine: float,
+def compare(reference, candidate, label: str, max_abs: float | None, min_cosine: float,
             enforce: bool = True) -> dict:
     import numpy as np
 
@@ -272,7 +284,7 @@ def compare(reference, candidate, label: str, max_abs: float, min_cosine: float,
                 "referenceNorm": left_norm, "candidateNorm": right_norm}
     print(f"{label}: maxAbs={error:.8g}, cosine={cosine:.10f}", flush=True)
     if enforce:
-        require(error <= max_abs and cosine > min_cosine,
+        require((max_abs is None or error <= max_abs) and cosine > min_cosine,
                 f"{label}: parity failed {measured}; required maxAbs <= {max_abs}, cosine > {min_cosine}")
     return measured
 
@@ -393,6 +405,7 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
     converted_image = convert_and_reload(image_trace, "image", stage, args.precision)
     converted_text = convert_and_reload(text_trace, "text", stage, args.precision)
     report = {"schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(args.precision), "precision": args.precision,
+              "acceptancePolicy": acceptance_policy(args.precision),
               "computeUnits": "CPU_ONLY", "thresholds": {
                   "minCosineExclusive": args.min_cosine, "conversionMaxAbsInclusive": args.conversion_max_abs,
                   "torchMaxAbsInclusive": args.torch_max_abs, "similarityMaxAbsInclusive": args.similarity_max_abs,
@@ -441,10 +454,12 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
         "imageIDs": [c["metadata"]["id"] for c in images],
         "reference": reference.tolist(), "coreML": converted.tolist(), "maxAbs": delta,
     }
+    def accepted(label: str, measured: dict) -> bool:
+        limit = args.torch_max_abs if label in ("referenceVsWrapper", "wrapperVsTrace") else args.conversion_max_abs
+        return (limit is None or measured["maxAbs"] <= limit) and measured["cosine"] > args.min_cosine
+
     report["passed"] = delta <= args.similarity_max_abs and all(
-        measured["maxAbs"] <= (args.torch_max_abs if label in ("referenceVsWrapper", "wrapperVsTrace")
-                               else args.conversion_max_abs) and measured["cosine"] > args.min_cosine
-        for case in report["cases"] for label, measured in case["comparisons"].items())
+        accepted(label, measured) for case in report["cases"] for label, measured in case["comparisons"].items())
     if args.diagnostic_report is not None:
         report["diagnosticOnly"] = True
         report["modelsPublished"] = False
@@ -490,6 +505,7 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
     manifest = base_manifest(args.precision)
     manifest.update({
         "parity": {"status": "passed", "report": "parity-report.json", "precision": args.precision,
+                   "acceptancePolicy": acceptance_policy(args.precision),
                    "computeUnits": "CPU_ONLY", "nativeTokenizer": "not-run",
                    "nativePreprocessing": "not-run", "nativeRuntime": "not-run"},
         "provenance": "provenance.json", "redistributionApproved": False,

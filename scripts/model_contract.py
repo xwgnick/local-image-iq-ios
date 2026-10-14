@@ -23,6 +23,14 @@ STD = [0.5, 0.5, 0.5]
 # CLI overrides may tighten, never weaken these numerical acceptance gates.
 MAX_ABS_LIMITS = {"conversion_max_abs": 1e-3, "torch_max_abs": 1e-5,
                   "similarity_max_abs": 1e-4, "preprocess_max_abs": 1e-6}
+FP16_SIMILARITY_MAX_ABS = 2e-3
+
+
+def acceptance_policy(precision: str) -> str:
+    require(precision in ("float32", "float16"), "Unsupported compute precision")
+    return "fp16-normalized-experiment-v1" if precision == "float16" else "fp32-strict-v1"
+
+
 FEATURES = {
     "image": {"pixel_values": {"dtype": "float32", "shape": [1, 3, 224, 224]}},
     "text": {"input_ids": {"dtype": "int32", "shape": [1, 64]}},

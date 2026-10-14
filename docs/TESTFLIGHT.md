@@ -18,11 +18,19 @@ Installing build 47 updates the same app; it is not a side-by-side app.
 Switching back to build 46 also requires embeddings for its model version.
 Do not uninstall the app or clear its data just to change builds.
 
-FP16 keeps the Float32 image/output and Int32 token interfaces. It must pass
-the existing numerical gates unchanged (raw maximum error `1e-3`, cosine
-strictly greater than `0.999`, paired cosine-matrix error `1e-4`) and the full
-native model/App/UI gates. Failure stops delivery, not a silent FP32 fallback
-or a relaxed threshold. The signed exported IPA must actually be at most
+FP16 keeps the Float32 image/output and Int32 token interfaces. After the full
+diagnostic below, the user explicitly approved the separate
+`fp16-normalized-experiment-v1` policy: vector cosine strictly greater than
+`0.999`, paired cosine-matrix absolute error at most `0.002`, and raw component
+error recorded as a diagnostic rather than a gate. Production search normalizes
+the vectors. FP32 retains its original raw maximum error `1e-3` and paired
+matrix error `1e-4`; Torch wrapper/trace and image preprocessing gates are
+unchanged for both precisions. Reports and manifests name the policy.
+
+FP16 must also pass full native model/App/UI gates, including a new paired
+score comparison against FP32 references on both CPU and all compute units.
+Failure stops delivery, not a silent FP32 fallback or automatic threshold
+adjustment. The signed exported IPA must actually be at most
 900 MiB before any Apple package validation/upload. The delivery report records
 precision, model version, bytes, SHA-256 and the build46 byte baseline.
 
@@ -72,9 +80,15 @@ The report explicitly says `passed=false`, `diagnosticOnly=true`,
 Artifact `11906514421` was downloaded and its ZIP SHA-256 checked against
 GitHub's digest:
 `ded433da54203bcd4b714e53848b5e05ce8242297c16f34c59c4168ca64cd6a3`.
-No acceptance thresholds changed, no native FP16 tests or signed archive ran,
-and no build47 upload occurred. A separate FP16 acceptance decision remains
-pending.
+At this diagnostic point no acceptance thresholds had changed, no native FP16
+tests or signed archive had run, and no build47 upload had occurred.
+
+The user subsequently accepted the FP16-specific criteria listed above and
+approved continuing to an experimental TestFlight build for device comparison.
+This is an intentional precision-specific acceptance change, not a claim that
+the original FP32 numerical gates passed. Delivery remains pending a new full
+native and signing run. Real-photo quality and device performance remain
+unverified.
 
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the

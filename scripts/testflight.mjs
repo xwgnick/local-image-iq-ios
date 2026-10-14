@@ -55,6 +55,7 @@ export function validateModelDelivery(manifest, bytes) {
   assert.equal(manifest.preprocessing?.computePrecision, modelPrecision, 'Expected experimental FP16 models');
   assert.equal(manifest.parity?.precision, modelPrecision);
   assert.equal(manifest.parity?.status, 'passed');
+  assert.equal(manifest.parity?.acceptancePolicy, 'fp16-normalized-experiment-v1');
   assert.match(manifest.modelVersion ?? '', /^siglip2-b16-224-v1-[a-f0-9]{64}$/);
   assert.notEqual(manifest.modelVersion, 'siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b',
     'FP16 must not reuse the FP32 index identity');
@@ -297,6 +298,7 @@ async function main(mode) {
     const hash = createHash('sha256');
     for await (const chunk of createReadStream(ipa)) hash.update(chunk);
     const report = { ...identity, modelPrecision, modelVersion: modelManifest.modelVersion,
+      acceptancePolicy: modelManifest.parity.acceptancePolicy,
       baselineBuild: '46', baselineIPABytes: 1422924391,
       sourceSHA: process.env.GITHUB_SHA, appID,
       signed: true, nativeValidation: true, publicStoreSubmission: false,

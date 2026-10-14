@@ -109,7 +109,7 @@ class StaticTests(unittest.TestCase):
         self.assertEqual(contract.canonical_json({"a": 1, "b": 2}),
                          contract.canonical_json({"b": 2, "a": 1}))
 
-    def test_fp16_is_explicit_versioned_and_preserves_fp32_interfaces_and_gates(self):
+    def test_fp16_is_explicit_versioned_with_separate_approved_policy(self):
         baseline = contract.base_manifest()
         candidate = contract.base_manifest("float16")
         self.assertEqual(baseline, contract.base_manifest("float32"))
@@ -124,9 +124,16 @@ class StaticTests(unittest.TestCase):
         self.assertEqual(export_models.arguments([]).precision, "float32")
         args = export_models.arguments(["--precision", "float16"])
         self.assertEqual(args.precision, "float16")
-        self.assertEqual(args.conversion_max_abs, 1e-3)
-        self.assertEqual(args.similarity_max_abs, 1e-4)
+        self.assertIsNone(args.conversion_max_abs)
+        self.assertEqual(args.similarity_max_abs, 0.002)
         self.assertEqual(args.min_cosine, 0.999)
+        baseline_args = export_models.arguments([])
+        self.assertEqual(baseline_args.conversion_max_abs, 1e-3)
+        self.assertEqual(baseline_args.similarity_max_abs, 1e-4)
+        self.assertEqual(contract.acceptance_policy("float16"), "fp16-normalized-experiment-v1")
+        self.assertEqual(contract.acceptance_policy("float32"), "fp32-strict-v1")
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            export_models.arguments(["--precision", "float16", "--similarity-max-abs", "0.0021"])
         with self.assertRaises(ValueError):
             contract.model_version("bfloat16")
 

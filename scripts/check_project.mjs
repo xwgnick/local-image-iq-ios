@@ -58,6 +58,7 @@ function validateManifest(value) {
   assert.equal(value.parity?.status, 'passed');
   assert.equal(value.parity?.report, 'parity-report.json');
   assert.equal(value.parity?.precision, precision);
+  if (precision === 'float16') assert.equal(value.parity?.acceptancePolicy, 'fp16-normalized-experiment-v1');
   assert.equal(value.parity?.computeUnits, 'CPU_ONLY');
   assert.equal(value.provenance, 'provenance.json');
   assert.equal(value.redistributionApproved, false);
@@ -210,11 +211,16 @@ async function checkModels(root, notes) {
   assert.equal(report.modelVersion, manifest.modelVersion);
   assert.equal(report.passed, true);
   assert.equal(report.precision, manifest.preprocessing.computePrecision);
+  const fp16 = report.precision === 'float16';
+  if (fp16) assert.equal(report.acceptancePolicy, 'fp16-normalized-experiment-v1');
   assert.equal(report.computeUnits, 'CPU_ONLY');
   assert.ok(Number.isFinite(report.thresholds.minCosineExclusive) &&
     report.thresholds.minCosineExclusive >= 0.999 && report.thresholds.minCosineExclusive < 1);
-  for (const [name, ceiling] of Object.entries({ conversionMaxAbsInclusive: 1e-3,
-    torchMaxAbsInclusive: 1e-5, similarityMaxAbsInclusive: 1e-4, preprocessMaxAbsInclusive: 1e-6 })) {
+  if (fp16) assert.equal(report.thresholds.conversionMaxAbsInclusive, null);
+  for (const [name, ceiling] of Object.entries({
+    ...(fp16 ? {} : { conversionMaxAbsInclusive: 1e-3 }),
+    torchMaxAbsInclusive: 1e-5, similarityMaxAbsInclusive: fp16 ? 0.002 : 1e-4,
+    preprocessMaxAbsInclusive: 1e-6 })) {
     assert.ok(Number.isFinite(report.thresholds[name]) && report.thresholds[name] > 0 &&
       report.thresholds[name] <= ceiling, `Export acceptance gate weakened: ${name}`);
   }
@@ -229,7 +235,8 @@ async function checkModels(root, notes) {
     for (const [name, measurement] of Object.entries(item.comparisons)) {
       assert.ok(Number.isFinite(measurement.cosine) && measurement.cosine > report.thresholds.minCosineExclusive);
       const max = name.includes('CoreML') ? report.thresholds.conversionMaxAbsInclusive : report.thresholds.torchMaxAbsInclusive;
-      assert.ok(Number.isFinite(measurement.maxAbs) && measurement.maxAbs >= 0 && measurement.maxAbs <= max);
+      assert.ok(Number.isFinite(measurement.maxAbs) && measurement.maxAbs >= 0);
+      if (max !== null) assert.ok(measurement.maxAbs <= max);
     }
   }
   for (const item of images.cases) {

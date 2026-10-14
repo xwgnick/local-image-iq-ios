@@ -242,6 +242,13 @@ model-version hash differs and existing model-version fences prevent reuse
 of FP32 embeddings and derived caches. Tokenization and image preprocessing
 are unchanged.
 
-FP16 currently uses the same numerical acceptance limits as FP32; a failed
-conversion must not publish a valid manifest or proceed to upload. Passing
-synthetic parity does not assert real-photo retrieval quality or performance.
+After complete diagnostics, the user approved the separately named
+`fp16-normalized-experiment-v1` acceptance policy: vector cosine > 0.999 and
+paired text/image cosine-matrix absolute error <= 0.002; raw component errors
+remain recorded but do not gate the normalized-vector FP16 experiment.
+FP32 retains maxAbs <= 1e-3, cosine > 0.999, and paired maxAbs <= 1e-4.
+Torch reference/wrapper/trace and preprocessing limits are unchanged.
+Native paired scores must also pass on CPU and all compute units. Reports and
+manifests record the policy. A failed acceptance gate must not publish a valid
+manifest or proceed to upload. Passing synthetic parity does not assert
+real-photo retrieval quality or device performance.
