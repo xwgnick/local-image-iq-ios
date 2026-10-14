@@ -73,8 +73,11 @@ export function makeJWT(keyID, issuer, privateKey, now = Math.floor(Date.now() /
 function run(command, args, { visible = false, env = process.env } = {}) {
   const result = spawnSync(command, args, { encoding: 'utf8', env,
     stdio: visible ? 'inherit' : 'pipe', maxBuffer: 64 * 1024 * 1024 });
+  const knownErrors = ['MAC verification failed', 'User interaction is not allowed',
+    'The specified item could not be found', 'Unknown format in import', 'No identity found'];
+  const diagnostic = knownErrors.find(value => `${result.stderr ?? ''}`.includes(value));
   assert.ok(!result.error && result.status === 0,
-    `${command} failed (exit ${result.status ?? 'unavailable'}); ${visible ? 'see build output' : 'sensitive command output withheld'}`);
+    `${command} ${args[0]} failed (exit ${result.status ?? 'unavailable'}); ${diagnostic ?? (visible ? 'see build output' : 'sensitive command output withheld')}`);
   return result.stdout?.trim();
 }
 
