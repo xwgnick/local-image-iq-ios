@@ -556,7 +556,10 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertEqual(f.cleanup.message, PhotoDeletionError.emptySelection.localizedDescription)
         XCTAssertNil(f.cleanup.pendingDeletion)
         try await host.wait {
-            host.controller.presentedViewController != nil && host.sync[.card] == nil
+            guard let presented = host.controller.presentedViewController,
+                  !presented.isBeingPresented, presented.transitionCoordinator == nil,
+                  presented.viewIfLoaded?.window === host.window else { return false }
+            return host.liveSync[.card] == nil
                 && host.hasRootBottomFrame(.syncToast)
                 && !host.attachedSyncProbes.contains { $0.part == .card }
         }
@@ -577,7 +580,7 @@ final class PhotoSyncPresentationTests: XCTestCase {
         XCTAssertTrue(try primarySearchScrollView(in: host.controller.view) === searchScroll)
         f.cleanup.dismissMessage()
         try await host.wait {
-            host.controller.presentedViewController == nil && host.sync[.card] != nil
+            host.controller.presentedViewController == nil && host.liveSync[.card] != nil
                 && host.hasRootBottomFrame(.syncToast)
         }
         XCTAssertEqual(Set(host.tabs.keys), Set(PrimaryPage.allCases))
