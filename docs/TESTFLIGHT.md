@@ -90,6 +90,25 @@ the original FP32 numerical gates passed. Delivery remains pending a new full
 native and signing run. Real-photo quality and device performance remain
 unverified.
 
+Full native run `38591652520`, source
+`1b3881fa2de171935894dc07d7be24f003355e06`, passed macOS export under the
+explicitly approved FP16 policy but failed the iOS simulator gate. App ran
+2146 tests (1 existing skip), with 409 failed assertions in six generated
+image/pair parity cases; text CPU parity, exact tokenizer parity and solid
+normalization passed. UI ran 23 tests with 1 existing skip and zero failures.
+The lowest failed vector cosine was `0.984854658309532`; maximum paired score
+error was `0.011170282959938049`, above the approved `0.002` ceiling.
+Same-float-input image CPU parity also failed, so native preprocessing alone
+does not explain the difference. CPU and all-compute paired checks each
+reported 50 failed comparisons. This establishes a native runtime acceptance
+failure, not a proven faulty operator or real-device result. No signed archive
+or Apple upload occurred. Do not loosen the approved policy to ship it.
+
+An alternative is to retain the known-good FP32 image encoder and use FP16
+only for the large text encoder, whose native parity passed. It requires a
+distinct per-role model identity and revalidation of paired scores and actual
+IPA size. This alternative has not yet been approved or tested.
+
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the
 tester's device after a successful experimental delivery.
