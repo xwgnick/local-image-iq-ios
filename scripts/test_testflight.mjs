@@ -3,7 +3,7 @@ import { generateKeyPairSync, verify, X509Certificate } from 'node:crypto';
 import { rootCertificates } from 'node:tls';
 import fs from 'node:fs';
 import test from 'node:test';
-import { decodeSecret, exportOptions, identity, makeJWT, validateInfo, validateProfile } from './testflight.mjs';
+import { archiveArguments, decodeSecret, exportOptions, identity, makeJWT, validateInfo, validateProfile } from './testflight.mjs';
 
 test('first official build identity is isolated from unsigned development delivery', () => {
   assert.deepEqual(identity, { bundle: 'app.piankexun.ios', version: '1.0', build: '46' });
@@ -28,6 +28,26 @@ test('archive export cannot change version, use automatic signing or public uplo
   });
   assert.throws(() => exportOptions('bad', uuid));
   assert.throws(() => exportOptions('TESTTEAM01', '../profile'));
+});
+
+test('archive signing and official identity are scoped to the application, not Swift package resources', () => {
+  const uuid = 'A0000000-0000-0000-0000-000000000000';
+  const args = archiveArguments('TESTTEAM01', uuid, 'build/TestFlight.xcarchive');
+  assert.ok(args.includes('IMAGEIQ_SIGNING_TEAM=TESTTEAM01'));
+  assert.ok(args.includes(`IMAGEIQ_SIGNING_PROFILE=${uuid}`));
+  assert.ok(!args.some(value => /^(PROVISIONING_PROFILE_SPECIFIER|CODE_SIGN_IDENTITY|CODE_SIGN_STYLE|DEVELOPMENT_TEAM|PRODUCT_BUNDLE_IDENTIFIER|MARKETING_VERSION|CURRENT_PROJECT_VERSION)=/.test(value)));
+  const spec = fs.readFileSync(new URL('../project.testflight.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  assert.ok(spec.startsWith('include:\n  - project.models.yml\n'));
+  assert.deepEqual([...spec.matchAll(/^  ([A-Za-z0-9_-]+):$/gm)].map(match => match[1]), ['LocalImageIQ']);
+  assert.ok(spec.includes(`PRODUCT_BUNDLE_IDENTIFIER: ${identity.bundle}`));
+  assert.ok(spec.includes(`MARKETING_VERSION: "${identity.version}"`));
+  assert.ok(spec.includes(`CURRENT_PROJECT_VERSION: "${identity.build}"`));
+  assert.ok(spec.includes('DEVELOPMENT_TEAM: "$(IMAGEIQ_SIGNING_TEAM)"'));
+  assert.ok(spec.includes('PROVISIONING_PROFILE_SPECIFIER: "$(IMAGEIQ_SIGNING_PROFILE)"'));
+  assert.ok(spec.includes('CODE_SIGN_STYLE: Manual'));
+  assert.ok(spec.includes('CODE_SIGN_IDENTITY: Apple Distribution'));
+  assert.throws(() => archiveArguments('bad', uuid, 'archive'));
+  assert.throws(() => archiveArguments('TESTTEAM01', '../profile', 'archive'));
 });
 
 test('exported device IPA identity and SDK must match the approved official build', () => {

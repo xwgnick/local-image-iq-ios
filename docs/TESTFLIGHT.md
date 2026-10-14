@@ -71,3 +71,14 @@ Targeted run `38560413931`, source
 `testLocationEnhancementIntroductionSettingsAndRestartPersistence` on the iOS
 simulator: 1 test passed, 0 failures, no skip. The full signed-delivery rerun
 remains pending; this targeted result alone does not claim an Apple upload.
+
+Run `38561852604`, source `fa89e28e255fe372c686a1bfe590ccf72708c728`,
+passed Core 79, App 2145 (1 existing skip), and UI 23 (1 existing skip),
+all with zero failures. Archive then failed because command-line provisioning
+settings also reached the `swift-transformers_Hub` and `swift-crypto_Crypto`
+resource bundles, which do not support provisioning profiles. No Apple upload
+was attempted. The signing variant `project.testflight.yml` now scopes official
+identity and manual signing to `LocalImageIQ` only and is generated after native
+tests pass. Archive arguments pass custom variables referenced only by that
+application target, not global provisioning or bundle identity overrides.
+Actual signed archive/export/upload verification remains pending.

@@ -57,6 +57,16 @@ export function exportOptions(team, uuid) {
     manageAppVersionAndBuildNumber: false, uploadSymbols: true, stripSwiftSymbols: true };
 }
 
+export function archiveArguments(team, uuid, archive) {
+  assert.match(team, /^[A-Z0-9]{10}$/);
+  assert.match(uuid, /^[A-Fa-f0-9-]{36}$/);
+  return ['archive', '-project', 'LocalImageIQ.xcodeproj', '-scheme', 'LocalImageIQ',
+    '-configuration', 'Release', '-destination', 'generic/platform=iOS', '-archivePath', archive,
+    '-clonedSourcePackagesDirPath', 'build/SourcePackages', '-disableAutomaticPackageResolution',
+    `IMAGEIQ_SIGNING_TEAM=${team}`, `IMAGEIQ_SIGNING_PROFILE=${uuid}`,
+    'ARCHS=arm64', 'ENABLE_DEBUG_DYLIB=NO'];
+}
+
 export function makeJWT(keyID, issuer, privateKey, now = Math.floor(Date.now() / 1000)) {
   assert.match(keyID, /^[A-Z0-9]{10}$/);
   assert.match(issuer, /^[A-Fa-f0-9-]{36}$/);
@@ -205,13 +215,8 @@ async function main(mode) {
     const archive = path.resolve('build', 'TestFlight.xcarchive');
     const output = path.resolve('build', 'testflight-export');
     assert.ok(!fs.existsSync(archive) && !fs.existsSync(output), 'Refusing to replace existing signed build');
-    run('xcodebuild', ['archive', '-project', 'LocalImageIQ.xcodeproj', '-scheme', 'LocalImageIQ',
-      '-configuration', 'Release', '-destination', 'generic/platform=iOS', '-archivePath', archive,
-      '-clonedSourcePackagesDirPath', 'build/SourcePackages', '-disableAutomaticPackageResolution',
-      `PRODUCT_BUNDLE_IDENTIFIER=${identity.bundle}`, `MARKETING_VERSION=${identity.version}`,
-      `CURRENT_PROJECT_VERSION=${identity.build}`, `DEVELOPMENT_TEAM=${secrets.APPLE_TEAM_ID}`,
-      'CODE_SIGN_STYLE=Manual', 'CODE_SIGN_IDENTITY=Apple Distribution', `PROVISIONING_PROFILE_SPECIFIER=${uuid}`,
-      'ARCHS=arm64', 'ENABLE_DEBUG_DYLIB=NO'], { visible: true });
+    run('xcodegen', ['generate', '--spec', 'project.testflight.yml'], { visible: true });
+    run('xcodebuild', archiveArguments(secrets.APPLE_TEAM_ID, uuid, archive), { visible: true });
     const options = path.join(folder, 'ExportOptions.plist');
     fs.writeFileSync(options, JSON.stringify(exportOptions(secrets.APPLE_TEAM_ID, uuid)), { mode: 0o600 });
     run('plutil', ['-convert', 'xml1', options]);
