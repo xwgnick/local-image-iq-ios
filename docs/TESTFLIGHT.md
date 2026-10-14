@@ -26,7 +26,16 @@ or a relaxed threshold. The signed exported IPA must actually be at most
 900 MiB before any Apple package validation/upload. The delivery report records
 precision, model version, bytes, SHA-256 and the build46 byte baseline.
 
-Status: implementation pending cloud validation; build 47 is not yet delivered.
+Status: run `38589052732`, source
+`ad0a7cdc1107808f15506941013be056631199a2`, stopped at the first FP16
+conversion numerical gate. The `image/solid-rgb/traceVsCoreML` comparison
+measured maximum raw-component error `0.03011798858642578` versus the `0.001`
+ceiling, with cosine `0.9999644498041236` (above the `0.999` floor).
+This is not a full-corpus or real-photo quality result. No valid model manifest,
+signed archive, IPA delivery or Apple upload was produced. Build 46 is unchanged.
+Do not relax the limits merely to pass this sample; a different precision or
+quality-acceptance strategy requires an explicit decision and further evidence.
+
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the
 tester's device after a successful experimental delivery.
