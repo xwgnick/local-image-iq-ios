@@ -131,3 +131,12 @@ test('signing is manual main-only, no public IPA artifact, and upload is not aut
   assert.equal((source.match(/altool\('--upload-app'\)/g) ?? []).length, 1);
   assert.ok(!source.includes('betaAppReviewSubmissions') && !source.includes('/appStoreVersionSubmissions'));
 });
+
+test('FP16 diagnostic workflow only measures and cannot sign or upload an application', () => {
+  const workflow = fs.readFileSync(new URL('../.github/workflows/fp16-diagnostic.yml', import.meta.url), 'utf8');
+  assert.ok(workflow.includes('--diagnostic-report build/fp16-diagnostic.json'));
+  assert.ok(workflow.includes('path: build/fp16-diagnostic.json'));
+  assert.ok(workflow.includes("github.ref == 'refs/heads/main'"));
+  assert.ok(!workflow.includes('secrets.') && !workflow.includes('testflight.mjs'));
+  assert.ok(!workflow.includes('xcodebuild') && !workflow.includes('altool'));
+});

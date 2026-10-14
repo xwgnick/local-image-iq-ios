@@ -265,6 +265,22 @@ class StaticTests(unittest.TestCase):
             self.assertEqual((output / "README.md").read_text(encoding="utf-8"), "keep")
             self.assertEqual((output / "Places.geojson").read_text(encoding="utf-8"), "keep places")
 
+    def test_diagnostic_never_publishes_or_invalidates_existing_models(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "Models"
+            output.mkdir()
+            marker = output / "model-manifest.json"
+            marker.write_text("existing FP32 manifest", encoding="utf-8")
+            with patch.object(export_models, "check_environment", return_value={}), \
+                 patch.object(export_models, "export_pair") as measure, \
+                 patch.object(export_models, "publish") as publish:
+                export_models.main(["--precision", "float16", "--output", str(output),
+                                    "--diagnostic-report", str(Path(temporary) / "diagnostic.json")])
+            measure.assert_called_once()
+            self.assertEqual(measure.call_args.args[1].precision, "float16")
+            publish.assert_not_called()
+            self.assertEqual(marker.read_text(encoding="utf-8"), "existing FP32 manifest")
+
     def test_interrupted_publish_does_not_commit(self):
         with tempfile.TemporaryDirectory() as temporary:
             stage, output = Path(temporary) / "stage", Path(temporary) / "output"

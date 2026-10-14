@@ -52,6 +52,8 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=ROOT / "Resources" / "Models")
     parser.add_argument("--precision", choices=("float32", "float16"), default="float32",
                         help="FP16 is experimental and must pass the same numerical gates as FP32")
+    parser.add_argument("--diagnostic-report", type=Path,
+                        help="Measure every fixture without publishing models; report existing gate failures")
     parser.add_argument("--min-cosine", type=float, default=0.999,
                         help="Each raw-vector comparison must exceed this cosine (FP32 floor .999)")
     parser.add_argument("--conversion-max-abs", type=float, default=1e-3,
@@ -257,7 +259,8 @@ def raw_vector(array, label: str):
     return result
 
 
-def compare(reference, candidate, label: str, max_abs: float, min_cosine: float) -> dict:
+def compare(reference, candidate, label: str, max_abs: float, min_cosine: float,
+            enforce: bool = True) -> dict:
     import numpy as np
 
     left = raw_vector(reference, label).astype(np.float64).ravel()
@@ -268,9 +271,33 @@ def compare(reference, candidate, label: str, max_abs: float, min_cosine: float)
     measured = {"maxAbs": error, "cosine": cosine,
                 "referenceNorm": left_norm, "candidateNorm": right_norm}
     print(f"{label}: maxAbs={error:.8g}, cosine={cosine:.10f}", flush=True)
-    require(error <= max_abs and cosine > min_cosine,
-            f"{label}: parity failed {measured}; required maxAbs <= {max_abs}, cosine > {min_cosine}")
+    if enforce:
+        require(error <= max_abs and cosine > min_cosine,
+                f"{label}: parity failed {measured}; required maxAbs <= {max_abs}, cosine > {min_cosine}")
     return measured
+
+
+def ranking_diagnostics(reference, candidate, query_ids: list[str], image_ids: list[str]) -> list[dict]:
+    import numpy as np
+
+    require(reference.shape == candidate.shape == (len(query_ids), len(image_ids)),
+            "Ranking matrix dimensions do not match fixture IDs")
+    require(bool(np.isfinite(reference).all()) and bool(np.isfinite(candidate).all()),
+            "Non-finite ranking scores")
+    result = []
+    for query, left, right in zip(query_ids, reference, candidate):
+        original = np.argsort(-left, kind="stable").tolist()
+        converted = np.argsort(-right, kind="stable").tolist()
+        k = min(3, len(image_ids))
+        result.append({
+            "queryID": query, "referenceOrder": [image_ids[i] for i in original],
+            "candidateOrder": [image_ids[i] for i in converted],
+            "top1Changed": original[0] != converted[0],
+            "top3Overlap": len(set(original[:k]) & set(converted[:k])),
+            "top3Count": k,
+            "referenceTop1Margin": float(left[original[0]] - left[original[1]]) if len(original) > 1 else None,
+        })
+    return result
 
 
 def validate_coreml_spec(model, role: str) -> None:
@@ -397,7 +424,8 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
                     ("traceVsCoreML", traced_raw, cm_raw, args.conversion_max_abs),
                     ("referenceVsCoreML", reference_raw, cm_raw, args.conversion_max_abs),
                 ):
-                    stages[label] = compare(left, right, f"{role}/{name}/{label}", tolerance, args.min_cosine)
+                    stages[label] = compare(left, right, f"{role}/{name}/{label}", tolerance, args.min_cosine,
+                                            enforce=args.diagnostic_report is None)
                 report["cases"].append({"role": role, "id": name, "comparisons": stages})
                 case["metadata"]["referenceRaw"] = reference_raw[0].tolist()
                 case["metadata"]["coreMLRaw"] = cm_raw[0].tolist()
@@ -406,13 +434,34 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
     reference = cosine_matrix(originals["text"], originals["image"])
     converted = cosine_matrix(predictions["text"], predictions["image"])
     delta = float(np.max(np.abs(reference - converted)))
-    require(delta <= args.similarity_max_abs, f"Paired text/image cosine matrix differs by {delta}")
+    if args.diagnostic_report is None:
+        require(delta <= args.similarity_max_abs, f"Paired text/image cosine matrix differs by {delta}")
     report["pairedCosines"] = {
         "queryIDs": [c["metadata"]["id"] for c in queries],
         "imageIDs": [c["metadata"]["id"] for c in images],
         "reference": reference.tolist(), "coreML": converted.tolist(), "maxAbs": delta,
     }
-    report["passed"] = True
+    report["passed"] = delta <= args.similarity_max_abs and all(
+        measured["maxAbs"] <= (args.torch_max_abs if label in ("referenceVsWrapper", "wrapperVsTrace")
+                               else args.conversion_max_abs) and measured["cosine"] > args.min_cosine
+        for case in report["cases"] for label, measured in case["comparisons"].items())
+    if args.diagnostic_report is not None:
+        report["diagnosticOnly"] = True
+        report["modelsPublished"] = False
+        report["rankingCoverage"] = "Procedural patterns only; not real-photo semantic retrieval quality"
+        report["rankings"] = ranking_diagnostics(reference, converted,
+                                                report["pairedCosines"]["queryIDs"],
+                                                report["pairedCosines"]["imageIDs"])
+        report["packageBytes"] = {
+            name: sum(p.stat().st_size for p in (stage / name).rglob("*") if p.is_file())
+            for name in ("ImageEncoder.mlpackage", "TextEncoder.mlpackage")}
+        report["sizeCoverage"] = "Uncompiled model packages only; not signed IPA or App Store download size"
+        args.diagnostic_report.parent.mkdir(parents=True, exist_ok=True)
+        write_json(args.diagnostic_report, report)
+        print(f"DIAGNOSTIC ONLY: all {len(report['cases'])} fixtures measured; "
+              f"existing numerical gates passed={report['passed']}; no models published.", flush=True)
+        return
+    require(report["passed"], "Model export numerical gates did not pass")
     write_json(stage / "parity-report.json", report)
     shared = {"schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(args.precision),
               "embeddingDimension": DIMENSION, "embeddingsAreRaw": True}
@@ -467,6 +516,13 @@ def publish(stage: Path, output: Path) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = arguments(argv)
+    if args.diagnostic_report is not None:
+        validate_document()
+        environment = check_environment()
+        with tempfile.TemporaryDirectory(prefix="coreml-diagnostic-") as temporary:
+            export_pair(Path(temporary), args, environment)
+        print(f"Diagnostic report written to {args.diagnostic_report}; no model manifest or delivery produced.")
+        return
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     # Invalidate BEFORE validation/download/conversion. A failed rerun must not

@@ -36,6 +36,16 @@ signed archive, IPA delivery or Apple upload was produced. Build 46 is unchanged
 Do not relax the limits merely to pass this sample; a different precision or
 quality-acceptance strategy requires an explicit decision and further evidence.
 
+The user approved completing diagnostics before deciding any FP16-specific
+acceptance criteria. The separate `FP16 numerical and synthetic ranking
+diagnostics` workflow has no signing/API Secrets, archive or upload path.
+`--diagnostic-report` measures all fixtures against the unchanged limits,
+records actual failures, paired cosine matrices, synthetic ranking changes
+and uncompiled package sizes, and never publishes a model manifest. Successful
+completion of this diagnostic workflow means measurements were collected, not
+that FP16 passed acceptance or was delivered. Real-photo quality is still
+outside the procedural fixture coverage.
+
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the
 tester's device after a successful experimental delivery.

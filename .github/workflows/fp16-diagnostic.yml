@@ -1,0 +1,38 @@
+name: FP16 numerical and synthetic ranking diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.repository == 'xwgnick/local-image-iq-ios' && github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: arm64
+      - name: Validate diagnostic logic and source contract
+        run: python -m unittest discover -s scripts -p test_static.py
+      - name: Measure every FP16 fixture without publishing models
+        run: |
+          python -m venv .model-env
+          .model-env/bin/python -m pip install -r scripts/requirements-coreml.txt
+          .model-env/bin/python scripts/test_fp16_diagnostic.py
+          .model-env/bin/python scripts/export_models.py --download --precision float16 \
+            --diagnostic-report build/fp16-diagnostic.json
+      - name: Retain measurements only, never models or signing material
+        uses: actions/upload-artifact@v4
+        with:
+          name: fp16-diagnostic-${{ github.run_id }}
+          path: build/fp16-diagnostic.json
+          if-no-files-found: error
