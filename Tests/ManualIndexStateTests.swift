@@ -217,7 +217,7 @@ final class ManualIndexStateTests: XCTestCase {
         await assertHistory(worker, [.launch, .search, .clear, .refresh], cancelled: [.clear])
     }
 
-    func testForegroundRefreshDrainsCancelledRebuildClearAndNeverStartsItsIndex() async {
+    func testForegroundRefreshDrainsInterruptedRebuildClearAndResumesOnlyIncrementalIndex() async {
         let clearing = hold("backgrounded rebuild clear")
         let refreshing = hold("foreground read-only refresh")
         let worker = ManualIndexStateWorker(holds: [.clear: clearing, .refresh: refreshing])
@@ -245,11 +245,8 @@ final class ManualIndexStateTests: XCTestCase {
         await state.waitUntilIdle()
 
         XCTAssertEqual(state.launchPhase, .ready)
-        XCTAssertFalse(state.summary.authorizedCountKnown)
-        XCTAssertTrue(state.summary.indexStatisticsKnown)
-        XCTAssertNil(state.errorMessage)
-        XCTAssertNil(state.activity)
-        await assertHistory(worker, [.launch, .clear, .refresh], cancelled: [.clear])
+        assertIndexed(state)
+        await assertHistory(worker, [.launch, .clear, .refresh, .index], cancelled: [.clear])
     }
 
     func testBackgroundIdleRejectsBothManualActionsWithoutWorkerCalls() async {

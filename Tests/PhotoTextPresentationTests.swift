@@ -87,7 +87,7 @@ final class PhotoTextPresentationTests: XCTestCase {
         XCTAssertFalse(c.state.summary.textIndexStatisticsKnown, "Old counts must not masquerade as fresh progress")
         assertServices(c, textCalls: 1)
 
-        // Exercise the production pause action's state method, not a fabricated
+        // Exercise the production cancellation action's state method, not a fabricated
         // SwiftUI tap. Release and drain even the deliberately held fake worker.
         PhotoTextIndexContent(state: c.state).cancelUpdate()
         c.worker.release()
@@ -96,7 +96,9 @@ final class PhotoTextPresentationTests: XCTestCase {
         XCTAssertNil(c.state.activity)
         XCTAssertFalse(c.state.summary.textIndexStatisticsKnown)
         XCTAssertEqual(c.state.textIndexProgress, PhotoTextReviewWorker.progressFixture)
-        XCTAssertTrue(c.state.textIndexOperationIssue?.contains("已暂停") == true)
+        XCTAssertTrue(c.state.textIndexOperationIssue?.contains("已取消") == true)
+        XCTAssertFalse(c.state.ocrSync.pending)
+        XCTAssertFalse(c.state.ocrSync.lifecyclePaused)
         assertServices(c, textCalls: 1)
     }
 

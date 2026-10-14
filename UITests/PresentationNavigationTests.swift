@@ -662,7 +662,7 @@ final class PresentationNavigationTests: XCTestCase {
             expectSwitch(toggle, enabled: !enabled)
             // The identifier now belongs only to the unscaled native switch,
             // not a Form row containing the label or the explanation.
-            toggle.tap()
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: enabled ? 0.3 : 0.7, dy: 0.5)).tap()
             expectSwitch(toggle, enabled: enabled)
             assertNoWorkOrPermissionPrompt()
         }

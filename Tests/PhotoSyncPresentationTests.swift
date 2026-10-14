@@ -27,13 +27,13 @@ final class PhotoSyncPresentationTests: XCTestCase {
         defer { host.close() }
         state.updateAvailability(ready: true, networkAllowed: false)
         try await reached(run.entered)
-        try await host.wait { host.sync[.progress] != nil }
+        try await host.wait { host.liveSync[.progress] != nil }
         XCTAssertEqual(PhotoSyncToast(state: state).compactTitle, "同步最新照片12/38")
         XCTAssertEqual(PhotoSyncToast(state: state).fraction, Double(12) / 38)
         try assertCardGeometry(host, cancel: true, progress: true)
-        let card = try XCTUnwrap(host.sync[.card])
-        let text = try XCTUnwrap(host.sync[.text])
-        let reservation = try XCTUnwrap(host.sync[.reservation])
+        let card = try XCTUnwrap(host.liveSync[.card])
+        let text = try XCTUnwrap(host.liveSync[.text])
+        let reservation = try XCTUnwrap(host.liveSync[.reservation])
         XCTAssertEqual(card.width, 224, accuracy: host.pixel)
         XCTAssertEqual(card.height, 44, accuracy: host.pixel)
         XCTAssertEqual(reservation.height, 52, accuracy: host.pixel)
@@ -47,9 +47,9 @@ final class PhotoSyncPresentationTests: XCTestCase {
         try await host.settle()
         XCTAssertEqual(PhotoSyncToast(state: state).compactTitle, "同步最新照片19/38")
         XCTAssertEqual(PhotoSyncToast(state: state).fraction, 0.5)
-        XCTAssertEqual(host.sync[.card], card)
-        XCTAssertEqual(host.sync[.text], text, "Monospaced counts must not move or animate the text baseline")
-        XCTAssertEqual(host.sync[.reservation], reservation)
+        XCTAssertEqual(host.liveSync[.card], card)
+        XCTAssertEqual(host.liveSync[.text], text, "Monospaced counts must not move or animate the text baseline")
+        XCTAssertEqual(host.liveSync[.reservation], reservation)
         XCTAssertEqual(scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: host.window), usable)
         XCTAssertNotEqual(try ringPixels(host), initialRing,
                           "Native pixels cropped to the ring, not changed counter text or a fake bar")

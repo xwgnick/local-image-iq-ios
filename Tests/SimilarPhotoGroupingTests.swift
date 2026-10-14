@@ -574,7 +574,7 @@ final class SimilarPhotoGroupingTests: XCTestCase {
         }
     }
 
-    func testServiceCancellationAfterInspectionOrFinalProgressDoesNotPublishOrWrite() async throws {
+    func testServiceCancellationAfterInspectionOrFinalProgressDoesNotPublishOrWriteCompletedCache() async throws {
         for atInspection in [true, false] {
             let c = try context(["a", "b"])
             let before = try disk(c.directory)
@@ -592,7 +592,11 @@ final class SimilarPhotoGroupingTests: XCTestCase {
             do { _ = try await task.value; XCTFail("Cancelled service returned a result.") }
             catch is CancellationError { }
             catch { XCTFail("Expected cancellation, got \(error).") }
-            XCTAssertEqual(try disk(c.directory), before)
+            var after = try disk(c.directory)
+            let checkpoint = after.removeValue(forKey: "similar-groups-checkpoint-v1.bin")
+            if atInspection { XCTAssertNil(checkpoint) }
+            else { XCTAssertNotNil(checkpoint, "Completed arithmetic may survive, but is not a published result.") }
+            XCTAssertEqual(after, before, "Cancellation must never install a completed cache or alter the index.")
             await assertMetadataOnly(c)
         }
     }
