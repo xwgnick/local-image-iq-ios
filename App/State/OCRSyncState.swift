@@ -22,6 +22,9 @@ final class OCRSyncState: ObservableObject {
     @Published private(set) var lifecyclePaused = false
     @Published private(set) var isResuming = false
     private var generation: UUID?
+    private var pendingRequestID: UUID?
+    private var currentRequestID: UUID?
+    var continuationID: UUID? { pending ? pendingRequestID : currentRequestID }
     private var pendingRetryReducedPreviews = false
     private(set) var retryReducedPreviews = false
     var pendingQualityRetry: Bool { pendingRetryReducedPreviews }
@@ -91,6 +94,7 @@ final class OCRSyncState: ObservableObject {
     func requestUpdate(retryReducedPreviews: Bool = false) {
         guard enabled, !currentRunning || phase == .cancelling else { return }
         resetTerminalDisplay()
+        if !pending { pendingRequestID = UUID() }
         pending = true
         lifecyclePaused = false
         pendingRetryReducedPreviews = pendingRetryReducedPreviews || retryReducedPreviews
@@ -109,6 +113,8 @@ final class OCRSyncState: ObservableObject {
         guard enabled, ready, pending, !currentRunning else { return nil }
         let token = UUID()
         generation = token
+        currentRequestID = pendingRequestID
+        pendingRequestID = nil
         pending = false
         retryReducedPreviews = pendingRetryReducedPreviews
         pendingRetryReducedPreviews = false
@@ -124,6 +130,7 @@ final class OCRSyncState: ObservableObject {
     func cancel() {
         guard pending || currentRunning else { return }
         pending = false
+        pendingRequestID = nil
         lifecyclePaused = false
         isResuming = false
         pendingRetryReducedPreviews = false
@@ -135,6 +142,7 @@ final class OCRSyncState: ObservableObject {
     func pause() {
         updateAvailability(ready: false)
         if currentRunning, phase != .cancelling {
+            if !pending { pendingRequestID = currentRequestID }
             pending = true
             pendingRetryReducedPreviews = pendingRetryReducedPreviews || retryReducedPreviews
             lifecyclePaused = true
@@ -144,9 +152,10 @@ final class OCRSyncState: ObservableObject {
         }
     }
 
-    func restoreInterruptedRequest(retryReducedPreviews: Bool) {
+    func restoreInterruptedRequest(retryReducedPreviews: Bool, requestID: UUID? = nil) {
         guard enabled, !currentRunning, !pending else { return }
         requestUpdate(retryReducedPreviews: retryReducedPreviews)
+        if let requestID { pendingRequestID = requestID }
         lifecyclePaused = true
     }
 
@@ -169,6 +178,7 @@ final class OCRSyncState: ObservableObject {
         guard generation == token else { return }
         let stopping = phase == .cancelling
         generation = nil
+        currentRequestID = nil
         currentRunning = false
         failureMessage = issue
         if pending {

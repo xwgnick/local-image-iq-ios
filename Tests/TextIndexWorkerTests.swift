@@ -11,6 +11,48 @@ final class TextIndexWorkerTests: XCTestCase {
     private let cacheVersion = IndexImagePolicy.cacheVersion(modelVersion: "test-model")
     private let resolver = OfflinePlaceResolver.unavailable("Synthetic boundaries.")
 
+    func testSameLogicalManualRequestColdResumesWithoutRetryingItsReducedFailureOrCloudAttempts() async throws {
+        let gate = TextWorkerGate()
+        let recognizer = TextWorkerRecognizer { id, networkAllowed, call in
+            if id == "b" { throw VisionPhotoTextRecognizer.Failure.imageUnavailable }
+            if id == "c", !networkAllowed { throw AppFailure.cloudOnly }
+            if id == "d", call == 4 { await gate.block() }
+            return workerTextResult(reduced: id == "a")
+        }
+        let c = try context(["a", "b", "c", "d", "e"], recognizer: recognizer)
+        let requestID = UUID()
+        let before = try Data(contentsOf: c.directory.appendingPathComponent("index.sqlite3"))
+        let first = Task {
+            try await c.worker.indexText(networkAllowed: false, retryReducedPreviews: true,
+                                         requestID: requestID) { _ in }
+        }
+        await gate.waitUntilEntered()
+        first.cancel()
+        await gate.release()
+        do { _ = try await first.value; XCTFail("An unfinished recognizer must drain without committing.") }
+        catch is CancellationError {}
+        let cold = PhotoIndexWorker(library: c.library, encoders: c.encoders, directory: c.directory,
+                                   resolver: resolver, textRecognizer: recognizer)
+        let trace = TextWorkerProgress()
+        _ = try await cold.indexText(networkAllowed: false, retryReducedPreviews: true,
+                                    requestID: requestID) { await trace.append($0) }
+        let requests = await recognizer.requests
+        XCTAssertEqual(requests.map(\.id), ["a", "b", "c", "d", "d", "e"],
+                       "Only the interrupted and not-yet-attempted photos may invoke recognition again.")
+        let final = try await trace.last()
+        XCTAssertEqual(final.reused, 1)
+        XCTAssertEqual(final.recognized, 2)
+        XCTAssertEqual(final.deferredFailures, 1)
+        XCTAssertEqual(final.cloudSkipped, 1)
+        XCTAssertEqual(final.completed, 5)
+        XCTAssertEqual(try Data(contentsOf: c.directory.appendingPathComponent("index.sqlite3")), before)
+        _ = try await cold.indexText(networkAllowed: false, retryReducedPreviews: true,
+                                    requestID: UUID()) { _ in }
+        let retried = await recognizer.requests
+        XCTAssertEqual(Array(retried.dropFirst(requests.count)).map(\.id), ["a", "b", "c"],
+                       "A genuinely new manual request must retain the quality/failure retry policy.")
+    }
+
     private func row(_ id: String, revision: Double = 123, axis: Int = 0,
                      model: String? = nil, place: PlaceEmbedding? = nil,
                      vector: [Float]? = nil) -> CachedPhoto {

@@ -293,7 +293,7 @@ final class PhotoTextStateTests: XCTestCase {
         XCTAssertNil(c.state.errorMessage)
     }
 
-    func testBackgroundCancelsTextIndexRejectsLateCallbacksAndForegroundDoesNotResumeIt() async throws {
+    func testBackgroundDrainsTextIndexRejectsLateCallbacksAndForegroundResumesOnlyInterruptedIntent() async throws {
         let c = await ready(enabled: true)
         await seedImageProgress(c)
         let imageProgress = c.state.progress
@@ -323,9 +323,11 @@ final class PhotoTextStateTests: XCTestCase {
         c.state.enterForeground()
         await c.state.waitUntilIdle()
         XCTAssertEqual(c.worker.refreshCalls, 2)
-        XCTAssertEqual(c.worker.textNetworkFlags, [false])
+        XCTAssertEqual(c.worker.textNetworkFlags, [false, false])
         XCTAssertEqual(c.worker.imageNetworkFlags, [false])
         XCTAssertEqual(c.state.progress, imageProgress)
+        XCTAssertTrue(c.state.ocrSync.isResuming)
+        XCTAssertEqual(c.state.textIndexProgress, PhotoTextStateFixtures.complete)
     }
 
     func testTextErrorsAreGenericLocalIssuesAndAbortMarksOnlyTextCountsUnknown() async {
@@ -340,7 +342,7 @@ final class PhotoTextStateTests: XCTestCase {
             c.state.indexPhotoText()
             await c.state.waitUntilIdle()
             let expected = error is CancellationError
-                ? "文字索引已暂停，已完成记录保留；手动更新可继续。"
+                ? "文字索引已取消，已完成记录保留；不会自动重试。"
                 : "文字索引未完成。请检查照片权限后重试；图片索引没有重新计算。"
             XCTAssertEqual(c.state.textIndexOperationIssue, expected)
             XCTAssertEqual(c.state.status, expected)

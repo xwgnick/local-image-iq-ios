@@ -11,6 +11,89 @@ import XCTest
 final class SimilarGroupingReuseTests: XCTestCase {
     private let model = IndexImagePolicy.cacheVersion(modelVersion: "test-model")
 
+    func testProductionServiceColdResumeReusesDurableSeedsAndNeverRestoresPartialGroups() async throws {
+        let photos = (0..<40).flatMap { axis in
+            [photo(String(format: "%03d-a", axis), axis: axis),
+             photo(String(format: "%03d-b", axis), axis: axis)]
+        }
+        let c = try context(photos: photos)
+        let first = c.service()
+        let interrupted = Task {
+            try await first.group(threshold: 0.90) { value in
+                if value.completed == 32 { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        do { _ = try await interrupted.value; XCTFail("Expected lifecycle-style cancellation") }
+        catch is CancellationError {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path))
+        let metrics = ReuseCheckpointMetrics()
+        let cold = SimilarPhotoGroupingService(library: c.library, directory: c.directory, encoders: c.encoders,
+            reportMetrics: { metrics.append($0) })
+        assertResumable(try await cold.restore(threshold: 0.90))
+        let result = try await cold.group(threshold: 0.90) {
+            XCTAssertEqual($0.resumed, 32)
+            XCTAssertGreaterThanOrEqual($0.completed, 32)
+        }
+        let expected = try await SimilarPhotoGrouper.group(photos: photos, threshold: 0.90)
+        XCTAssertEqual(result.groups.map { $0.photos.map(\.id) }, expected.map { $0.photos.map(\.id) })
+        XCTAssertEqual(result.groups.map { $0.minimumSimilarity.bitPattern }, expected.map { $0.minimumSimilarity.bitPattern })
+        XCTAssertEqual(metrics.values.last?.computation.matrixMultiplyCount, 24)
+        try await result.prepareForPublication()
+        try result.validatePublicationEpoch()
+        XCTAssertNil(result.persistenceIssue)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.directory.appendingPathComponent("similar-groups-checkpoint-v1.bin").path))
+        _ = try restored(await c.service().restore(threshold: 0.90))
+        await assertNoInference(c)
+    }
+
+    func testChangedThresholdRejectsDurablePartialArithmeticWithExplicitRestartProgress() async throws {
+        let photos = (0..<40).flatMap { axis in
+            [photo(String(format: "%03d-a", axis), axis: axis),
+             photo(String(format: "%03d-b", axis), axis: axis)]
+        }
+        let c = try context(photos: photos)
+        let first = c.service()
+        let interrupted = Task {
+            try await first.group(threshold: 0.90) { value in
+                if value.completed == 32 { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        do { _ = try await interrupted.value; XCTFail("Expected cancellation") }
+        catch is CancellationError {}
+        let metrics = ReuseCheckpointMetrics()
+        let cold = SimilarPhotoGroupingService(library: c.library, directory: c.directory, encoders: c.encoders,
+            reportMetrics: { metrics.append($0) })
+        assertMissing(try await cold.restore(threshold: 0.91))
+        _ = try await cold.group(threshold: 0.91) {
+            XCTAssertTrue($0.checkpointDiscarded)
+            XCTAssertEqual($0.resumed, 0)
+        }
+        XCTAssertEqual(metrics.values.last?.computation.matrixMultiplyCount, 40)
+        await assertNoInference(c)
+    }
+
+    func testCheckpointWriteFailureIsVisibleButFinalCacheCanStillSucceedAndRevocationIsFatal() async throws {
+        let c = try context()
+        let warnings = ReuseCounter()
+        let cache = SimilarGroupingCache(directory: c.directory, checkpointBeforeCommit: { throw ReuseFailure.test })
+        let result = try await c.service(cache: cache).group(threshold: 0.90) { value in
+            if value.checkpointSaveFailed { warnings.record {} }
+        }
+        XCTAssertGreaterThan(warnings.count, 0)
+        XCTAssertNil(result.persistenceIssue, "A later durable completed cache resolves the checkpoint-only warning.")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: c.cacheURL.path))
+        _ = try restored(await c.service().restore(threshold: 0.90))
+        let d = try context()
+        let library = d.library
+        let denied = SimilarGroupingCache(directory: d.directory,
+            checkpointBeforeCommit: { library.setReadable(false) })
+        await diagnosticFailure(.init(phase: .sourceCheck, code: .permissionDenied)) {
+            _ = try await d.service(cache: denied).group(threshold: 0.90) { _ in }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: d.cacheURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: d.directory.appendingPathComponent("similar-groups-checkpoint-v1.bin").path))
+    }
+
     private func photo(_ id: String, axis: Int = 0, modification: Double = 123,
                        creation: Double? = 100, model: String? = nil, vector: [Float]? = nil,
                        place: Bool = false) -> IndexedPhoto {
@@ -52,6 +135,13 @@ final class SimilarGroupingReuseTests: XCTestCase {
 
     private func assertMissing(_ outcome: SimilarPhotoGroupingRestore, file: StaticString = #filePath, line: UInt = #line) {
         guard case .missing = outcome else { XCTFail("Expected no completed cache.", file: file, line: line); return }
+    }
+
+    private func assertResumable(_ outcome: SimilarPhotoGroupingRestore, file: StaticString = #filePath, line: UInt = #line) {
+        guard case .resumable = outcome else {
+            XCTFail("Expected resumable arithmetic, never a completed or first-use result.", file: file, line: line)
+            return
+        }
     }
 
     private func failure(_ operation: () async throws -> Void, file: StaticString = #filePath, line: UInt = #line) async {
@@ -1028,7 +1118,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
         XCTAssertNotNil(result.persistenceIssue)
         try await result.prepareForPublication()
         XCTAssertEqual(try Data(contentsOf: c.cacheURL), before)
-        assertStale(try await c.service().restore(threshold: 0.90))
+        assertResumable(try await c.service().restore(threshold: 0.90))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: c.directory.path).filter { $0.hasSuffix(".tmp") }, [])
         await assertNoInference(c)
     }
@@ -1044,7 +1134,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
         try await result.prepareForPublication()
         XCTAssertEqual(try Data(contentsOf: sourceURL), before)
         XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: c.cacheURL.path)[.type] as? FileAttributeType, .typeSymbolicLink)
-        assertStale(try await c.service().restore(threshold: 0.80))
+        assertResumable(try await c.service().restore(threshold: 0.80))
         await assertNoInference(c)
     }
 
@@ -1055,7 +1145,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
         XCTAssertNotNil(result.persistenceIssue)
         XCTAssertEqual(result.groups.count, 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path))
-        assertMissing(try await c.service().restore(threshold: 0.80))
+        assertResumable(try await c.service().restore(threshold: 0.80))
     }
 
     func testCancellationDuringCacheCommitIsFatalNotOptionalPersistenceWarning() async throws {
@@ -1327,7 +1417,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
         XCTAssertEqual(saves.count, 1)
         XCTAssertEqual(progress.count, ticks)
         XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path))
-        assertMissing(try await c.service().restore(threshold: 0.80))
+        assertResumable(try await c.service().restore(threshold: 0.80))
         await assertNoInference(c)
     }
 
@@ -1349,7 +1439,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
         try await reused.prepareForPublication()
         XCTAssertEqual(saves.count, 1)
         XCTAssertEqual(try Data(contentsOf: c.cacheURL), disk)
-        assertStale(try await c.service().restore(threshold: 0.90))
+        assertResumable(try await c.service().restore(threshold: 0.90))
         let fallback = try restored(await service.restore(threshold: 0.80))
         XCTAssertEqual(fallback.threshold, 0.80)
         XCTAssertNil(fallback.persistenceIssue, "A matching disk payload did persist successfully.")
@@ -1485,6 +1575,19 @@ final class SimilarGroupingReuseTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: c.cacheURL.path))
         let counts = await c.encoders.counts()
         XCTAssertEqual(counts.inspections, 0)
+    }
+}
+
+private final class ReuseCheckpointMetrics: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [SimilarGroupingWorkMetrics] = []
+    var values: [SimilarGroupingWorkMetrics] {
+        lock.lock(); defer { lock.unlock() }
+        return recorded
+    }
+    func append(_ value: SimilarGroupingWorkMetrics) {
+        lock.lock(); defer { lock.unlock() }
+        recorded.append(value)
     }
 }
 

@@ -31,6 +31,14 @@ struct PhotoTextIndexMetadata: Sendable {
     let hasText: Bool
 }
 
+struct PhotoTextAttempt: Sendable {
+    enum Outcome: String, Sendable, Equatable { case recognized, failed, cloudSkipped }
+    let requestID: UUID
+    let revision: PhotoRevision
+    let networkAllowed: Bool
+    let outcome: Outcome
+}
+
 enum PhotoTextFailureReason: String, Sendable {
     case imageUnavailable, recognitionFailed, unavailable
     var explanation: String {

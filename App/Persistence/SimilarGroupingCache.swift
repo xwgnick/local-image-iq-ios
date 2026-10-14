@@ -109,24 +109,28 @@ struct SimilarGroupingCache: Sendable {
     let directory: URL
     // Deterministic pre-rename fault/cancellation injection for native tests.
     private let beforeCommit: @Sendable () throws -> Void
+    private let checkpointBeforeCommit: @Sendable () throws -> Void
     private let entryName: String
 
-    init(directory: URL, beforeCommit: @escaping @Sendable () throws -> Void = {}) {
+    init(directory: URL, beforeCommit: @escaping @Sendable () throws -> Void = {},
+         checkpointBeforeCommit: @escaping @Sendable () throws -> Void = {}) {
         self.directory = directory
         self.beforeCommit = beforeCommit
+        self.checkpointBeforeCommit = checkpointBeforeCommit
         entryName = Self.fileName
     }
 
     private init(directory: URL, beforeCommit: @escaping @Sendable () throws -> Void, entryName: String) {
         self.directory = directory
         self.beforeCommit = beforeCommit
+        self.checkpointBeforeCommit = {}
         self.entryName = entryName
     }
 
     var fileURL: URL { directory.appendingPathComponent(entryName) }
 
     private var checkpointFile: Self {
-        Self(directory: directory, beforeCommit: beforeCommit, entryName: "similar-groups-checkpoint-v1.bin")
+        Self(directory: directory, beforeCommit: checkpointBeforeCommit, entryName: "similar-groups-checkpoint-v1.bin")
     }
 
     private func readBytes() throws -> Data? {

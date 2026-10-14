@@ -69,6 +69,8 @@ struct SimilarPhotoGroupingResult: Sendable {
 
 enum SimilarPhotoGroupingRestore: Sendable {
     case missing
+    /// Matching partial arithmetic exists, but has no publication/deletion authority.
+    case resumable
     case restored(SimilarPhotoGroupingResult)
     case stale
     /// Success callback arrived, but fresh enumeration still contains requested
@@ -394,7 +396,7 @@ actor SimilarPhotoGroupingService: SimilarPhotoGrouping {
             // A previous in-memory completion with a different key is stale, not a
             // cold first entry, even if that completion could not be written to disk.
             case .missing, .stale:
-                if case .restored = try cache.readCheckpoint(key: key) { return .missing }
+                if case .restored = try cache.readCheckpoint(key: key) { return .resumable }
                 if case .missing = saved { return resident == nil ? .missing : .stale }
                 return .stale
             case .restored(let value):

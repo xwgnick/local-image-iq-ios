@@ -235,6 +235,7 @@ final class OCRSyncStateTests: XCTestCase {
         state.updateAvailability(ready: true)
         let run = try XCTUnwrap(state.takeReadyRequest())
         let saved = TextIndexProgress(total: 7907, completed: 7906, recognized: 5, reused: 7901)
+        let requestID = try XCTUnwrap(state.continuationID)
         state.accept(saved, token: run)
         state.pause()
         XCTAssertTrue(state.pendingQualityRetry)
@@ -244,6 +245,7 @@ final class OCRSyncStateTests: XCTestCase {
         XCTAssertNotNil(state.takeReadyRequest())
         XCTAssertTrue(state.retryReducedPreviews)
         XCTAssertTrue(state.isResuming)
+        XCTAssertEqual(state.continuationID, requestID)
     }
 
     func testUserCancelOrOffWithdrawsLifecycleResumeEvenDuringDrain() throws {

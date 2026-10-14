@@ -300,7 +300,8 @@ final class ControlsNativeHost {
     var tabs: [PrimaryPage: CGRect] { measurements.tabs }
     var pixel: CGFloat { 1 / window.screen.scale }
 
-    init(content: AnyView, size: CGSize = CGSize(width: 393, height: 852), dynamicType: DynamicTypeSize = .large) throws {
+    init(content: AnyView, size: CGSize = CGSize(width: 393, height: 852), dynamicType: DynamicTypeSize = .large,
+         appearance: UIUserInterfaceStyle = .dark) throws {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let scene = try XCTUnwrap(scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)
         previousKey = scene.windows.first(where: \.isKeyWindow)
@@ -311,12 +312,12 @@ final class ControlsNativeHost {
             .onPreferenceChange(PrimaryNavigationFrames.self) { measured.tabs = $0 }
             .environment(\.scenePhase, .active).environment(\.dynamicTypeSize, dynamicType)
             .environment(\.locale, Locale(identifier: "zh_CN"))
-            .environment(\.layoutDirection, .leftToRight).preferredColorScheme(.dark)
+            .environment(\.layoutDirection, .leftToRight).preferredColorScheme(appearance == .light ? .light : .dark)
             .transaction { $0.animation = nil; $0.disablesAnimations = true }
         controller = UIHostingController(rootView: AnyView(root))
         window = UIWindow(windowScene: scene)
         window.frame = CGRect(origin: .zero, size: size)
-        window.overrideUserInterfaceStyle = .dark
+        window.overrideUserInterfaceStyle = appearance
         window.rootViewController = controller
         window.makeKeyAndVisible()
         layout()

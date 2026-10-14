@@ -5,6 +5,80 @@ import ImageIQCore
 @testable import LocalImageIQ
 
 final class TextIndexStoreTests: XCTestCase {
+    func testLogicalAttemptsSurviveColdOpenAndMatchRequestRevisionCreationAndNetwork() async throws {
+        let (store, directory) = try makeStore()
+        let requestID = UUID()
+        let revision = PhotoRevision(id: "a", modificationTime: 1, creationTime: 100)
+        try await store.save(fixture(reduced: true),
+            attempt: .init(requestID: requestID, revision: revision, networkAllowed: false, outcome: .recognized))
+        await store.close()
+        let cold = SQLiteTextStore(directory: directory)
+        addTeardownBlock { await cold.close() }
+        let saved = try await cold.completedAttempts(requestID: requestID, revisions: ["a": revision], networkAllowed: false)
+        XCTAssertEqual(saved, ["a": .recognized])
+        for (id, current, network) in [
+            (UUID(), revision, false),
+            (requestID, PhotoRevision(id: "a", modificationTime: 2, creationTime: 100), false),
+            (requestID, PhotoRevision(id: "a", modificationTime: 1, creationTime: nil), false),
+            (requestID, revision, true)
+        ] {
+            let changed = try await cold.completedAttempts(requestID: id, revisions: ["a": current], networkAllowed: network)
+            XCTAssertTrue(changed.isEmpty)
+        }
+        try await cold.reconcile(revisions: [:])
+        let removed = try await cold.completedAttempts(requestID: requestID, revisions: ["a": revision], networkAllowed: false)
+        XCTAssertTrue(removed.isEmpty)
+        await cold.close()
+    }
+
+    func testAttemptAndTextOrFailureCommitTogetherAndRollbackTogether() async throws {
+        for success in [false, true] {
+            let (store, _) = try makeStore()
+            let revision = PhotoRevision(id: "a", modificationTime: 1, creationTime: nil)
+            let old = fixture(reduced: true)
+            try await store.save(old)
+            let requestID = UUID()
+            let attempt = PhotoTextAttempt(requestID: requestID, revision: revision, networkAllowed: false,
+                                           outcome: success ? .recognized : .failed)
+            let counter = TextStoreValidationCounter()
+            let validation: @Sendable () throws -> Void = {
+                if counter.next() == 2 { throw AppFailure.permission }
+            }
+            do {
+                if success { try await store.save(fixture(), attempt: attempt, validate: validation) }
+                else {
+                    try await store.saveFailure(revision, reason: .imageUnavailable, networkAllowed: false,
+                                                attempt: attempt, validate: validation)
+                }
+                XCTFail("Revoked authority must roll back the entire commit.")
+            } catch AppFailure.permission {}
+            let attempts = try await store.completedAttempts(requestID: requestID, revisions: ["a": revision], networkAllowed: false)
+            XCTAssertTrue(attempts.isEmpty)
+            let failures = try await store.failures(revisions: ["a": revision], networkAllowed: false)
+            XCTAssertTrue(failures.isEmpty)
+            let retained = try await store.record(id: "a")
+            try assertRecord(retained, equals: old)
+        }
+    }
+
+    func testLegacyReadOnlyLeavesSchemaUntouchedAndResumeWriterAddsOnlyCompanionTables() async throws {
+        let (store, directory) = try makeStore()
+        try await store.save(fixture())
+        await store.close()
+        try rawSQL("DROP TABLE text_failures; DROP TABLE text_attempts", at: directory)
+        let before = try snapshot(directory)
+        let reader = SQLiteTextStore(directory: directory, readOnly: true)
+        let retained = try await reader.record(id: "a")
+        try assertRecord(retained, equals: fixture())
+        await reader.close()
+        XCTAssertEqual(try snapshot(directory), before)
+        let attempts = try await store.completedAttempts(requestID: UUID(),
+            revisions: ["a": .init(id: "a", modificationTime: 1, creationTime: nil)], networkAllowed: false)
+        XCTAssertTrue(attempts.isEmpty)
+        let after = try await store.record(id: "a")
+        try assertRecord(after, equals: fixture())
+    }
+
     func testFailureSurvivesReopeningAndMatchesExactRevisionCreationAndNetwork() async throws {
         let (store, directory) = try makeStore()
         let revision = PhotoRevision(id: "a", modificationTime: 1, creationTime: 100)

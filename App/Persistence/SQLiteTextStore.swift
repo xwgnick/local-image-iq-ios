@@ -78,12 +78,17 @@ actor SQLiteTextStore {
     /// Metadata, text, removal of obsolete postings and all new postings commit together.
     /// The synchronous access guard runs after actor entry and again before commit;
     /// throwing at the latter boundary rolls back both the row and its postings.
-    func save(_ record: PhotoTextRecord, validate: @escaping @Sendable () throws -> Void = {}) throws {
+    func save(_ record: PhotoTextRecord, attempt: PhotoTextAttempt? = nil,
+              validate: @escaping @Sendable () throws -> Void = {}) throws {
         try requireWritable()
         try Task.checkCancellation()
         try validate()
         guard !record.id.isEmpty, record.revision.isFinite, !record.policy.isEmpty,
               record.pixelWidth >= 0, record.pixelHeight >= 0 else { throw TextIndexDatabase.failure() }
+        if let attempt {
+            guard attempt.revision.id == record.id, attempt.revision.modificationTime == record.revision,
+                  record.policy == PhotoTextPolicy.version, attempt.outcome == .recognized else { throw TextIndexDatabase.failure() }
+        }
         let terms = PhotoTextLexicon.analyze(record.text, query: false).terms.sorted()
         try Task.checkCancellation()
         guard let db = try database(writing: true) else { throw TextIndexDatabase.failure() }
@@ -122,8 +127,73 @@ actor SQLiteTextStore {
                     try db.execute(statement)
                 }
             }
+            if let attempt { try writeAttempt(attempt, db: db) }
             try validate()
             try Task.checkCancellation()
+        }
+    }
+
+    func completedAttempts(requestID: UUID, revisions: [String: PhotoRevision],
+                           networkAllowed: Bool) throws -> [String: PhotoTextAttempt.Outcome] {
+        try requireWritable()
+        try Task.checkCancellation()
+        guard !revisions.isEmpty else { return [:] }
+        guard let db = try database(writing: true) else { throw TextIndexDatabase.failure() }
+        return try db.statement("""
+            SELECT id, revision, creation_time, outcome FROM text_attempts
+            WHERE request_id = ? AND policy = ? AND network_allowed = ?
+            """) { statement in
+            try db.bind(requestID.uuidString, at: 1, to: statement)
+            try db.bind(PhotoTextPolicy.version, at: 2, to: statement)
+            try db.bind(networkAllowed ? 1 : 0, at: 3, to: statement)
+            var result: [String: PhotoTextAttempt.Outcome] = [:]
+            while try db.next(statement) {
+                try Task.checkCancellation()
+                let id = try db.string(statement, at: 0)
+                let creation = sqlite3_column_type(statement, 2) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 2)
+                guard let revision = revisions[id], revision.modificationTime == sqlite3_column_double(statement, 1),
+                      revision.creationTime == creation else { continue }
+                guard let outcome = PhotoTextAttempt.Outcome(rawValue: try db.string(statement, at: 3)) else {
+                    throw TextIndexDatabase.failure()
+                }
+                result[id] = outcome
+            }
+            return result
+        }
+    }
+
+    func saveAttempt(_ attempt: PhotoTextAttempt, validate: @escaping @Sendable () throws -> Void) throws {
+        try requireWritable()
+        try Task.checkCancellation()
+        try validate()
+        guard let db = try database(writing: true) else { throw TextIndexDatabase.failure() }
+        try db.transaction {
+            try writeAttempt(attempt, db: db)
+            try validate()
+            try Task.checkCancellation()
+        }
+    }
+
+    private func writeAttempt(_ attempt: PhotoTextAttempt, db: TextIndexDatabase) throws {
+        let revision = attempt.revision
+        guard !revision.id.isEmpty, revision.modificationTime.isFinite,
+              revision.creationTime?.isFinite != false else { throw TextIndexDatabase.failure() }
+        try db.statement("""
+            INSERT INTO text_attempts (id, revision, creation_time, policy, request_id, network_allowed, outcome)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, creation_time = excluded.creation_time,
+                policy = excluded.policy, request_id = excluded.request_id,
+                network_allowed = excluded.network_allowed, outcome = excluded.outcome
+            """) { statement in
+            try db.bind(revision.id, at: 1, to: statement)
+            try db.bind(revision.modificationTime, at: 2, to: statement)
+            if let creation = revision.creationTime { try db.bind(creation, at: 3, to: statement) }
+            else if sqlite3_bind_null(statement, 3) != SQLITE_OK { throw TextIndexDatabase.failure() }
+            try db.bind(PhotoTextPolicy.version, at: 4, to: statement)
+            try db.bind(attempt.requestID.uuidString, at: 5, to: statement)
+            try db.bind(attempt.networkAllowed ? 1 : 0, at: 6, to: statement)
+            try db.bind(attempt.outcome.rawValue, at: 7, to: statement)
+            try db.execute(statement)
         }
     }
 
@@ -150,12 +220,17 @@ actor SQLiteTextStore {
     }
 
     func saveFailure(_ revision: PhotoRevision, reason: PhotoTextFailureReason, networkAllowed: Bool,
+                     attempt: PhotoTextAttempt? = nil,
                      validate: @escaping @Sendable () throws -> Void = {}) throws {
         try requireWritable()
         try Task.checkCancellation()
         try validate()
         guard !revision.id.isEmpty, revision.modificationTime.isFinite,
               revision.creationTime.map(\.isFinite) ?? true else { throw TextIndexDatabase.failure() }
+        if let attempt {
+            guard attempt.revision == revision, attempt.networkAllowed == networkAllowed,
+                  attempt.outcome == .failed else { throw TextIndexDatabase.failure() }
+        }
         guard let db = try database(writing: true) else { throw TextIndexDatabase.failure() }
         try db.transaction {
             try db.statement("""
@@ -173,6 +248,7 @@ actor SQLiteTextStore {
                 try db.bind(networkAllowed ? 1 : 0, at: 6, to: statement)
                 try db.execute(statement)
             }
+            if let attempt { try writeAttempt(attempt, db: db) }
             try validate()
             try Task.checkCancellation()
         }
@@ -284,22 +360,24 @@ actor SQLiteTextStore {
                     try db.execute(statement)
                 }
             }
-            let obsoleteFailures = try db.statement("SELECT id, revision, policy FROM text_failures") { statement -> [String] in
-                var ids: [String] = []
-                while try db.next(statement) {
-                    try Task.checkCancellation()
-                    let id = try db.string(statement, at: 0)
-                    let policy = try db.string(statement, at: 2)
-                    if revisions[id] != sqlite3_column_double(statement, 1)
-                        || policy != PhotoTextPolicy.version { ids.append(id) }
+            for table in ["text_failures", "text_attempts"] {
+                let obsoleteRows = try db.statement("SELECT id, revision, policy FROM \(table)") { statement -> [String] in
+                    var ids: [String] = []
+                    while try db.next(statement) {
+                        try Task.checkCancellation()
+                        let id = try db.string(statement, at: 0)
+                        let policy = try db.string(statement, at: 2)
+                        if revisions[id] != sqlite3_column_double(statement, 1)
+                            || policy != PhotoTextPolicy.version { ids.append(id) }
+                    }
+                    return ids
                 }
-                return ids
-            }
-            try db.statement("DELETE FROM text_failures WHERE id = ?") { statement in
-                for id in obsoleteFailures {
-                    try db.reset(statement)
-                    try db.bind(id, at: 1, to: statement)
-                    try db.execute(statement)
+                try db.statement("DELETE FROM \(table) WHERE id = ?") { statement in
+                    for id in obsoleteRows {
+                        try db.reset(statement)
+                        try db.bind(id, at: 1, to: statement)
+                        try db.execute(statement)
+                    }
                 }
             }
         }
@@ -380,6 +458,11 @@ final class TextIndexDatabase {
                             policy TEXT NOT NULL, reason TEXT NOT NULL
                                 CHECK(reason IN ('imageUnavailable', 'recognitionFailed', 'unavailable')),
                             network_allowed INTEGER NOT NULL CHECK(network_allowed IN (0, 1)));
+                        CREATE TABLE IF NOT EXISTS text_attempts (
+                            id TEXT PRIMARY KEY NOT NULL, revision REAL NOT NULL, creation_time REAL,
+                            policy TEXT NOT NULL, request_id TEXT NOT NULL,
+                            network_allowed INTEGER NOT NULL CHECK(network_allowed IN (0, 1)),
+                            outcome TEXT NOT NULL CHECK(outcome IN ('recognized', 'failed', 'cloudSkipped')));
                         PRAGMA user_version = 1;
                         """)
                 }

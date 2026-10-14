@@ -81,6 +81,8 @@ protocol PhotoWorkServicing: Sendable {
     func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary
     func indexText(networkAllowed: Bool, progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary
     func indexText(networkAllowed: Bool, retryReducedPreviews: Bool, progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary
+    func indexText(networkAllowed: Bool, retryReducedPreviews: Bool, requestID: UUID?,
+                   progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse
     func search(text: String, limit: Int, locationWeight: Float, filters: PhotoSearchFilters) async throws -> SearchResponse
     func search(text: String, originalText: String, limit: Int, locationWeight: Float, filters: PhotoSearchFilters, textSearchEnabled: Bool) async throws -> SearchResponse
@@ -93,6 +95,10 @@ protocol PhotoWorkServicing: Sendable {
 
 extension PhotoWorkServicing {
     func releaseSearchMemory() async { }
+    func indexText(networkAllowed: Bool, retryReducedPreviews: Bool, requestID: UUID?,
+                   progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
+        try await indexText(networkAllowed: networkAllowed, retryReducedPreviews: retryReducedPreviews, progress: progress)
+    }
     func indexText(networkAllowed: Bool, retryReducedPreviews: Bool,
                    progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
         try await indexText(networkAllowed: networkAllowed, progress: progress)
@@ -930,6 +936,12 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
 
     func indexText(networkAllowed: Bool, retryReducedPreviews: Bool,
                    progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
+        try await indexText(networkAllowed: networkAllowed, retryReducedPreviews: retryReducedPreviews,
+                            requestID: nil, progress: progress)
+    }
+
+    func indexText(networkAllowed: Bool, retryReducedPreviews: Bool, requestID: UUID?,
+                   progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
         try Task.checkCancellation()
         let library = self.library
         guard let textRecognizer else { throw AppFailure.photo("此服务不支持照片文字索引。") }
@@ -993,6 +1005,11 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
             let saved = try await textStore.indexedMetadata(revisions: eligible)
             let revisions = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
             let failures = try await textStore.failures(revisions: revisions, networkAllowed: networkAllowed)
+            let attempts: [String: PhotoTextAttempt.Outcome]
+            if let requestID {
+                attempts = try await textStore.completedAttempts(requestID: requestID, revisions: revisions,
+                                                                 networkAllowed: networkAllowed)
+            } else { attempts = [:] }
             try validate()
             var pending: [PhotoRevision] = []
             for revision in candidates {
@@ -1000,16 +1017,25 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                 if eligible[revision.id] == nil {
                     state.staleSkipped += 1
                     state.completed += 1
-                } else if !retryReducedPreviews, let failure = failures[revision.id] {
-                    state.deferredFailures += 1
-                    state.lastIssue = failure.explanation
+                } else if attempts[revision.id] == .cloudSkipped {
+                    state.cloudSkipped += 1
                     state.completed += 1
                     if let old = saved[revision.id] {
                         state.reused += 1
                         if old.hasText { state.withText += 1 }
                         if old.isReduced { state.reduced += 1 }
                     }
-                } else if let old = saved[revision.id], !old.isReduced || !retryReducedPreviews {
+                } else if ((!retryReducedPreviews && failures[revision.id] != nil) || attempts[revision.id] == .failed) {
+                    state.deferredFailures += 1
+                    state.lastIssue = (failures[revision.id] ?? .unavailable).explanation
+                    state.completed += 1
+                    if let old = saved[revision.id] {
+                        state.reused += 1
+                        if old.hasText { state.withText += 1 }
+                        if old.isReduced { state.reduced += 1 }
+                    }
+                } else if let old = saved[revision.id],
+                          !old.isReduced || !retryReducedPreviews || attempts[revision.id] == .recognized {
                     state.reused += 1
                     state.completed += 1
                     if old.hasText { state.withText += 1 }
@@ -1057,7 +1083,16 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                             case .recognitionFailed: reason = .recognitionFailed
                             default: reason = .unavailable
                             }
-                            try await textStore.saveFailure(revision, reason: reason, networkAllowed: networkAllowed) {
+                            let attempt = requestID.map { PhotoTextAttempt(requestID: $0, revision: revision,
+                                networkAllowed: networkAllowed, outcome: .failed) }
+                            try await textStore.saveFailure(revision, reason: reason, networkAllowed: networkAllowed,
+                                                            attempt: attempt) {
+                                try validateCommit(revision)
+                            }
+                        }
+                        if cloudOnly, let requestID {
+                            try await textStore.saveAttempt(PhotoTextAttempt(requestID: requestID, revision: revision,
+                                networkAllowed: networkAllowed, outcome: !networkAllowed && cloudOnly ? .cloudSkipped : .failed)) {
                                 try validateCommit(revision)
                             }
                         }
@@ -1074,7 +1109,9 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                                              pixelWidth: recognized.pixelWidth, pixelHeight: recognized.pixelHeight,
                                              isReduced: recognized.isReduced)
                 // Validate inside the storage actor, including before commit.
-                try await textStore.save(record) { try validateCommit(revision) }
+                let attempt = requestID.map { PhotoTextAttempt(requestID: $0, revision: revision,
+                    networkAllowed: networkAllowed, outcome: .recognized) }
+                try await textStore.save(record, attempt: attempt) { try validateCommit(revision) }
                 try validate(revision)
                 state.recognized += 1
                 if !record.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { state.withText += 1 }

@@ -612,6 +612,7 @@ struct ContentView: View {
                     .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 50)
                     .background(IQStyle.accent, in: RoundedRectangle(cornerRadius: 16))
                     .foregroundStyle(IQStyle.onAccent).buttonStyle(.plain).accessibilityIdentifier("setup-library")
+                    .minimalSearchFrame(.setup)
             }
         }
     }

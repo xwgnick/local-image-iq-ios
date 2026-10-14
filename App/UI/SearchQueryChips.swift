@@ -116,7 +116,7 @@ private struct SearchQueryChipRow: Layout {
 /// Passive production geometry for native presentation tests; no AX traversal,
 /// fake accessibility elements or cached frame used to route user interactions.
 enum MinimalSearchPart: Hashable {
-    case heading, subtitle, field, chips, chip(Int), tools, heroArea, hero, resultsHeading, translation
+    case heading, subtitle, field, chips, chip(Int), tools, heroArea, hero, resultsHeading, translation, setup
 }
 
 struct MinimalSearchFrames: PreferenceKey {

@@ -57,7 +57,16 @@ final class SimilarPhotoCleanupState: ObservableObject {
     @Published private(set) var isReadDraining = false
     @Published private(set) var isPageVisible = false
     @Published private(set) var isAutomaticRefreshDeferred = false
-    @Published private(set) var needsAutomaticRefreshRetry = false
+    @Published private(set) var needsAutomaticRefreshRetry = false {
+        didSet {
+            guard oldValue != needsAutomaticRefreshRetry else { return }
+            if needsAutomaticRefreshRetry {
+                preferences?.set(true, forKey: SimilarCleanupPreferences.automaticRefreshSuspendedKey)
+            } else {
+                preferences?.removeObject(forKey: SimilarCleanupPreferences.automaticRefreshSuspendedKey)
+            }
+        }
+    }
     @Published private(set) var needsRegroup = false
     @Published private(set) var persistenceIssue: String?
     @Published private(set) var isValidating = false
@@ -169,6 +178,8 @@ final class SimilarPhotoCleanupState: ObservableObject {
         let saved = SimilarCleanupPreferences.threshold(in: preferences)
         self.threshold = saved
         self.draftThreshold = saved
+        needsAutomaticRefreshRetry = preferences?.object(
+            forKey: SimilarCleanupPreferences.automaticRefreshSuspendedKey) as? Bool ?? false
     }
 
     deinit {
@@ -557,7 +568,7 @@ final class SimilarPhotoCleanupState: ObservableObject {
                         }
                         self?.isRestoring = false
                         self?.isGrouping = true
-                    case .missing:
+                    case .missing, .resumable:
                         guard mayCompute else {
                             self?.needsRegroup = true
                             return

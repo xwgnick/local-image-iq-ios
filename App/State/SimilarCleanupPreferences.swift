@@ -7,6 +7,7 @@ import Foundation
 /// (including 80) unchanged; initialization and draft edits never rewrite it.
 enum SimilarCleanupPreferences {
     static let thresholdKey = "similarCleanupThreshold.v1"
+    static let automaticRefreshSuspendedKey = "similarCleanupAutomaticRefreshSuspended.v1"
     // Presentation only, deliberately absent from the grouping/cache policy.
     static let defaultMinimumGroupCount = 2
 

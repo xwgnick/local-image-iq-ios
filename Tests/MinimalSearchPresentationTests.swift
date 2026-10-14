@@ -13,6 +13,86 @@ import ImageIQCore
 /// Snapshots are review attachments, not a claim of physical-phone acceptance.
 @MainActor
 final class MinimalSearchPresentationTests: XCTestCase {
+    func testIndexSetupIsAbsentDuringHeldLaunchAndAppearsOnlyForConfirmedEmptyLibrary() async throws {
+        for empty in [false, true] {
+            let f = try await controlsFixture(in: self)
+            let worker = MinimalHeldLaunchWorker(empty: empty)
+            let app = AppState(worker: worker, authorizationStatus: { .authorized },
+                               queryTranslator: MinimalNoTranslation())
+            addTeardownBlock { @MainActor in
+                worker.gate.open()
+                app.enterBackground()
+                await app.waitUntilIdle()
+                XCTAssertEqual(worker.unexpectedCalls, 0)
+            }
+            app.start()
+            let measured = MinimalMeasurements()
+            let host = try mount(f, width: 393, measured: measured, app: app)
+            defer { host.close() }
+            try await waitForHome(host, measured)
+            try await host.wait { worker.entered && app.activity == .starting }
+            XCTAssertFalse(app.summary.indexStatisticsKnown)
+            XCTAssertFalse(app.modelsReady)
+            XCTAssertNil(measured.frames[.setup], "Unread zero statistics must never draw the build-index button.")
+            try host.attach(to: self, name: "UIReview-build45-no-index-flash-\(empty ? "empty" : "existing")")
+            worker.gate.open()
+            await app.waitUntilIdle()
+            try await host.wait { app.modelsReady && (empty ? measured.frames[.setup] != nil : measured.frames[.hero] != nil) }
+            XCTAssertTrue(app.summary.indexStatisticsKnown)
+            XCTAssertEqual(measured.frames[.setup] != nil, empty)
+            assertNoWork(f)
+        }
+    }
+
+    func testEnhancementsHaveNeitherFilledCardsNorBorderInBothNativeAppearances() async throws {
+        for appearance in [UIUserInterfaceStyle.light, .dark] {
+            for width in [CGFloat(393), CGFloat(320)] {
+                let f = try await controlsFixture(in: self)
+                let measured = MinimalMeasurements()
+                let host = try mount(f, width: width, measured: measured, appearance: appearance)
+                defer { host.close() }
+                try await waitForHome(host, measured)
+                let image = try host.capture()
+                for (label, info, toggle) in [
+                    (SearchPhotoTextElement.label, .info, .toggle),
+                    (.locationLabel, .locationInfo, .locationToggle)
+                ] {
+                    let title = try XCTUnwrap(measured.ocr[label])
+                    let icon = try XCTUnwrap(measured.ocr[info])
+                    let control = try XCTUnwrap(measured.ocr[toggle])
+                    let blankY = control.minY + host.pixel
+                    let background = try nativePixel(image, at: CGPoint(x: 4, y: blankY))
+                    let blankInterior = CGPoint(x: (title.minX + icon.maxX) / 2, y: blankY)
+                    let formerBorder = CGPoint(x: icon.maxX - host.pixel, y: blankY)
+                    XCTAssertEqual(try nativePixel(image, at: blankInterior), background,
+                                   "The enhancement body must share the page canvas, not a filled card.")
+                    XCTAssertEqual(try nativePixel(image, at: formerBorder), background,
+                                   "No trailing card border may remain.")
+                    XCTAssertGreaterThanOrEqual(title.minX + host.pixel, 20)
+                    XCTAssertEqual(icon.width, 44, accuracy: host.pixel)
+                    XCTAssertEqual(icon.height, 44, accuracy: host.pixel)
+                    XCTAssertGreaterThanOrEqual(control.height + host.pixel, 44)
+                }
+                try host.attach(to: self, name: "UIReview-build45-borderless-\(appearance == .light ? "light" : "dark")-\(Int(width))")
+                assertNoWork(f)
+            }
+        }
+    }
+
+    private func nativePixel(_ image: UIImage, at point: CGPoint) throws -> [UInt8] {
+        let source = try XCTUnwrap(image.cgImage)
+        let cropped = try XCTUnwrap(source.cropping(to: CGRect(
+            x: floor(point.x * image.scale), y: floor(point.y * image.scale), width: 1, height: 1)))
+        var bytes = [UInt8](repeating: 0, count: 4)
+        try bytes.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: 1, height: 1,
+                bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(cropped, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        return bytes
+    }
+
     func testRestoredLocationPreferenceNativeSwitchUpdatesBindingAndSavedValue() async throws {
         let f = try await controlsFixture(in: self)
         let suite = "MinimalLocationSwitch.\(UUID().uuidString)"
@@ -458,14 +538,14 @@ final class MinimalSearchPresentationTests: XCTestCase {
 
     private func mount(_ f: ControlsFixture, width: CGFloat, dynamicType: DynamicTypeSize = .large,
                        measured: MinimalMeasurements, presentation: SearchPhotoTextPresentation? = nil,
-                       app: AppState? = nil) throws -> ControlsNativeHost {
+                       app: AppState? = nil, appearance: UIUserInterfaceStyle = .dark) throws -> ControlsNativeHost {
         let content = ContentView(state: app ?? f.app, photoActionService: MinimalNoPhotoActions(),
             similarCleanupState: f.cleanup, navigation: f.navigation, cleanupPreferences: nil,
             photoTextPresentation: presentation)
             .onPreferenceChange(MinimalSearchFrames.self) { measured.frames = $0 }
             .onPreferenceChange(SearchPhotoTextFrames.self) { measured.ocr = $0 }
         return try ControlsNativeHost(content: AnyView(content), size: CGSize(width: width, height: 852),
-                                      dynamicType: dynamicType)
+                                      dynamicType: dynamicType, appearance: appearance)
     }
 
     private func waitForHome(_ host: ControlsNativeHost, _ measured: MinimalMeasurements) async throws {
@@ -637,6 +717,37 @@ private struct MinimalNoPhotoActions: PhotoLibraryActions {
     private func unexpected() -> ControlsPresentationFailure {
         XCTFail("Minimal presentation must not read albums, share or mutate Photos")
         return .unexpectedWork
+    }
+
+    @MainActor
+    private final class MinimalHeldLaunchWorker: PhotoWorkServicing {
+        let gate = SearchRootTestGate()
+        private let summary: LibrarySummary
+        private(set) var entered = false
+        private(set) var unexpectedCalls = 0
+
+        init(empty: Bool) {
+            summary = LibrarySummary(indexedCount: empty ? 0 : 37, modelVersion: "TEST-held-startup")
+        }
+        func refresh() async throws -> LibrarySummary { summary }
+        func prepareForLaunch(progress: @escaping @Sendable (LaunchStage) async -> Void) async throws -> LibrarySummary {
+            await progress(.checkingLibrary)
+            entered = true
+            await gate.wait()
+            try Task.checkCancellation()
+            await progress(.preparingSearch)
+            return summary
+        }
+        func index(networkAllowed: Bool, progress: @escaping @Sendable (IndexProgress) async -> Void) async throws -> LibrarySummary {
+            throw unexpected()
+        }
+        func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse { throw unexpected() }
+        func clear() async throws -> LibrarySummary { throw unexpected() }
+        private func unexpected() -> ControlsPresentationFailure {
+            unexpectedCalls += 1
+            XCTFail("Rendering startup must never index, clear, or search")
+            return .unexpectedWork
+        }
     }
 }
 

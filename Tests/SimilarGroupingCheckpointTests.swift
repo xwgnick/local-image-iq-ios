@@ -121,7 +121,7 @@ final class SimilarGroupingCheckpointTests: XCTestCase {
         let url = root.appendingPathComponent("similar-groups-checkpoint-v1.bin")
         let bytes = try Data(contentsOf: url)
         for error in [Stop.interrupted as Error, CancellationError(), AppFailure.permission] {
-            let failing = SimilarGroupingCache(directory: root, beforeCommit: { throw error })
+            let failing = SimilarGroupingCache(directory: root, checkpointBeforeCommit: { throw error })
             XCTAssertThrowsError(try failing.saveCheckpoint(replacement, key: identity, validate: {}))
             XCTAssertEqual(try Data(contentsOf: url), bytes)
         }
@@ -154,8 +154,10 @@ final class SimilarGroupingCheckpointTests: XCTestCase {
         try cache.saveCheckpoint(.init(nextSeed: 1, assigned: [true, true],
             groups: [.init(members: [0, 1], minimumBits: Float(1).bitPattern)]), key: key(), validate: {})
         let url = root.appendingPathComponent("similar-groups-checkpoint-v1.bin")
+        #if !targetEnvironment(simulator)
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         XCTAssertEqual(attributes[.protectionKey] as? FileProtectionType, .completeUntilFirstUserAuthentication)
+        #endif
         XCTAssertEqual(try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
         let envelope = try PropertyListDecoder().decode(SimilarGroupingCheckpointEnvelope.self, from: Data(contentsOf: url))
         XCTAssertEqual(envelope.sha256, Data(SHA256.hash(data: envelope.payload)))

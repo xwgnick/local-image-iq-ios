@@ -7,6 +7,46 @@ import XCTest
 /// No PhotoKit client, database, image pixels, AppState, network, or sleeps.
 @MainActor
 final class SimilarPhotoCleanupStateTests: XCTestCase {
+    func testUserCancelAndFailureRequireExplicitRetryEvenAcrossNewControllers() async throws {
+        for failure in [false, true] {
+            let suite = "SimilarCleanupResume.\(UUID().uuidString)"
+            let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { preferences.removePersistentDomain(forName: suite) }
+            let gate = hold()
+            let groups = cleanupGroups()
+            let validation = CleanupValidation(photos: groups.flatMap(\.photos))
+            let grouping = CleanupGrouping { index, threshold in
+                if index == 0 {
+                    if failure { throw AppFailure.photo("TEST grouping failure") }
+                    await gate.wait()
+                }
+                return cleanupResult(groups: groups, threshold: threshold, validation: validation)
+            }
+            let first = SimilarPhotoCleanupState(grouping: grouping, deletion: CleanupDeletion(), preferences: preferences)
+            first.enterPage(ready: true)
+            if !failure {
+                await entered(gate)
+                first.cancelAutomaticRefresh()
+                gate.open()
+            }
+            await first.waitUntilIdle()
+            XCTAssertTrue(first.needsAutomaticRefreshRetry)
+            XCTAssertTrue(preferences.bool(forKey: SimilarCleanupPreferences.automaticRefreshSuspendedKey))
+            let next = SimilarPhotoCleanupState(grouping: grouping, deletion: CleanupDeletion(), preferences: preferences)
+            next.enterPage(ready: true)
+            next.pause()
+            next.resume()
+            await next.waitUntilIdle()
+            XCTAssertEqual(grouping.calls.thresholds.count, 1, "Relaunch and foreground are not explicit retries.")
+            XCTAssertTrue(next.canRetryAutomaticRefresh)
+            next.retryAutomaticRefresh()
+            await next.waitUntilIdle()
+            XCTAssertEqual(grouping.calls.thresholds.count, 2)
+            XCTAssertTrue(next.hasScanned)
+            XCTAssertNil(preferences.object(forKey: SimilarCleanupPreferences.automaticRefreshSuspendedKey))
+        }
+    }
+
     func testFiniteBackgroundReadContinuesWithoutBrowseSelectionOrDeletionAuthority() async {
         let gate = hold()
         let groups = cleanupGroups()

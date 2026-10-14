@@ -185,6 +185,7 @@ final class AppState: ObservableObject {
     private var operationID = UUID()
     private var photoCheckID = UUID()
     private var translationAvailabilityID = UUID()
+    private var pendingPreferenceIssue: String?
     @Published private(set) var isForeground = true
     @Published private(set) var backgroundExecutionAllowed = false
     @Published private(set) var protectedDataAvailable = true
@@ -197,6 +198,7 @@ final class AppState: ObservableObject {
     private static let imageResumeKey = "interruptedImageIndex.v1"
     private static let ocrResumeKey = "interruptedTextIndex.v1"
     private static let ocrQualityResumeKey = "interruptedTextQualityRetry.v1"
+    private static let ocrRequestResumeKey = "interruptedTextRequest.v1"
 
     init(library: PhotoLibraryClient = PhotoLibraryClient(), worker: (any PhotoWorkServicing)? = nil,
          authorizationStatus: @escaping () -> PHAuthorizationStatus = { PhotoLibraryClient.authorization },
@@ -269,9 +271,15 @@ final class AppState: ObservableObject {
         // enqueue recognition at cold launch, refresh, or view reconstruction.
         _textSearchEnabled = Published(initialValue: restoredTextSearch)
         ocrSync = OCRSyncState(enabled: restoredTextSearch)
+        var resumePreferenceIssue: String?
         if workPreferences?.bool(forKey: Self.ocrResumeKey) == true {
+            let requestID = workPreferences?.string(forKey: Self.ocrRequestResumeKey).flatMap(UUID.init(uuidString:))
+            if restoredTextSearch, requestID == nil {
+                resumePreferenceIssue = "文字索引续做标识无效，已重新建立检查请求；已保存记录不会删除。"
+            }
             ocrSync.restoreInterruptedRequest(
-                retryReducedPreviews: workPreferences?.bool(forKey: Self.ocrQualityResumeKey) ?? false)
+                retryReducedPreviews: workPreferences?.bool(forKey: Self.ocrQualityResumeKey) ?? false,
+                requestID: requestID)
         }
         if let saved = translationPreferences?.object(forKey: Self.translationPreferenceKey) as? Bool {
             chineseSearchEnabled = saved
@@ -279,7 +287,11 @@ final class AppState: ObservableObject {
         self.authorizationStatus = authorizationStatus
         authorization = authorizationStatus()
         thumbnails = PhotoThumbnailCache(library: library)
-        if let locationPreferenceIssue { errorMessage = locationPreferenceIssue }
+        let preferenceIssues = [locationPreferenceIssue, resumePreferenceIssue].compactMap { $0 }
+        if !preferenceIssues.isEmpty {
+            pendingPreferenceIssue = preferenceIssues.joined(separator: "\n")
+            errorMessage = pendingPreferenceIssue
+        }
         photoSync.onCommitted = { [weak self] in
             self?.indexAccessChangedIfNeeded()
             self?.requestSyncSummaryRefresh()
@@ -668,6 +680,11 @@ final class AppState: ObservableObject {
         workPreferences?.set(continuing, forKey: Self.ocrResumeKey)
         workPreferences?.set(ocrSync.pending ? ocrSync.pendingQualityRetry : ocrSync.retryReducedPreviews,
                              forKey: Self.ocrQualityResumeKey)
+        if continuing, let requestID = ocrSync.continuationID {
+            workPreferences?.set(requestID.uuidString, forKey: Self.ocrRequestResumeKey)
+        } else {
+            workPreferences?.removeObject(forKey: Self.ocrRequestResumeKey)
+        }
     }
 
     private func resumeInterruptedWork() {
@@ -691,9 +708,11 @@ final class AppState: ObservableObject {
         summary.textIndexStatisticsKnown = false
         let networkAllowed = allowICloudDownload
         let retryReducedPreviews = ocrSync.retryReducedPreviews
+        let requestID = ocrSync.continuationID
         schedule(.indexingText, ocrRun: run) { [weak self, worker] token in
             let summary = try await worker.indexText(networkAllowed: networkAllowed,
-                                                     retryReducedPreviews: retryReducedPreviews) { [weak self] progress in
+                                                     retryReducedPreviews: retryReducedPreviews,
+                                                     requestID: requestID) { [weak self] progress in
                 await self?.accept(textProgress: progress, token: token, ocrRun: run)
             }
             return .summary(summary, "文字索引扫描结束；已完成记录可复用，未完成项可手动重试。")
@@ -968,7 +987,7 @@ final class AppState: ObservableObject {
         schedule(.clearing) { [worker] _ in .summary(try await worker.clear(), "Local index deleted. Your Photos library was not changed.") }
     }
 
-    func dismissError() { errorMessage = nil; actionHint = nil }
+    func dismissError() { pendingPreferenceIssue = nil; errorMessage = nil; actionHint = nil }
 
     private func searchSettingsChanged() {
         invalidateDisplayedPhotos()
@@ -1155,7 +1174,7 @@ final class AppState: ObservableObject {
         self.activity = activity
         if activity == .starting || activity == .refreshing { syncReadinessConfirmed = false }
         refreshSyncAvailability()
-        errorMessage = nil
+        errorMessage = pendingPreferenceIssue
         actionHint = nil
         status = activity == .indexing ? "Indexing on this device…" : "Working locally…"
         timing?.mark(.queue)

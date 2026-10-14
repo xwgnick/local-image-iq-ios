@@ -177,6 +177,9 @@ final class BackgroundResumeTests: XCTestCase {
         await relaunched.waitUntilIdle()
         let counts = await worker.counts()
         XCTAssertEqual(counts.textPolicies, [true, true])
+        XCTAssertEqual(counts.textRequestIDs.count, 2)
+        XCTAssertNotNil(counts.textRequestIDs.first ?? nil)
+        XCTAssertEqual(counts.textRequestIDs.first ?? nil, counts.textRequestIDs.last ?? nil)
         XCTAssertEqual(counts.textWrites, 3)
         XCTAssertEqual(counts.clears, 0)
         XCTAssertEqual(relaunched.ocrSync.phase, .completed)
@@ -184,6 +187,7 @@ final class BackgroundResumeTests: XCTestCase {
         XCTAssertEqual(relaunched.ocrSync.progress.reused, 1)
         XCTAssertEqual(relaunched.ocrSync.progress.recognized, 2)
         XCTAssertFalse(preferences.bool(forKey: "interruptedTextIndex.v1"))
+        XCTAssertNil(preferences.object(forKey: "interruptedTextRequest.v1"))
     }
 
     func testOCRFinishesWithinLeaseAndProtectedDataLossExpiresLease() async throws {
@@ -282,6 +286,7 @@ private actor ResumeWorker: PhotoWorkServicing {
     private var heldText = false
     private var indexCalls = 0
     private var textPolicies: [Bool] = []
+    private var textRequestIDs: [UUID?] = []
     private var clears = 0
 
     init(initialImages: Int = 0, imageHold: ResumeGate? = nil, imageSaved: XCTestExpectation? = nil,
@@ -293,8 +298,8 @@ private actor ResumeWorker: PhotoWorkServicing {
         self.textSaved = textSaved
         self.failIndex = failIndex
     }
-    func counts() -> (indexCalls: Int, imageWrites: Int, textWrites: Int, textPolicies: [Bool], clears: Int) {
-        (indexCalls, images.count, texts.count, textPolicies, clears)
+    func counts() -> (indexCalls: Int, imageWrites: Int, textWrites: Int, textPolicies: [Bool], textRequestIDs: [UUID?], clears: Int) {
+        (indexCalls, images.count, texts.count, textPolicies, textRequestIDs, clears)
     }
     func refresh() async throws -> LibrarySummary {
         try Task.checkCancellation()
@@ -336,6 +341,11 @@ private actor ResumeWorker: PhotoWorkServicing {
             }
         }
         return try await refresh()
+    }
+    func indexText(networkAllowed: Bool, retryReducedPreviews: Bool, requestID: UUID?,
+                   progress: @escaping @Sendable (TextIndexProgress) async -> Void) async throws -> LibrarySummary {
+        textRequestIDs.append(requestID)
+        return try await indexText(networkAllowed: networkAllowed, retryReducedPreviews: retryReducedPreviews, progress: progress)
     }
     func search(text: String, limit: Int, locationWeight: Float) async throws -> SearchResponse {
         XCTFail("Lifecycle recovery must not submit a search")

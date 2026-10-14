@@ -1133,7 +1133,8 @@ final class PhotoSyncStateTests: XCTestCase {
         await state.waitForSync()
         XCTAssertEqual(front.arrival(.text).count, 1)
         XCTAssertEqual(state.summary.indexedCount, 9)
-        XCTAssertEqual(state.ocrSync.phase, .cancelled)
+        XCTAssertEqual(state.ocrSync.phase, .waiting)
+        XCTAssertTrue(state.ocrSync.lifecyclePaused)
     }
 
     func testCancellingQueuedManualWriterDoesNotRunWorkerOrLeakLease() async throws {
