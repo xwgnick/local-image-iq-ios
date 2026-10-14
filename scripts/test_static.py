@@ -130,7 +130,7 @@ class StaticTests(unittest.TestCase):
         baseline_args = export_models.arguments([])
         self.assertEqual(baseline_args.conversion_max_abs, 1e-3)
         self.assertEqual(baseline_args.similarity_max_abs, 1e-4)
-        self.assertEqual(contract.acceptance_policy("float16"), "fp16-normalized-experiment-v1")
+        self.assertEqual(contract.acceptance_policy("float16"), "fp16-real-photo-experiment-v2")
         self.assertEqual(contract.acceptance_policy("float32"), "fp32-strict-v1")
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             export_models.arguments(["--precision", "float16", "--similarity-max-abs", "0.0021"])

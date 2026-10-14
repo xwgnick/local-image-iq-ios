@@ -58,7 +58,7 @@ function validateManifest(value) {
   assert.equal(value.parity?.status, 'passed');
   assert.equal(value.parity?.report, 'parity-report.json');
   assert.equal(value.parity?.precision, precision);
-  if (precision === 'float16') assert.equal(value.parity?.acceptancePolicy, 'fp16-normalized-experiment-v1');
+  if (precision === 'float16') assert.equal(value.parity?.acceptancePolicy, 'fp16-real-photo-experiment-v2');
   assert.equal(value.parity?.computeUnits, 'CPU_ONLY');
   assert.equal(value.provenance, 'provenance.json');
   assert.equal(value.redistributionApproved, false);
@@ -212,7 +212,7 @@ async function checkModels(root, notes) {
   assert.equal(report.passed, true);
   assert.equal(report.precision, manifest.preprocessing.computePrecision);
   const fp16 = report.precision === 'float16';
-  if (fp16) assert.equal(report.acceptancePolicy, 'fp16-normalized-experiment-v1');
+  if (fp16) assert.equal(report.acceptancePolicy, 'fp16-real-photo-experiment-v2');
   assert.equal(report.computeUnits, 'CPU_ONLY');
   assert.ok(Number.isFinite(report.thresholds.minCosineExclusive) &&
     report.thresholds.minCosineExclusive >= 0.999 && report.thresholds.minCosineExclusive < 1);

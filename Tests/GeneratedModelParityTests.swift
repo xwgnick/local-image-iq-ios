@@ -149,7 +149,8 @@ final class GeneratedModelParityTests: XCTestCase {
                         try record(reference: [score(referenceText, referenceImage)],
                                    candidate: [score(texts[textIndex], images[imageIndex])],
                                    id: text.id + "/" + image.id, stage: "paired.\(units)",
-                                   target: "FP32 reference cosine", maxAbs: ceiling, report: &report)
+                                   target: "FP32 reference cosine", maxAbs: ceiling,
+                                   diagnosticOnly: report.precision == "float16", report: &report)
                     }
                 }
             }
@@ -254,6 +255,19 @@ final class GeneratedModelParityTests: XCTestCase {
         XCTAssertEqual(equallyRelevant.candidateTop5Relevant, equallyRelevant.baselineTop5Relevant)
         XCTAssertEqual(equallyRelevant.candidateNDCG5, 1, accuracy: 1e-10)
         XCTAssertThrowsError(try relevanceMeasurement(ranking, text: "query", category: "object", relevant: []))
+    }
+
+    func testDiagnosticNumericalMeasurementsRetainRejectionsAndValidateInputs() throws {
+        var report = Report(test: name, requestedComputeUnits: "not-used")
+        try record(reference: [1, 0], candidate: [0, 1], id: "diagnostic", stage: "unit",
+                   target: "reference", maxAbs: 0.001, minCosine: 0.999,
+                   diagnosticOnly: true, report: &report)
+        let measurement = try XCTUnwrap(report.measurements.first)
+        XCTAssertFalse(measurement.accepted)
+        XCTAssertTrue(measurement.diagnosticOnly)
+        XCTAssertEqual(measurement.cosine, 0)
+        XCTAssertThrowsError(try record(reference: [1, 0], candidate: [.nan, 1], id: "nonfinite",
+                                       stage: "unit", target: "reference", diagnosticOnly: true, report: &report))
     }
 
     private func baselineModels(_ resources: Resources, report: inout Report) throws -> (image: URL, text: URL) {
@@ -557,8 +571,8 @@ final class GeneratedModelParityTests: XCTestCase {
             XCTAssertEqual(candidate, original, "\(fixture.id): direct raw CGImage and values(data:) must match exactly.")
             try record(reference: referenceTensor(fixture, resources: resources), candidate: candidate, id: fixture.id,
                        stage: "image.previewVsHFTensor", target: "HF/Pillow full NCHW tensor", report: &report)
-            // Only HF/native tensor deltas are diagnostic. Actual app image
-            // embeddings must still match both raw references at cosine >= .995.
+            // FP16 cross-runtime embeddings are diagnostic under the approved
+            // real-photo policy; exact native preprocessing checks still gate.
             return preview
         }
     }
@@ -575,7 +589,8 @@ final class GeneratedModelParityTests: XCTestCase {
         for (target, reference) in [("referenceRaw", reference), ("coreMLRaw", exported)] {
             try record(reference: EmbeddingValidation.normalizeProjection(reference), candidate: projection,
                        id: id, stage: stage + ".normalized", target: target,
-                       minCosine: minCosine, strictCosine: strictCosine, report: &report)
+                       minCosine: minCosine, strictCosine: strictCosine,
+                       diagnosticOnly: report.precision == "float16", report: &report)
         }
     }
 
@@ -731,10 +746,11 @@ final class GeneratedModelParityTests: XCTestCase {
         try require(["float32", "float16"].contains(precision.preprocessing.computePrecision),
                     "Unsupported model compute precision.")
         if precision.preprocessing.computePrecision == "float16" {
-            try require(precision.parity.acceptancePolicy == "fp16-normalized-experiment-v1",
+            try require(precision.parity.acceptancePolicy == "fp16-real-photo-experiment-v2",
                         "FP16 requires the explicitly approved experimental policy.")
         }
         report.precision = precision.preprocessing.computePrecision
+        report.acceptancePolicy = precision.parity.acceptancePolicy
         let imageModel = try required("ImageEncoder", "mlmodelc", in: [owner])
         let textModel = try required("TextEncoder", "mlmodelc", in: [owner])
         let tokenizerURL = try required("tokenizer", "json", in: [owner])
@@ -1142,17 +1158,17 @@ final class GeneratedModelParityTests: XCTestCase {
             try record(reference: reference, candidate: prediction.raw, id: id, stage: stage + ".raw",
                        target: target, maxAbs: conversion && report.precision == "float32" ? Self.conversionMaxAbs : nil,
                        minCosine: conversion ? Self.conversionMinCosine : Self.nativeImageMinCosine,
-                       strictCosine: conversion, report: &report)
+                       strictCosine: conversion, diagnosticOnly: report.precision == "float16", report: &report)
             let normalized = try EmbeddingValidation.normalizeProjection(reference)
             try record(reference: normalized, candidate: prediction.normalized, id: id, stage: stage + ".normalized",
                        target: target, minCosine: conversion ? Self.conversionMinCosine : Self.nativeImageMinCosine,
-                       strictCosine: conversion, report: &report)
+                       strictCosine: conversion, diagnosticOnly: report.precision == "float16", report: &report)
         }
     }
 
     private func record(reference: [Float], candidate: [Float], id: String, stage: String, target: String,
                         maxAbs: Double? = nil, minCosine: Double? = nil, strictCosine: Bool = false,
-                        report: inout Report) throws {
+                        diagnosticOnly: Bool = false, report: inout Report) throws {
         try require(!reference.isEmpty && reference.count == candidate.count
                     && reference.allSatisfy(\.isFinite) && candidate.allSatisfy(\.isFinite),
                     "\(stage)/\(id): vectors must have equal nonzero lengths and finite components.")
@@ -1175,10 +1191,15 @@ final class GeneratedModelParityTests: XCTestCase {
                                       maxAbs: maximum, meanAbs: total / Double(reference.count), cosine: cosine,
                                       referenceNorm: sqrt(leftSquared), candidateNorm: sqrt(rightSquared),
                                       maxAbsInclusive: maxAbs, minCosine: minCosine, cosineExclusive: strictCosine,
-                                      accepted: absolutePassed && cosinePassed)
+                                      accepted: absolutePassed && cosinePassed, diagnosticOnly: diagnosticOnly)
         report.measurements.append(measurement)
-        XCTAssertTrue(absolutePassed && cosinePassed,
-                      "\(stage)/\(id) vs \(target): maxAbs=\(maximum), MAE=\(measurement.meanAbs), cosine=\(String(describing: cosine)); maxAbs<=\(String(describing: maxAbs)), cosine\(strictCosine ? ">" : ">=")\(String(describing: minCosine)). See JSON attachment.")
+        if diagnosticOnly && !(absolutePassed && cosinePassed) {
+            print("FP16 numerical diagnostic (not an acceptance gate): \(stage)/\(id) vs \(target), maxAbs=\(maximum), cosine=\(String(describing: cosine))")
+        }
+        if !diagnosticOnly {
+            XCTAssertTrue(absolutePassed && cosinePassed,
+                          "\(stage)/\(id) vs \(target): maxAbs=\(maximum), MAE=\(measurement.meanAbs), cosine=\(String(describing: cosine)); maxAbs<=\(String(describing: maxAbs)), cosine\(strictCosine ? ">" : ">=")\(String(describing: minCosine)). See JSON attachment.")
+        }
     }
 
     private enum ParityError: Error, CustomStringConvertible {
@@ -1216,6 +1237,7 @@ final class GeneratedModelParityTests: XCTestCase {
         let minCosine: Double?
         let cosineExclusive: Bool
         let accepted: Bool
+        let diagnosticOnly: Bool
     }
 
     private struct Summary: Encodable {
@@ -1247,6 +1269,7 @@ final class GeneratedModelParityTests: XCTestCase {
         var modelBundle: String?
         var modelVersion: String?
         var precision = "float32"
+        var acceptancePolicy: String?
         var baselineModelVersion: String?
         var rankings: [RankingMeasurement] = []
         var dataset: String?

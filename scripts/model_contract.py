@@ -28,7 +28,7 @@ FP16_SIMILARITY_MAX_ABS = 2e-3
 
 def acceptance_policy(precision: str) -> str:
     require(precision in ("float32", "float16"), "Unsupported compute precision")
-    return "fp16-normalized-experiment-v1" if precision == "float16" else "fp32-strict-v1"
+    return "fp16-real-photo-experiment-v2" if precision == "float16" else "fp32-strict-v1"
 
 
 FEATURES = {

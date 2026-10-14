@@ -3,8 +3,82 @@ import { generateKeyPairSync, verify, X509Certificate } from 'node:crypto';
 import { rootCertificates } from 'node:tls';
 import fs from 'node:fs';
 import test from 'node:test';
-import { archiveArguments, decodeSecret, exportOptions, identity, makeJWT, maxIPABytes, modelPrecision,
-  validateInfo, validateModelDelivery, validateProfile } from './testflight.mjs';
+import { archiveArguments, decodeSecret, exportOptions, fp16AcceptancePolicy, identity, makeJWT, maxIPABytes, modelPrecision,
+  validateInfo, validateModelDelivery, validateProfile, validateRealPhotoAcceptance } from './testflight.mjs';
+
+const photoApproval = JSON.parse(fs.readFileSync(new URL('./fp16-real-photo-acceptance.json', import.meta.url), 'utf8'));
+
+function approvedPhotoReport() {
+  const report = {
+    completed: true, skipped: false,
+    test: '-[GeneratedModelParityTests testNativeRealPhotoTopFiveRankingDiagnostics]',
+    requireModels: true, resourceGate: 'app-bundle-manifest', precision: 'float16',
+    acceptancePolicy: fp16AcceptancePolicy, dataset: photoApproval.dataset,
+    corpusSHA256: photoApproval.corpusSHA256, modelVersion: photoApproval.modelVersion,
+    baselineModelVersion: photoApproval.baselineModelVersion, requestedComputeUnits: 'cpuOnly+all',
+    fixtureCounts: { realPhotos: 240, chineseQueries: 48, objectCategories: 24 },
+    rankings: [], relevance: [],
+  };
+  const ids = Array.from({ length: 240 }, (_, index) => String(index));
+  for (const computeUnits of ['MLComputeUnits(rawValue: 0)', 'MLComputeUnits(rawValue: 2)']) {
+    for (const values of photoApproval.outcomes) {
+      const row = Object.fromEntries(photoApproval.columns.map((name, index) => [name, values[index]]));
+      report.relevance.push({ ...row, computeUnits, relevantImageCount: 8 });
+      report.rankings.push({ ...row, computeUnits, imageIDs: ids, baselineOrder: ids, candidateOrder: ids,
+        baselineScores: ids.map(() => 0), candidateScores: ids.map(() => 0), maxScoreError: 0 });
+    }
+  }
+  return report;
+}
+
+test('real-photo acceptance replays every approved query on CPU and all compute units', () => {
+  const report = approvedPhotoReport();
+  const result = validateRealPhotoAcceptance(report);
+  assert.equal(result.approvedRun, '38606281528');
+  assert.equal(result.policy, 'fp16-real-photo-experiment-v2');
+  for (const summary of Object.values(result.configurations)) {
+    assert.equal(summary.top1Unchanged, 39);
+    assert.equal(summary.top5MembershipUnchanged, 28);
+    assert.equal(summary.orderedTop5Unchanged, 14);
+    assert.equal(summary.top5Overlap, 215);
+    assert.equal(summary.baselineTop5Relevant, 193);
+    assert.equal(summary.candidateTop5Relevant, 196);
+    assert.equal(summary.baselineTop1Relevant, 41);
+    assert.equal(summary.candidateTop1Relevant, 40);
+    assert.ok(Math.abs(summary.candidateNDCG5 - 0.8239985362541576) < 1e-10);
+  }
+  report.relevance[0].candidateNDCG5 = 0.99;
+  assert.throws(() => validateRealPhotoAcceptance(report), /FP16 nDCG regressed/);
+});
+
+test('real-photo acceptance rejects skipped, partial, changed-identity and worse per-query results', () => {
+  const mutations = [
+    report => { report.completed = false; },
+    report => { report.skipped = true; },
+    report => { report.acceptancePolicy = 'fp16-normalized-experiment-v1'; },
+    report => { report.modelVersion = photoApproval.baselineModelVersion; },
+    report => { report.corpusSHA256 = 'a'.repeat(64); },
+    report => { report.fixtureCounts.realPhotos = 239; },
+    report => { report.rankings.pop(); },
+    report => { report.relevance[0].queryID = 'unapproved'; },
+    report => { report.rankings[48].computeUnits = report.rankings[0].computeUnits; },
+    report => { report.relevance[0].baselineTop5Relevant = 4; },
+    report => { report.relevance[0].candidateTop5Relevant = 4; },
+    report => { report.relevance[0].candidateTop1Relevant = false; },
+    report => { report.relevance[0].candidateNDCG5 = NaN; },
+    report => { report.relevance[0].candidateNDCG5 = 1.01; },
+    report => { report.rankings[0].top1Changed = true; },
+    report => { report.rankings[0].top5Overlap = 3; },
+    report => { report.rankings[4].orderedTop5Changed = true; },
+    report => { report.rankings[0].candidateScores = [NaN]; },
+    report => { report.rankings[0].candidateOrder = ['unknown']; },
+  ];
+  for (const mutate of mutations) {
+    const report = approvedPhotoReport();
+    mutate(report);
+    assert.throws(() => validateRealPhotoAcceptance(report));
+  }
+});
 
 test('FP16 experiment is isolated from FP32 build46 and unsigned development delivery', () => {
   assert.deepEqual(identity, { bundle: 'app.piankexun.ios', version: '1.0', build: '47' });
@@ -64,20 +138,37 @@ test('exported device IPA identity and SDK must match the approved official buil
 
 test('FP16 delivery must change model identity and meet the actual IPA byte ceiling', () => {
   assert.equal(modelPrecision, 'float16');
-  const manifest = { modelVersion: `siglip2-b16-224-v1-${'a'.repeat(64)}`,
+  const manifest = { modelVersion: photoApproval.modelVersion,
     preprocessing: { computePrecision: 'float16' }, parity: { precision: 'float16', status: 'passed',
-      acceptancePolicy: 'fp16-normalized-experiment-v1' } };
+      acceptancePolicy: fp16AcceptancePolicy } };
   validateModelDelivery(manifest, maxIPABytes);
   for (const bytes of [0, -1, NaN, Infinity, 1.5, maxIPABytes + 1]) {
     assert.throws(() => validateModelDelivery(manifest, bytes));
   }
   for (const override of [{ preprocessing: { computePrecision: 'float32' } },
     { parity: { precision: 'float16', status: 'failed' } },
+    { parity: { precision: 'float16', status: 'passed', acceptancePolicy: 'fp16-normalized-experiment-v1' } },
+    { modelVersion: `siglip2-b16-224-v1-${'a'.repeat(64)}` },
     { modelVersion: 'siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b' }]) {
     assert.throws(() => validateModelDelivery({ ...manifest, ...override }, 700 * 1024 * 1024));
   }
   const workflow = fs.readFileSync(new URL('../.github/workflows/testflight.yml', import.meta.url), 'utf8');
   assert.ok(workflow.includes('export_models.py --download --precision float16'));
+});
+
+test('TestFlight reruns real-photo acceptance with test-only FP32 models before signing', () => {
+  const workflow = fs.readFileSync(new URL('../.github/workflows/testflight.yml', import.meta.url), 'utf8');
+  assert.ok(workflow.includes('export_models.py --download --precision float32 --output build/FP32Models'));
+  assert.ok(workflow.includes('prepare_real_photo_benchmark.py --download'));
+  assert.ok(workflow.includes('xcodegen generate --spec project.real-photo-diagnostic.yml'));
+  assert.ok(workflow.includes('xcresulttool export attachments'));
+  assert.ok(workflow.includes('build/testflight-native-attachments'));
+  assert.ok(workflow.includes('build/testflight-real-photo.json'));
+  assert.ok(workflow.includes('build/RealPhotoBenchmark/manifest.json'));
+  const source = fs.readFileSync(new URL('./testflight.mjs', import.meta.url), 'utf8');
+  assert.ok(source.indexOf("mode === '--upload' ? readRealPhotoAcceptance()") < source.indexOf("run('xcodebuild', archiveArguments"));
+  assert.ok(source.includes("xcodegen', ['generate', '--spec', 'project.testflight.yml'"));
+  assert.ok(!workflow.includes('path: build/RealPhotoBenchmark\n'));
 });
 
 test('profile rejects wrong team, wildcard ID, debug, Ad Hoc, enterprise and expired signing', () => {

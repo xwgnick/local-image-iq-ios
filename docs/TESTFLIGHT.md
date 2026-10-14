@@ -245,9 +245,23 @@ average top-five label precision and nDCG rose slightly, while first-result
 label relevance fell slightly and individual prompts regressed. This small,
 object-focused corpus and annotation-presence proxy cannot establish semantic
 equivalence, statistical significance or performance on a personal library.
-The existing numerical FP16 acceptance policy remains unchanged and its
-earlier native failure remains unresolved; a ranking-based experimental
-acceptance policy would need explicit approval before another build47 attempt.
+The earlier native numerical failure is retained as evidence, not described
+as numerical parity. After reviewing these results, the user explicitly
+approved continuing TestFlight build47 using the real-photo outcomes instead
+of native scalar-error blockers. The new policy is
+`fp16-real-photo-experiment-v2`; the prior policy and its failures above are
+historical, not the current build47 acceptance criteria.
+
+The full signed workflow reruns the same corpus on CPU and all compute units
+alongside all App/UI tests. Before signing, every query must reproduce its
+approved FP16 relevance metrics or improve, without increased top-one/top-five
+ranking drift; baseline metrics and corpus/model identities are pinned.
+Numerical discrepancies remain explicit diagnostic rejections in native JSON
+and logs. Tokenizer, preprocessing, model output validity, app normalization,
+FP32 gates and macOS export integrity checks are not weakened. The actual IPA
+must still be at most 900 MiB. FP32 models and public photos remain test-only;
+only source/license metadata, measurements and safe delivery evidence are
+published. Build47 has not yet been signed or uploaded under this policy.
 
 Synthetic numerical/native tests do not establish real-photo retrieval quality,
 ranking equivalence, phone speed or peak memory. Those need comparison on the

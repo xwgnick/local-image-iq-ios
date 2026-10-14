@@ -242,13 +242,35 @@ model-version hash differs and existing model-version fences prevent reuse
 of FP32 embeddings and derived caches. Tokenization and image preprocessing
 are unchanged.
 
-After complete diagnostics, the user approved the separately named
-`fp16-normalized-experiment-v1` acceptance policy: vector cosine > 0.999 and
-paired text/image cosine-matrix absolute error <= 0.002; raw component errors
-remain recorded but do not gate the normalized-vector FP16 experiment.
+After complete diagnostics, the user initially approved
+`fp16-normalized-experiment-v1`: vector cosine > 0.999 and paired text/image
+cosine-matrix absolute error <= 0.002. Native execution failed that policy.
+After reviewing real-photo run `38606281528`, the user explicitly approved
+`fp16-real-photo-experiment-v2` for experimental TestFlight build47. macOS
+export integrity gates remain cosine > 0.999 and paired error <= 0.002, with
+raw FP16 component error diagnostic. Native FP16 comparisons against exported
+and FP32 reference vectors/scores retain their actual numerical acceptance
+result and `diagnosticOnly:true`, but no longer block on cross-runtime
+numerical differences. Shape, finite/nonzero output, normalized app output,
+exact tokenizer IDs, exact native preprocessing and functional/UI gates remain.
 FP32 retains maxAbs <= 1e-3, cosine > 0.999, and paired maxAbs <= 1e-4.
 Torch reference/wrapper/trace and preprocessing limits are unchanged.
-Native paired scores must also pass on CPU and all compute units. Reports and
-manifests record the policy. A failed acceptance gate must not publish a valid
-manifest or proceed to upload. Passing synthetic parity does not assert
-real-photo retrieval quality or device performance.
+
+Full native validation reruns the pinned 240-photo/48-query corpus with
+test-only FP32 baseline models on CPU and all compute units. Before any
+archive/upload, the delivery script requires a completed, non-skipped native
+report with the exact approved model identities and corpus metadata SHA-256.
+The versioned `scripts/fp16-real-photo-acceptance.json` records all 48 approved
+query outcomes, not a newly invented quality threshold: each query must retain
+its approved FP16 top-five label-hit count, first-result label relevance and
+binary nDCG@5 or improve, without additional first-result/top-five ranking
+drift. FP32 baseline label metrics must reproduce the reference. A `1e-10`
+tolerance applies only to floating-point nDCG arithmetic. Aggregate improvements
+cannot hide a new per-query regression. Failure or missing evidence blocks
+signing/upload, not silently skipping this acceptance.
+
+Reports and manifests record the new policy, and the delivery evidence records
+the approved reference run, current measurements and native report SHA-256.
+The FP32 baseline and public corpus are test-only and never shipped in the App.
+This experiment does not establish semantic equivalence, human-rated quality,
+real-device performance or cleanup grouping quality.

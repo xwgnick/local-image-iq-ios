@@ -49,6 +49,7 @@ jobs:
           node scripts/check_release.mjs --source
           node --test scripts/test_testflight.mjs scripts/test_release.mjs
           python -m unittest discover -s scripts -p test_static.py
+          python -m unittest discover -s scripts -p test_real_photo_benchmark.py
           plutil -lint App/Info.plist
           plutil -lint App/PrivacyInfo.xcprivacy
           swift test --package-path Packages/ImageIQCore
@@ -61,11 +62,13 @@ jobs:
           .model-env/bin/python -m pip install -r scripts/requirements-coreml.txt
           .model-env/bin/python scripts/test_fp16_diagnostic.py
           .model-env/bin/python scripts/export_models.py --download --precision float16
+          .model-env/bin/python scripts/export_models.py --download --precision float32 --output build/FP32Models
+          python scripts/prepare_real_photo_benchmark.py --download
           node scripts/check_project.mjs --models
       - name: Generate project and select simulator
         run: |
           command -v xcodegen >/dev/null || brew install xcodegen
-          xcodegen generate --spec project.models.yml
+          xcodegen generate --spec project.real-photo-diagnostic.yml
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
           xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
           node scripts/check_release.mjs --simulator "$RUNNER_TEMP/available-devices.json"
@@ -79,6 +82,10 @@ jobs:
             -derivedDataPath build/DerivedData -resultBundlePath build/TestResults.xcresult \
             -clonedSourcePackagesDirPath build/SourcePackages -disableAutomaticPackageResolution \
             CODE_SIGNING_ALLOWED=NO IMAGEIQ_REQUIRE_MODELS=1 IMAGEIQ_TEST_ALL_COMPUTE_UNITS=1
+      - name: Export native real-photo evidence for mandatory pre-upload acceptance
+        run: |
+          xcrun xcresulttool export attachments --path build/TestResults.xcresult \
+            --output-path build/testflight-native-attachments
       - name: Sign archive, verify export, upload once and confirm Apple processing
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -104,6 +111,15 @@ jobs:
         with:
           name: testflight-delivery-${{ github.run_id }}
           path: build/testflight-delivery.json
+          if-no-files-found: warn
+      - name: Retain public real-photo measurements and source/license metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testflight-real-photo-${{ github.run_id }}
+          path: |
+            build/testflight-real-photo.json
+            build/RealPhotoBenchmark/manifest.json
           if-no-files-found: warn
       - name: Explain distribution boundary
         if: always()
