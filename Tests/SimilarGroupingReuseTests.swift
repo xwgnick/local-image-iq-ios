@@ -455,7 +455,7 @@ final class SimilarGroupingReuseTests: XCTestCase {
                 // 0.90 must not find a resident payload from the rejected save.
                 try fixture.retarget(toAlternate: false)
                 let outcome = try await service.restore(threshold: 0.90)
-                if existingCache { assertStale(outcome) } else { assertMissing(outcome) }
+                assertResumable(outcome)
                 XCTAssertEqual(calls.count, 2)
                 XCTAssertEqual(saves.count, 1)
                 if let previous { XCTAssertEqual(try Data(contentsOf: c.cacheURL), previous) }

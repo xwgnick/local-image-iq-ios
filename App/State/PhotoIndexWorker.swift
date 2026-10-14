@@ -1090,11 +1090,11 @@ actor PhotoIndexWorker: PhotoWorkServicing, PhotoSyncServicing {
                                 try validateCommit(revision)
                             }
                         }
-                        if cloudOnly, let requestID {
-                            try await textStore.saveAttempt(PhotoTextAttempt(requestID: requestID, revision: revision,
-                                networkAllowed: networkAllowed, outcome: !networkAllowed && cloudOnly ? .cloudSkipped : .failed)) {
-                                try validateCommit(revision)
-                            }
+                    }
+                    if cloudOnly, let requestID {
+                        try await textStore.saveAttempt(PhotoTextAttempt(requestID: requestID, revision: revision,
+                            networkAllowed: networkAllowed, outcome: networkAllowed ? .failed : .cloudSkipped)) {
+                            try validateCommit(revision)
                         }
                     }
                     state.completed += 1
