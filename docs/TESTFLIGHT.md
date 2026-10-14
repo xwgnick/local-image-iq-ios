@@ -1,11 +1,12 @@
-# TestFlight: first official signed build
+# TestFlight: signed builds and FP16 experiment
 
-Approved identity: `app.piankexun.ios`, marketing version `1.0`, build `46`.
+Approved identity: `app.piankexun.ios`, marketing version `1.0`.
+Delivered builds: FP32 baseline `46` and FP16 experiment `47`.
 The existing unsigned `0.16.5/45` development delivery is unchanged.
 
 ## FP16 experiment: build 47
 
-The next manual workflow targets `app.piankexun.ios`, `1.0 (47)`, with the
+The completed manual workflow delivered `app.piankexun.ios`, `1.0 (47)`, with the
 same pinned source model converted using Core ML `FLOAT16`. Build 46 remains
 the delivered FP32 baseline, not an upload target. FP32 remains the default
 export for all other workflows; only TestFlight explicitly requests
@@ -18,23 +19,70 @@ Installing build 47 updates the same app; it is not a side-by-side app.
 Switching back to build 46 also requires embeddings for its model version.
 Do not uninstall the app or clear its data just to change builds.
 
-FP16 keeps the Float32 image/output and Int32 token interfaces. After the full
-diagnostic below, the user explicitly approved the separate
-`fp16-normalized-experiment-v1` policy: vector cosine strictly greater than
-`0.999`, paired cosine-matrix absolute error at most `0.002`, and raw component
-error recorded as a diagnostic rather than a gate. Production search normalizes
-the vectors. FP32 retains its original raw maximum error `1e-3` and paired
-matrix error `1e-4`; Torch wrapper/trace and image preprocessing gates are
-unchanged for both precisions. Reports and manifests name the policy.
+FP16 keeps the Float32 image/output and Int32 token interfaces. The delivered
+build uses the explicitly approved `fp16-real-photo-experiment-v2` policy,
+described below and in [the shared contract](IMPLEMENTATION_CONTRACT.md).
+The earlier `fp16-normalized-experiment-v1` scalar policy and its failures are
+historical. Native cross-platform numerical differences remain diagnostics,
+not numerical-parity claims. Production search normalizes the vectors.
+FP32, macOS export integrity, Torch wrapper/trace, exact tokenizer and native
+preprocessing/output-validity gates remain unchanged.
 
-FP16 must also pass full native model/App/UI gates, including a new paired
-score comparison against FP32 references on both CPU and all compute units.
+FP16 must pass full native model/App/UI gates and reproduce or improve every
+approved real-photo query outcome on both CPU and all compute units.
 Failure stops delivery, not a silent FP32 fallback or automatic threshold
 adjustment. The signed exported IPA must actually be at most
 900 MiB before any Apple package validation/upload. The delivery report records
 precision, model version, bytes, SHA-256 and the build46 byte baseline.
 
-Status: run `38589052732`, source
+### Confirmed build47 delivery
+
+Run [`38625232929`](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38625232929),
+source `18dcc907a24d969cbcbd4e66186721a2eee6d317`, job `116062586593`,
+completed signing, archive/export verification, Apple validation, one upload
+and Apple processing with state **`VALID`**.
+
+- Core: 79 tests, zero failures.
+- Targeted OCR/location switch persistence: 2 tests, zero failures, no skips.
+- Full App suite: 2151 tests, zero failures, 1 existing skip.
+- Full UI suite: 23 tests, zero failures, 1 existing skip.
+- All 48 real-photo queries reproduced the approved per-query acceptance on
+  each compute configuration; no additional query regression was accepted.
+- Signed IPA: **723,337,143 bytes** (723.34 MB / 689.83 MiB), below 900 MiB.
+  Build46 was 1,422,924,391 bytes: the signed IPA is **49.17% smaller**.
+  These are exported IPA bytes, not Apple's thinned download or installed size.
+- IPA SHA-256:
+  `c4f5552648e605eff37bd381c5fccc25c384b51b848a52b88b0c782bf56e0aef`.
+- Apple app ID: `6822662787`; build ID:
+  `bc72e6f1-c178-4777-8394-984a713568ed`.
+
+Delivery artifact `11930101239` was downloaded and ZIP SHA-256 verified as
+`4007247a22a401c38bed3d87d54f2216fc4d0065abeabfed61ccfa43e64cdc27`.
+Current real-photo evidence artifact `11929851992` was independently downloaded
+and ZIP SHA-256 verified as
+`c3f3d77d7a33e6d529722ffcdf17ecd1dd2ee1675b20bb8ed2a875de09e0f7a3`.
+Its native JSON SHA-256,
+`e5885e05b7a1da07d453c1cb63b88a6d8a541ac6254f2d884c531b44ceaa56b8`,
+matches the delivery report. The downloaded current report passed the same
+per-query validator locally, and corpus metadata SHA-256 matched the pinned
+approval. Artifacts contain public metadata and measurements, not photos,
+model bundles, signing material or the IPA.
+
+Upload/Apple processing does not automatically add build47 to an internal
+test group or invite testers. If TestFlight still shows only build46, select
+build47 in the existing internal group's Builds page and resolve any
+build-specific export-compliance prompt. No App Review, external beta review
+or public App Store release was submitted. Upgrade without uninstalling;
+the changed model version requires regenerating photo embeddings. Real-device
+search quality, indexing speed, memory, heat and cleanup grouping still need
+the user's trial; successful delivery is not proof of semantic equivalence.
+
+### Historical validation attempts
+
+The following failures/pending statements describe their individual earlier
+attempts, not the current delivery status above.
+
+Initial run `38589052732`, source
 `ad0a7cdc1107808f15506941013be056631199a2`, stopped at the first FP16
 conversion numerical gate. The `image/solid-rgb/traceVsCoreML` comparison
 measured maximum raw-component error `0.03011798858642578` versus the `0.001`
@@ -261,7 +309,8 @@ and logs. Tokenizer, preprocessing, model output validity, app normalization,
 FP32 gates and macOS export integrity checks are not weakened. The actual IPA
 must still be at most 900 MiB. FP32 models and public photos remain test-only;
 only source/license metadata, measurements and safe delivery evidence are
-published. Build47 has not yet been signed or uploaded under this policy.
+published. At that policy change, build47 had not yet been signed or uploaded;
+the confirmed delivery is recorded above.
 
 The first full v2 attempt, run `38611880124` from
 `3e70e89d3828240005eaf2a86830f12066432cc1`, passed source tests, Core 79 and
@@ -347,10 +396,11 @@ Do not uninstall the existing sideloaded app. A different Bundle ID/signing team
 may install separately; preservation of that app's local index is not guaranteed
 by installing the new TestFlight identity.
 
-Current status: signed `1.0 (46)` uploaded and Apple processing confirmed
-`VALID` by run `38570734400`. Internal tester access and any export-compliance
-questions still need to be completed in App Store Connect. No App Review or
-public App Store release was requested.
+Current status: signed FP32 `1.0 (46)` and FP16 experiment `1.0 (47)` uploaded,
+with Apple processing confirmed `VALID` by runs `38570734400` and
+`38625232929`, respectively. Test-group availability and build-specific
+export-compliance responses are managed separately in App Store Connect.
+No App Review or public App Store release was requested.
 
 ## Validation history
 
