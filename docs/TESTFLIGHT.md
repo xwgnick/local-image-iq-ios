@@ -64,4 +64,10 @@ Run `38552330364` passed real macOS signing preflight, Core 79, and App
 1 existing skip and 1 failure: after restart the location switch's coordinate
 tap did not turn it off. No archive/upload was attempted. The UI test now
 targets the sole nested native switch with an actual thumb drag; desired-value
-and ON/OFF restart persistence assertions remain unchanged. Full rerun pending.
+and ON/OFF restart persistence assertions remain unchanged.
+
+Targeted run `38560413931`, source
+`ce94543379bf3569b7891de42aa1686e7f28f22c`, executed
+`testLocationEnhancementIntroductionSettingsAndRestartPersistence` on the iOS
+simulator: 1 test passed, 0 failures, no skip. The full signed-delivery rerun
+remains pending; this targeted result alone does not claim an Apple upload.
