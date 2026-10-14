@@ -109,6 +109,27 @@ class StaticTests(unittest.TestCase):
         self.assertEqual(contract.canonical_json({"a": 1, "b": 2}),
                          contract.canonical_json({"b": 2, "a": 1}))
 
+    def test_fp16_is_explicit_versioned_and_preserves_fp32_interfaces_and_gates(self):
+        baseline = contract.base_manifest()
+        candidate = contract.base_manifest("float16")
+        self.assertEqual(baseline, contract.base_manifest("float32"))
+        self.assertEqual(baseline["modelVersion"],
+                         "siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b")
+        self.assertEqual(baseline["preprocessing"]["computePrecision"], "float32")
+        self.assertEqual(candidate["preprocessing"]["computePrecision"], "float16")
+        self.assertNotEqual(baseline["modelVersion"], candidate["modelVersion"])
+        self.assertEqual(baseline["features"], candidate["features"])
+        self.assertEqual(baseline["preprocessing"]["text"], candidate["preprocessing"]["text"])
+        self.assertEqual(baseline["preprocessing"]["image"], candidate["preprocessing"]["image"])
+        self.assertEqual(export_models.arguments([]).precision, "float32")
+        args = export_models.arguments(["--precision", "float16"])
+        self.assertEqual(args.precision, "float16")
+        self.assertEqual(args.conversion_max_abs, 1e-3)
+        self.assertEqual(args.similarity_max_abs, 1e-4)
+        self.assertEqual(args.min_cosine, 0.999)
+        with self.assertRaises(ValueError):
+            contract.model_version("bfloat16")
+
     def test_query_fixture_coverage_and_unicode(self):
         cases = {case["id"]: case["text"] for case in contract.query_cases()}
         self.assertEqual(len(cases), len(contract.query_cases()))

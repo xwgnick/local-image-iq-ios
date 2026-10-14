@@ -3,9 +3,37 @@
 Approved identity: `app.piankexun.ios`, marketing version `1.0`, build `46`.
 The existing unsigned `0.16.5/45` development delivery is unchanged.
 
+## FP16 experiment: build 47
+
+The next manual workflow targets `app.piankexun.ios`, `1.0 (47)`, with the
+same pinned source model converted using Core ML `FLOAT16`. Build 46 remains
+the delivered FP32 baseline, not an upload target. FP32 remains the default
+export for all other workflows; only TestFlight explicitly requests
+`--precision float16`.
+
+Precision is part of the semantic model-version hash. FP16 cannot reuse FP32
+image/place embeddings or search/grouping caches: existing version checks
+exclude old embeddings, and indexing must regenerate them for this model.
+Installing build 47 updates the same app; it is not a side-by-side app.
+Switching back to build 46 also requires embeddings for its model version.
+Do not uninstall the app or clear its data just to change builds.
+
+FP16 keeps the Float32 image/output and Int32 token interfaces. It must pass
+the existing numerical gates unchanged (raw maximum error `1e-3`, cosine
+strictly greater than `0.999`, paired cosine-matrix error `1e-4`) and the full
+native model/App/UI gates. Failure stops delivery, not a silent FP32 fallback
+or a relaxed threshold. The signed exported IPA must actually be at most
+900 MiB before any Apple package validation/upload. The delivery report records
+precision, model version, bytes, SHA-256 and the build46 byte baseline.
+
+Status: implementation pending cloud validation; build 47 is not yet delivered.
+Synthetic numerical/native tests do not establish real-photo retrieval quality,
+ranking equivalence, phone speed or peak memory. Those need comparison on the
+tester's device after a successful experimental delivery.
+
 ## Manual workflow
 
-Run **TestFlight — signed 1.0 build46** from `main` in
+Run **TestFlight — signed FP16 1.0 build47** from `main` in
 `xwgnick/local-image-iq-ios` only. The workflow performs API/app preflight,
 pinned resource preparation, full native App/UI tests with real models, a
 manually signed arm64 Release archive and App Store export, exported identity,
@@ -43,7 +71,7 @@ API authentication or original stored P12. All intermediate files are cleaned.
 The final report distinguishes an attempted upload, an accepted upload and
 Apple `VALID` processing. On a failed/ambiguous upload or processing timeout,
 inspect App Store Connect and the existing run before retrying. Never blindly
-re-upload build 46. Model conversion, native validation and actual Apple upload
+re-upload an attempted build. Model conversion, native validation and actual Apple upload
 must finish before declaring this build delivered.
 
 No tester invitations, external beta review, App Review submission, price

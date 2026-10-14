@@ -8,7 +8,9 @@ import { pathToFileURL } from 'node:url';
 import { validateAppResources, validateDeviceSDK } from './check_release.mjs';
 import { validatePlaces } from './check_places.mjs';
 
-export const identity = Object.freeze({ bundle: 'app.piankexun.ios', version: '1.0', build: '46' });
+export const identity = Object.freeze({ bundle: 'app.piankexun.ios', version: '1.0', build: '47' });
+export const modelPrecision = 'float16';
+export const maxIPABytes = 900 * 1024 * 1024;
 const secretNames = ['ASC_KEY_ID', 'ASC_ISSUER_ID', 'ASC_PRIVATE_KEY', 'APPLE_TEAM_ID',
   'IOS_DISTRIBUTION_P12_BASE64', 'IOS_DISTRIBUTION_P12_PASSWORD', 'IOS_PROVISION_PROFILE_BASE64'];
 
@@ -47,6 +49,17 @@ export function validateInfo(info) {
   assert.equal(info.DTPlatformName, 'iphoneos');
   assert.deepEqual(info.CFBundleSupportedPlatforms, ['iPhoneOS']);
   validateDeviceSDK(info);
+}
+
+export function validateModelDelivery(manifest, bytes) {
+  assert.equal(manifest.preprocessing?.computePrecision, modelPrecision, 'Expected experimental FP16 models');
+  assert.equal(manifest.parity?.precision, modelPrecision);
+  assert.equal(manifest.parity?.status, 'passed');
+  assert.match(manifest.modelVersion ?? '', /^siglip2-b16-224-v1-[a-f0-9]{64}$/);
+  assert.notEqual(manifest.modelVersion, 'siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b',
+    'FP16 must not reuse the FP32 index identity');
+  assert.ok(Number.isSafeInteger(bytes) && bytes > 0 && bytes <= maxIPABytes,
+    'Experimental FP16 IPA must be at most 900 MiB before upload');
 }
 
 export function exportOptions(team, uuid) {
@@ -149,8 +162,8 @@ async function main(mode) {
   const appID = await findApp(secrets);
   const existing = await findBuild(appID, secrets);
   if (mode === '--preflight') {
-    assert.equal(existing, null, 'Build 1.0/46 already exists: inspect it instead of uploading again');
-    console.log('PASS: required Secrets present, API authenticated, approved app record found, build 1.0/46 unused.');
+    assert.equal(existing, null, `Build ${identity.version}/${identity.build} already exists: inspect it instead of uploading again`);
+    console.log(`PASS: required Secrets present, API authenticated, approved app record found, build ${identity.version}/${identity.build} unused.`);
     return;
   }
   assert.ok(['--signing-check', '--upload'].includes(mode), 'Expected --preflight, --signing-check or --upload');
@@ -245,6 +258,11 @@ async function main(mode) {
     assert.equal(run('xcrun', ['lipo', '-archs', path.join(app, 'LocalImageIQ')]), 'arm64');
     validateAppResources(app);
     validatePlaces(app, { appBundle: true });
+    const manifestPaths = [app, path.join(app, 'Models'), path.join(app, 'Resources', 'Models')]
+      .map(base => path.join(base, 'model-manifest.json')).filter(fs.existsSync);
+    assert.equal(manifestPaths.length, 1, 'Expected exactly one bundled model manifest');
+    const modelManifest = JSON.parse(fs.readFileSync(manifestPaths[0], 'utf8'));
+    validateModelDelivery(modelManifest, fs.statSync(ipa).size);
     assert.ok(!fs.existsSync(path.join(app, 'PlugIns')), 'Test bundles must not ship');
     for (const model of ['ImageEncoder.mlmodelc', 'TextEncoder.mlmodelc']) {
       assert.ok([app, path.join(app, 'Models'), path.join(app, 'Resources', 'Models')]
@@ -278,7 +296,9 @@ async function main(mode) {
     }
     const hash = createHash('sha256');
     for await (const chunk of createReadStream(ipa)) hash.update(chunk);
-    const report = { ...identity, sourceSHA: process.env.GITHUB_SHA, appID,
+    const report = { ...identity, modelPrecision, modelVersion: modelManifest.modelVersion,
+      baselineBuild: '46', baselineIPABytes: 1422924391,
+      sourceSHA: process.env.GITHUB_SHA, appID,
       signed: true, nativeValidation: true, publicStoreSubmission: false,
       bytes: fs.statSync(ipa).size, sha256: hash.digest('hex'),
       uploadAttempted: false, uploadAccepted: false, processingState: 'NOT_UPLOADED' };
@@ -299,7 +319,7 @@ async function main(mode) {
         report.processingState = build.attributes.processingState;
         save();
         if (report.processingState === 'VALID') {
-          console.log('PASS: App Store Connect confirms build 1.0/46 processingState=VALID. No App Review or public release requested.');
+          console.log(`PASS: App Store Connect confirms build ${identity.version}/${identity.build} processingState=VALID. No App Review or public release requested.`);
           return;
         }
         assert.ok(!['FAILED', 'INVALID'].includes(report.processingState), 'Apple processing rejected build; see App Store Connect for details');

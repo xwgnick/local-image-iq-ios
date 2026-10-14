@@ -52,10 +52,12 @@ function validateManifest(value) {
     text: { input_ids: { dtype: 'int32', shape: [1, 64] } },
     output: { output_embedding: { dtype: 'float32', shape: [1, 768] } },
   });
-  assert.deepEqual(value.preprocessing, expectedPreprocessing);
+  const precision = value.preprocessing?.computePrecision;
+  assert.ok(['float32', 'float16'].includes(precision), 'Unsupported model precision');
+  assert.deepEqual(value.preprocessing, { ...expectedPreprocessing, computePrecision: precision });
   assert.equal(value.parity?.status, 'passed');
   assert.equal(value.parity?.report, 'parity-report.json');
-  assert.equal(value.parity?.precision, 'float32');
+  assert.equal(value.parity?.precision, precision);
   assert.equal(value.parity?.computeUnits, 'CPU_ONLY');
   assert.equal(value.provenance, 'provenance.json');
   assert.equal(value.redistributionApproved, false);
@@ -117,6 +119,7 @@ async function checkModels(root, notes) {
   const provenance = json(path.join(models, 'provenance.json'));
   assert.equal(provenance.schemaVersion, 2);
   assert.equal(provenance.modelVersion, manifest.modelVersion);
+  assert.equal(provenance.precision, manifest.preprocessing.computePrecision);
   assert.deepEqual(Object.keys(provenance.sources), ['shared']);
   const source = provenance.sources.shared;
   assert.equal(source.id, expectedModels.imageModel.id);
@@ -206,7 +209,7 @@ async function checkModels(root, notes) {
   assert.equal(report.schemaVersion, 2);
   assert.equal(report.modelVersion, manifest.modelVersion);
   assert.equal(report.passed, true);
-  assert.equal(report.precision, 'float32');
+  assert.equal(report.precision, manifest.preprocessing.computePrecision);
   assert.equal(report.computeUnits, 'CPU_ONLY');
   assert.ok(Number.isFinite(report.thresholds.minCosineExclusive) &&
     report.thresholds.minCosineExclusive >= 0.999 && report.thresholds.minCosineExclusive < 1);

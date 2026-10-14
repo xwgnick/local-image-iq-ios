@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit macOS-only FP32 export and measured parity; no import-time execution.
+"""Explicit macOS-only FP32/FP16 export and measured parity; no import-time execution.
 
 Default: one cached pinned public snapshot only. --download explicitly permits
 fetching that revision. All reference inputs are generated, never user photos or GPS.
@@ -50,6 +50,8 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--download", action="store_true",
                         help="Explicitly fetch only the pinned public shared checkpoint; no token")
     parser.add_argument("--output", type=Path, default=ROOT / "Resources" / "Models")
+    parser.add_argument("--precision", choices=("float32", "float16"), default="float32",
+                        help="FP16 is experimental and must pass the same numerical gates as FP32")
     parser.add_argument("--min-cosine", type=float, default=0.999,
                         help="Each raw-vector comparison must exceed this cosine (FP32 floor .999)")
     parser.add_argument("--conversion-max-abs", type=float, default=1e-3,
@@ -107,7 +109,8 @@ def snapshots(download: bool) -> Path:
     return path
 
 
-def source_provenance(stage: Path, path: Path, configs: dict, environment: dict) -> dict:
+def source_provenance(stage: Path, path: Path, configs: dict, environment: dict,
+                      precision: str = "float32") -> dict:
     selected = sorted({file for pattern in SNAPSHOT_FILES for file in path.glob(pattern) if file.is_file()})
     # Exactly one streaming source hash per selected file, including the shared weights.
     hashes = {file.relative_to(path).as_posix(): sha256_file(file) for file in selected}
@@ -134,12 +137,12 @@ def source_provenance(stage: Path, path: Path, configs: dict, environment: dict)
                           "licenseStatus": "manual review required; missing/unknown terms are not permission"}}
     script_files = sorted(Path(__file__).parent.glob("*.py")) + [Path(__file__).parent / "requirements-coreml.txt"]
     result = {
-        "schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(),
+        "schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(precision),
         "createdUTC": datetime.now(timezone.utc).isoformat(), "environment": environment,
         "sources": sources, "validatedConfigs": configs,
         "implementationContractSHA256": sha256_file(ROOT / "docs" / "IMPLEMENTATION_CONTRACT.md"),
         "exportSourceSHA256": {p.name: sha256_file(p) for p in script_files},
-        "precision": "float32", "computeUnits": "CPU_ONLY", "attentionImplementation": "eager",
+        "precision": precision, "computeUnits": "CPU_ONLY", "attentionImplementation": "eager",
         "training": False, "inputs": "procedural RGB patterns and fixed synthetic queries only",
         "redistributionApproved": False,
     }
@@ -290,22 +293,24 @@ def validate_coreml_spec(model, role: str) -> None:
                     "Only fixed-batch fixed-shape tensors are allowed")
 
 
-def convert_and_reload(traced, role: str, stage: Path):
+def convert_and_reload(traced, role: str, stage: Path, precision: str = "float32"):
     import coremltools as ct
     import numpy as np
 
+    require(precision in ("float32", "float16"), "Unsupported compute precision")
     inputs = [ct.TensorType(name=name, shape=spec["shape"],
                             dtype=np.float32 if spec["dtype"] == "float32" else np.int32)
               for name, spec in FEATURES[role].items()]
     model = ct.convert(traced, source="pytorch", convert_to="mlprogram", inputs=inputs,
                        outputs=[ct.TensorType(name="output_embedding", dtype=np.float32)],
-                       compute_precision=ct.precision.FLOAT32, compute_units=ct.ComputeUnit.CPU_ONLY,
+                       compute_precision=(ct.precision.FLOAT16 if precision == "float16" else ct.precision.FLOAT32),
+                       compute_units=ct.ComputeUnit.CPU_ONLY,
                        minimum_deployment_target=ct.target.iOS17)
     model.short_description = f"Pinned SigLIP 2 {role} encoder; raw 768D, no L2 normalization or logits"
-    model.user_defined_metadata["modelVersion"] = model_version()
+    model.user_defined_metadata["modelVersion"] = model_version(precision)
     model.user_defined_metadata["sourceModelID"] = (IMAGE_MODEL if role == "image" else TEXT_MODEL)["id"]
     model.user_defined_metadata["sourceRevision"] = (IMAGE_MODEL if role == "image" else TEXT_MODEL)["revision"]
-    model.user_defined_metadata["precision"] = "float32"
+    model.user_defined_metadata["precision"] = precision
     model.user_defined_metadata["licenseStatus"] = "manual review required; see provenance.json"
     validate_coreml_spec(model, role)
     path = stage / ("ImageEncoder.mlpackage" if role == "image" else "TextEncoder.mlpackage")
@@ -342,7 +347,7 @@ def cosine_matrix(text_vectors, image_vectors):
 def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> None:
     snapshot = snapshots(args.download)
     configs = validate_snapshot_configs(snapshot)
-    provenance = source_provenance(stage, snapshot, configs, environment)
+    provenance = source_provenance(stage, snapshot, configs, environment, args.precision)
 
     import numpy as np
     import torch
@@ -358,9 +363,9 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
     image_trace = trace_wrapper(image_wrapper, image_inputs[0], image_inputs[1])
     truncation_index = next(i for i, case in enumerate(queries) if case["metadata"]["id"] == "long-truncation")
     text_trace = trace_wrapper(text_wrapper, text_inputs[0], text_inputs[truncation_index])
-    converted_image = convert_and_reload(image_trace, "image", stage)
-    converted_text = convert_and_reload(text_trace, "text", stage)
-    report = {"schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(), "precision": "float32",
+    converted_image = convert_and_reload(image_trace, "image", stage, args.precision)
+    converted_text = convert_and_reload(text_trace, "text", stage, args.precision)
+    report = {"schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(args.precision), "precision": args.precision,
               "computeUnits": "CPU_ONLY", "thresholds": {
                   "minCosineExclusive": args.min_cosine, "conversionMaxAbsInclusive": args.conversion_max_abs,
                   "torchMaxAbsInclusive": args.torch_max_abs, "similarityMaxAbsInclusive": args.similarity_max_abs,
@@ -409,7 +414,7 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
     }
     report["passed"] = True
     write_json(stage / "parity-report.json", report)
-    shared = {"schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(),
+    shared = {"schemaVersion": SCHEMA_VERSION, "modelVersion": model_version(args.precision),
               "embeddingDimension": DIMENSION, "embeddingsAreRaw": True}
     source_hashes = provenance["sources"]["shared"]["sha256"]
     write_json(stage / "tokenizer-parity.json", {
@@ -433,9 +438,9 @@ def export_pair(stage: Path, args: argparse.Namespace, environment: dict) -> Non
     for name in TOKENIZER_FILES:
         require(artifact_hashes[name] == source_hashes[name],
                 f"Bundled tokenizer bytes differ from the pinned source: {name}")
-    manifest = base_manifest()
+    manifest = base_manifest(args.precision)
     manifest.update({
-        "parity": {"status": "passed", "report": "parity-report.json", "precision": "float32",
+        "parity": {"status": "passed", "report": "parity-report.json", "precision": args.precision,
                    "computeUnits": "CPU_ONLY", "nativeTokenizer": "not-run",
                    "nativePreprocessing": "not-run", "nativeRuntime": "not-run"},
         "provenance": "provenance.json", "redistributionApproved": False,
@@ -479,7 +484,7 @@ def main(argv: list[str] | None = None) -> None:
         print("Export did not complete. No valid manifest was published; any old packages are stale.",
               file=sys.stderr)
         raise
-    print(f"Published {model_version()} to {output}; native Swift gates and license review remain pending.")
+    print(f"Published {model_version(args.precision)} to {output}; native Swift gates and license review remain pending.")
 
 
 if __name__ == "__main__":

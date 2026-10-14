@@ -232,3 +232,16 @@ desktop database or video assets. CI is workflow_dispatch only. Model-free CI
 checks compilation/tests, **not** semantic-search readiness. Model-enabled CI
 must compare exported Core ML predictions with the pinned PyTorch pair, test
 Swift tokenizer/preprocessing fixtures, and report the distinction.
+# Optional FP16 experiment
+
+The default export remains FP32. An explicit `--precision float16` export
+converts the same pinned source checkpoint with Core ML `FLOAT16`, retaining
+the existing Float32 image/output and Int32 token interfaces. Only
+`preprocessing.computePrecision` changes in the semantic identity, so the
+model-version hash differs and existing model-version fences prevent reuse
+of FP32 embeddings and derived caches. Tokenization and image preprocessing
+are unchanged.
+
+FP16 currently uses the same numerical acceptance limits as FP32; a failed
+conversion must not publish a valid manifest or proceed to upload. Passing
+synthetic parity does not assert real-photo retrieval quality or performance.

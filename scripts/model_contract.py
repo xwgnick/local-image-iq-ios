@@ -95,17 +95,22 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def model_version() -> str:
+def preprocessing(precision: str = "float32") -> dict:
+    require(precision in ("float32", "float16"), "Unsupported compute precision")
+    return {**PREPROCESS, "computePrecision": precision}
+
+
+def model_version(precision: str = "float32") -> str:
     """Semantic identity only: never a timestamp, file path, or report checksum."""
     identity = {"imageModel": IMAGE_MODEL, "textModel": TEXT_MODEL,
-                "features": FEATURES, "preprocessing": PREPROCESS}
+                "features": FEATURES, "preprocessing": preprocessing(precision)}
     return "siglip2-b16-224-v1-" + hashlib.sha256(canonical_json(identity)).hexdigest()
 
 
-def base_manifest() -> dict:
+def base_manifest(precision: str = "float32") -> dict:
     return {
         "schemaVersion": SCHEMA_VERSION,
-        "modelVersion": model_version(),
+        "modelVersion": model_version(precision),
         "dimension": DIMENSION,
         "sequenceLength": SEQUENCE_LENGTH,
         "imageSize": IMAGE_SIZE,
@@ -117,7 +122,7 @@ def base_manifest() -> dict:
         "tokenizerFile": TOKENIZER_FILES[0],
         "tokenizerConfigFile": TOKENIZER_FILES[1],
         "features": FEATURES,
-        "preprocessing": PREPROCESS,
+        "preprocessing": preprocessing(precision),
     }
 
 

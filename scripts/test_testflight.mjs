@@ -3,10 +3,11 @@ import { generateKeyPairSync, verify, X509Certificate } from 'node:crypto';
 import { rootCertificates } from 'node:tls';
 import fs from 'node:fs';
 import test from 'node:test';
-import { archiveArguments, decodeSecret, exportOptions, identity, makeJWT, validateInfo, validateProfile } from './testflight.mjs';
+import { archiveArguments, decodeSecret, exportOptions, identity, makeJWT, maxIPABytes, modelPrecision,
+  validateInfo, validateModelDelivery, validateProfile } from './testflight.mjs';
 
-test('first official build identity is isolated from unsigned development delivery', () => {
-  assert.deepEqual(identity, { bundle: 'app.piankexun.ios', version: '1.0', build: '46' });
+test('FP16 experiment is isolated from FP32 build46 and unsigned development delivery', () => {
+  assert.deepEqual(identity, { bundle: 'app.piankexun.ios', version: '1.0', build: '47' });
   const project = fs.readFileSync(new URL('../project.yml', import.meta.url), 'utf8');
   assert.ok(project.includes('PRODUCT_BUNDLE_IDENTIFIER: com.example.localimageiq'));
   assert.ok(project.includes('MARKETING_VERSION: "0.16.5"'));
@@ -52,13 +53,30 @@ test('archive signing and official identity are scoped to the application, not S
 
 test('exported device IPA identity and SDK must match the approved official build', () => {
   const info = { CFBundleIdentifier: identity.bundle, CFBundleShortVersionString: '1.0',
-    CFBundleVersion: '46', DTPlatformName: 'iphoneos', CFBundleSupportedPlatforms: ['iPhoneOS'],
+    CFBundleVersion: '47', DTPlatformName: 'iphoneos', CFBundleSupportedPlatforms: ['iPhoneOS'],
     DTSDKName: 'iphoneos26.2', DTXcode: '2630', MinimumOSVersion: '17.0' };
   validateInfo(info);
-  for (const override of [{ CFBundleIdentifier: 'com.example.localimageiq' }, { CFBundleVersion: '45' },
+  for (const override of [{ CFBundleIdentifier: 'com.example.localimageiq' }, { CFBundleVersion: '46' },
     { CFBundleShortVersionString: '0.16.5' }, { DTPlatformName: 'iphonesimulator' }, { DTSDKName: 'iphoneos18.5' }]) {
     assert.throws(() => validateInfo({ ...info, ...override }));
   }
+});
+
+test('FP16 delivery must change model identity and meet the actual IPA byte ceiling', () => {
+  assert.equal(modelPrecision, 'float16');
+  const manifest = { modelVersion: `siglip2-b16-224-v1-${'a'.repeat(64)}`,
+    preprocessing: { computePrecision: 'float16' }, parity: { precision: 'float16', status: 'passed' } };
+  validateModelDelivery(manifest, maxIPABytes);
+  for (const bytes of [0, -1, NaN, Infinity, 1.5, maxIPABytes + 1]) {
+    assert.throws(() => validateModelDelivery(manifest, bytes));
+  }
+  for (const override of [{ preprocessing: { computePrecision: 'float32' } },
+    { parity: { precision: 'float16', status: 'failed' } },
+    { modelVersion: 'siglip2-b16-224-v1-3c94a2fa253442aa6c19ce6d0cf97a5ecbeffaa78dbf04d973022171afa8e45b' }]) {
+    assert.throws(() => validateModelDelivery({ ...manifest, ...override }, 700 * 1024 * 1024));
+  }
+  const workflow = fs.readFileSync(new URL('../.github/workflows/testflight.yml', import.meta.url), 'utf8');
+  assert.ok(workflow.includes('export_models.py --download --precision float16'));
 });
 
 test('profile rejects wrong team, wildcard ID, debug, Ad Hoc, enterprise and expired signing', () => {
