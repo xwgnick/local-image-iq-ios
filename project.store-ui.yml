@@ -1,0 +1,10 @@
+include:
+  - project.yml
+
+targets:
+  LocalImageIQTests:
+    sources:
+      - path: scripts/store-screenshots/CurrentCampaignCaptureTests.swift
+      - path: build/store-source-photos
+        type: folder
+        buildPhase: resources

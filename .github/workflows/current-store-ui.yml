@@ -1,0 +1,70 @@
+name: Capture current native UI for marketing compositions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: github.event.repository.private == false && github.repository == 'xwgnick/local-image-iq-ios'
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      IMAGEIQ_REQUIRE_MODELS: '0'
+      IMAGEIQ_TEST_ALL_COMPUTE_UNITS: '0'
+      IMAGEIQ_DEV_TESTS: LocalImageIQTests/CurrentCampaignCaptureTests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: arm64
+      - name: Prepare only public resources and native tools
+        run: |
+          node scripts/check_release.mjs --toolchain
+          node scripts/store-screenshots/prepare_photos.mjs
+          python -m pip install shapely==2.1.2
+          python scripts/build_places.py --download
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate --spec project.store-ui.yml
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
+          node scripts/check_release.mjs --simulator "$RUNNER_TEMP/available-devices.json"
+          xcodebuild -resolvePackageDependencies -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
+            -clonedSourcePackagesDirPath build/SourcePackages
+          node scripts/prepare_legal_notices.mjs build/SourcePackages/checkouts --check
+      - name: Render current production views without models or Photos permission
+        run: node scripts/native_dev.mjs
+      - name: Export native images and record source identity
+        run: |
+          xcrun xcresulttool export attachments --path build/DevTests.xcresult --output-path build/current-store-ui
+          node --input-type=module -e "
+            import fs from 'node:fs';
+            import {execFileSync} from 'node:child_process';
+            const validation = JSON.parse(fs.readFileSync('build/dev-validation.json'));
+            if (validation.status !== 'passed' || !validation.testsValidated) throw Error('Capture test did not pass');
+            fs.writeFileSync('build/current-store-ui/source.json', JSON.stringify({
+              sha: process.env.GITHUB_SHA, run: process.env.GITHUB_RUN_ID,
+              appUITree: execFileSync('git',['rev-parse','HEAD:App/UI'],{encoding:'utf8'}).trim(),
+              modelFree: true, testPassed: true,
+              boundary: 'Current production SwiftUI views with synthetic search metadata and licensed cleanup pixels. Not real model/GPS/OCR search evidence.'
+            }, null, 2));
+          "
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: current-store-ui-${{ github.run_id }}
+          path: |
+            build/current-store-ui
+            build/dev-validation.json
+            build/dev-test-summary.json
+            build/store-source-photos/provenance.json
+            build/DevTests.xcresult
+          if-no-files-found: error
