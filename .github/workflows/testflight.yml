@@ -1,4 +1,4 @@
-name: TestFlight — signed FP16 1.0 build47
+name: TestFlight — signed FP16 1.0 build48
 
 on:
   workflow_dispatch:
@@ -139,7 +139,7 @@ jobs:
       - name: Explain distribution boundary
         if: always()
         run: |
-          echo '### Piankexun FP16 TestFlight 1.0 / 47' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Piankexun FP16 TestFlight 1.0 / 48' >> "$GITHUB_STEP_SUMMARY"
           echo 'Bundle: app.piankexun.ios. No App Review submission, external beta review, tester invitation, pricing change or public release is performed.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Only a VALID processing state in the delivery report confirms Apple processing. FP32 build46 remains the baseline; build47 is an FP16 experiment, not proven real-photo quality. A successful upload alone is not tester availability. Do not blindly rerun an attempted upload.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Only a VALID processing state in the delivery report confirms Apple processing. FP32 build46 remains the baseline; build48 keeps the approved build47 FP16 experiment and adds interactive startup. Real-device startup responsiveness is not proven by CI. A successful upload alone is not tester availability. Do not blindly rerun an attempted upload.' >> "$GITHUB_STEP_SUMMARY"
           if [ -f build/testflight-delivery.json ]; then cat build/testflight-delivery.json >> "$GITHUB_STEP_SUMMARY"; fi

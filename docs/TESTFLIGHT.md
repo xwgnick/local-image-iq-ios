@@ -4,6 +4,29 @@ Approved identity: `app.piankexun.ios`, marketing version `1.0`.
 Delivered builds: FP32 baseline `46` and FP16 experiment `47`.
 The existing unsigned `0.16.5/45` development delivery is unchanged.
 
+## Interactive startup: build 48 (delivery pending)
+
+The user approved a new TestFlight `1.0 (48)` with the interactive-startup
+changes: show home immediately, automatically request initially undetermined
+Photos access, respect denial/limited access, and prepare Core ML models with
+the asynchronous loading API. Search and indexing still require model readiness.
+Build 47 remains delivered and must not be uploaded again.
+
+Build 48 keeps build47's pinned FP16 model identity and
+`fp16-real-photo-experiment-v2` acceptance, including full native App/UI tests,
+all 48 approved real-photo queries on CPU/all compute units, and the 900 MiB
+signed IPA ceiling. It does not intentionally change model/index identity from
+47, so this startup-only update does not itself require rebuilding embeddings.
+The earlier FP32-to-FP16 reindex requirement still applies when upgrading from 46.
+
+Pre-delivery native evidence: run `38678725925` compiled the startup changes
+and passed the first-launch Photos/denial/navigation UI test and keyboard tests
+(one existing model-only skip). After correcting a test expectation lifecycle,
+run `38680220532` passed all 19 launch-state tests with no failures or skips.
+These checks do not establish real-device responsiveness during model loading.
+Signing, upload and Apple `VALID` processing for 48 are still pending.
+No public release, external beta review or tester invitation is requested.
+
 ## FP16 experiment: build 47
 
 The completed manual workflow delivered `app.piankexun.ios`, `1.0 (47)`, with the

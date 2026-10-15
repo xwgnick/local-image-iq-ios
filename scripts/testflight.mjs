@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { validateAppResources, validateDeviceSDK } from './check_release.mjs';
 import { validatePlaces } from './check_places.mjs';
 
-export const identity = Object.freeze({ bundle: 'app.piankexun.ios', version: '1.0', build: '47' });
+export const identity = Object.freeze({ bundle: 'app.piankexun.ios', version: '1.0', build: '48' });
 export const modelPrecision = 'float16';
 export const maxIPABytes = 900 * 1024 * 1024;
 const realPhotoApproval = JSON.parse(fs.readFileSync(new URL('./fp16-real-photo-acceptance.json', import.meta.url), 'utf8'));
