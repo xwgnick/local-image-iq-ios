@@ -19,6 +19,12 @@ const selections = [
   ['cat-play-06.jpg', 'Ancotwo.jpg', 'cat-play'],
   ['cat-play-07.jpg', 'An old cat plays with a towel (55093444529).jpg', 'cat-play'],
   ['cat-play-08.png', 'Cat Jumping.png', 'cat-play'],
+  ['sanya-01.jpg', '三亞灣日落5.jpg', 'sanya'],
+  ['sanya-02.jpg', 'Sanya - panoramio (13).jpg', 'sanya'],
+  ['sanya-03.jpg', 'Sanya - panoramio (14).jpg', 'sanya'],
+  ['sanya-04.jpg', 'Sanya - panoramio (15).jpg', 'sanya'],
+  ['sanya-05.jpg', 'Sanya - panoramio (29).jpg', 'sanya'],
+  ['sanya-06.jpg', 'Sanya - panoramio (31).jpg', 'sanya'],
 ];
 const headers = { 'User-Agent': 'PiankexunReleasePreparation/1.0' };
 const parameters = new URLSearchParams({ action: 'query', format: 'json', prop: 'imageinfo',
