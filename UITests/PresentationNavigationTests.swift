@@ -148,9 +148,7 @@ final class PresentationNavigationTests: XCTestCase {
         assertLibraryPrimary()
         attach("library-live")
         openLibraryPage("library-photo-access", title: "照片访问")
-        XCTAssertTrue(app.buttons["authorize-photos"].waitForExistence(timeout: 5),
-                  "The library must remain unauthorized; do not tap 选择照片")
-        XCTAssertEqual(app.buttons["authorize-photos"].label, "选择照片")
+        assertDeniedPhotoAccess()
         XCTAssertFalse(app.alerts.firstMatch.exists)
         back(from: "照片访问", to: "我的图库")
         assertLibraryPrimary()
@@ -178,8 +176,8 @@ final class PresentationNavigationTests: XCTestCase {
         if ProcessInfo.processInfo.environment["IMAGEIQ_REQUIRE_MODELS"] == "0" {
             throw XCTSkip("Live search filters require the real bundled models")
         }
-        // Reuse the real-model startup gate and reset Photos to .notDetermined;
-        // never authorize, seed photos, replace state/services, or start indexing.
+        // Reuse the real-model startup gate and deny the initial Photos request;
+        // never grant access, seed photos, replace state/services, or start indexing.
         launch()
         assertHomeControls()
         let library = app.buttons["open-library"]
@@ -262,11 +260,10 @@ final class PresentationNavigationTests: XCTestCase {
         library.tap()
         let done = app.buttons["close-library"]
         expectHittable(done)
-        // This action exists only for .notDetermined, not denied/authorized.
-        // Inspect it without tapping; opening/clearing filters must not prompt.
+        // Opening/clearing filters must preserve the denied decision without prompting.
         assertLibraryPrimary()
         openLibraryPage("library-photo-access", title: "照片访问")
-        expectHittable(app.buttons["authorize-photos"])
+        assertDeniedPhotoAccess()
         back(from: "照片访问", to: "我的图库")
         openLibraryPage("library-maintenance", title: "索引维护")
         let update = app.buttons["index-photos"]
@@ -427,7 +424,7 @@ final class PresentationNavigationTests: XCTestCase {
         expectHittable(libraryDone)
         assertLibraryPrimary()
         openLibraryPage("library-photo-access", title: "照片访问")
-        XCTAssertTrue(app.buttons["authorize-photos"].waitForExistence(timeout: 5))
+        assertDeniedPhotoAccess()
         back(from: "照片访问", to: "我的图库")
         openLibraryPage("library-maintenance", title: "索引维护")
         let details = app.buttons["详细信息"]
@@ -857,8 +854,7 @@ final class PresentationNavigationTests: XCTestCase {
         assertNoWorkOrPermissionPrompt()
         back(from: "文本索引", to: "我的图库")
         openLibraryPage("library-photo-access", title: "照片访问")
-        // This action is specific to .notDetermined; never tap it.
-        expectHittable(app.buttons["authorize-photos"])
+        assertDeniedPhotoAccess()
         assertNoWorkOrPermissionPrompt()
         back(from: "照片访问", to: "我的图库")
         assertLibraryPrimary()
@@ -1501,12 +1497,23 @@ final class PresentationNavigationTests: XCTestCase {
         assertNoBatchControls(file: file, line: line)
     }
 
+    private func assertDeniedPhotoAccess() {
+        expectHittable(app.buttons["photo-access-settings"])
+        XCTAssertEqual(app.buttons["photo-access-settings"].label, "打开系统设置")
+        XCTAssertTrue(app.staticTexts["照片访问已关闭"].exists)
+        XCTAssertFalse(app.buttons["authorize-photos"].exists)
+        XCTAssertFalse(app.buttons["manage-limited-photos"].exists)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists)
+    }
+
     private func assertUserLibrary() throws {
         assertLibraryPrimary()
         let details = app.descendants(matching: .any).matching(identifier: "debug-library-details").firstMatch
         let hidden = [details, app.buttons["详细信息"], debugToggle]
         openLibraryPage("library-photo-access", title: "照片访问")
-        scrollTo(app.buttons["authorize-photos"], in: try sheetForm(), expectingAbsent: hidden)
+        scrollTo(app.buttons["photo-access-settings"], in: try sheetForm(), expectingAbsent: hidden)
+        assertDeniedPhotoAccess()
         back(from: "照片访问", to: "我的图库")
         openLibraryPage("library-text-index", title: "文本索引")
         let textUpdate = app.buttons["index-photo-text"]

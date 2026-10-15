@@ -27,6 +27,17 @@ These checks do not establish real-device responsiveness during model loading.
 Signing, upload and Apple `VALID` processing for 48 are still pending.
 No public release, external beta review or tester invitation is requested.
 
+### Build48 validation attempts
+
+Run `38681083100`, source `4178dff`, stopped at the OCR/location UI smoke gate
+before the full native suite, signing or Apple upload. Core's 79 tests and both
+FP16/FP32 model exports passed; the location smoke test passed. OCR completed
+its switch/persistence checks but failed at an obsolete expectation for the
+removed manual `authorize-photos` button on the Photos-access page.
+All related navigation checks now assert the saved denial, system Settings
+recovery action, absence of the removed button/limited picker, and no new
+permission prompt. The corrected full delivery must still pass every gate.
+
 ## FP16 experiment: build 47
 
 The completed manual workflow delivered `app.piankexun.ios`, `1.0 (47)`, with the
