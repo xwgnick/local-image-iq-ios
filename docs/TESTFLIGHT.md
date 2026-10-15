@@ -53,6 +53,17 @@ navigation regressions and the first-launch automatic Photos request/denial
 test. This model-free smoke confirms the fixture lifecycle fix; full real-model
 delivery gates remain mandatory before signing/upload.
 
+Run `38693158249`, source `737ce9f`, stopped before the full native suite,
+signing or upload. Location passed, but OCR's persisted-preference relaunch
+exposed a permission-test synchronization race: the helper silently stopped
+looking for the reset Photos prompt after five seconds, then accepted the
+already-visible home before the delayed system request appeared. The helper now
+requires and denies that request before readiness, sharing the existing
+90-second cold-start budget rather than extending it. Keyboard tests also reset
+Photos explicitly so every helper caller has the same deterministic contract.
+The separate saved-denial relaunch test still does not reset authorization and
+continues to verify no repeated request.
+
 ## FP16 experiment: build 47
 
 The completed manual workflow delivered `app.piankexun.ios`, `1.0 (47)`, with the

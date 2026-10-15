@@ -5,7 +5,26 @@ import XCTest
 extension XCTestCase {
     func waitForPreparedHome(_ app: XCUIApplication,
                              file: StaticString = #filePath, line: UInt = #line) {
-        dismissInitialPhotoAccessPrompt(file: file, line: line)
+        let deadline = Date().addingTimeInterval(90)
+        // Every caller resets Photos before launch. Home is now visible before
+        // authorization, so its presence cannot prove the system request ended.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let deny = springboard.alerts.buttons["Don’t Allow"]
+        let straightApostrophe = springboard.alerts.buttons["Don't Allow"]
+        let prompt = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            deny.exists || straightApostrophe.exists
+        }, object: springboard)
+        guard XCTWaiter.wait(for: [prompt], timeout: max(0, deadline.timeIntervalSinceNow)) == .completed else {
+            recordLaunchFailure(in: app, message: "Reset Photos access must produce the automatic system request",
+                                file: file, line: line)
+            return
+        }
+        if deny.exists { deny.tap() } else { straightApostrophe.tap() }
+        guard springboard.alerts.firstMatch.waitForNonExistence(timeout: min(5, max(0, deadline.timeIntervalSinceNow))) else {
+            recordLaunchFailure(in: app, message: "Denying initial Photos access must dismiss the system request",
+                                file: file, line: line)
+            return
+        }
         // TEST ONLY: real model cold loading gets its own 90-second wait, not a
         // production deadline or an increase to keyboard/navigation timeouts.
         // Observe either outcome on the running app; a fast launch need not
@@ -21,24 +40,10 @@ extension XCTestCase {
                     || application.descendants(matching: .any)
                         .matching(identifier: "startup-recovery-icon").firstMatch.exists
             }, object: app)
-        guard XCTWaiter.wait(for: [homeOrStartupError], timeout: 90) == .completed else {
+        guard XCTWaiter.wait(for: [homeOrStartupError], timeout: max(0, deadline.timeIntervalSinceNow)) == .completed else {
             recordLaunchFailure(in: app, message: "Cold startup reached neither home nor a startup error within 90 seconds",
                                 file: file, line: line)
             return
-        }
-
-        func dismissInitialPhotoAccessPrompt(file: StaticString = #filePath, line: UInt = #line) {
-            let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-            let deny = springboard.alerts.buttons["Don’t Allow"]
-            let straightApostrophe = springboard.alerts.buttons["Don't Allow"]
-            let prompt = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                deny.exists || straightApostrophe.exists
-            }, object: springboard)
-            if XCTWaiter.wait(for: [prompt], timeout: 5) == .completed {
-                if deny.exists { deny.tap() } else { straightApostrophe.tap() }
-                XCTAssertTrue(springboard.alerts.firstMatch.waitForNonExistence(timeout: 5),
-                              "Deny startup Photos access without granting access or importing photos.", file: file, line: line)
-            }
         }
 
         let recoveryIcon = app.descendants(matching: .any)

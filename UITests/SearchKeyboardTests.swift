@@ -14,6 +14,7 @@ final class SearchKeyboardTests: XCTestCase {
         // design; this does not claim the app follows the system language.
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
                                "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        app.resetAuthorizationStatus(for: .photos)
         app.launch()
         waitForPreparedHome(app)
     }
