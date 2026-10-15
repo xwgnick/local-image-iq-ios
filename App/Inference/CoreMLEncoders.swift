@@ -152,7 +152,9 @@ actor CoreMLEncoders: PhotoEncoding {
             // second load. One cancelled caller does not cancel other callers' setup.
             sharedProgress = StartupProgressRecorder()
             loadingProgress = sharedProgress
-            task = Task { try await self.loadBundledModels(timing: timing, startupProgress: sharedProgress) }
+            task = Task(priority: .utility) {
+                try await self.loadBundledModels(timing: timing, startupProgress: sharedProgress)
+            }
             loadingTask = task
         }
         let observer = timing?.startupProgress.map { destination in
@@ -269,12 +271,12 @@ private actor CoreMLTextEncoder {
 
     init(modelURL: URL) { self.modelURL = modelURL }
 
-    func prepare() throws {
+    func prepare() async throws {
         try Task.checkCancellation()
         if model != nil { return }
         let configuration = MLModelConfiguration()
         configuration.computeUnits = .all
-        let text = try MLModel(contentsOf: modelURL, configuration: configuration)
+        let text = try await MLModel.load(contentsOf: modelURL, configuration: configuration)
         try CoreMLEncoders.validate(model: text, inputs: ["input_ids": ([1, 64], .int32)])
         try Task.checkCancellation()
         model = text
@@ -305,8 +307,15 @@ private actor CoreMLImageEncoder: PhotoImageEncoding {
         self.manifest = manifest
     }
 
-    func prepare() throws {
-        _ = try load()
+    func prepare() async throws {
+        try Task.checkCancellation()
+        if model != nil { return }
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .all
+        let image = try await MLModel.load(contentsOf: modelURL, configuration: configuration)
+        try CoreMLEncoders.validate(model: image, inputs: ["pixel_values": ([1, 3, 224, 224], .float32)])
+        try Task.checkCancellation()
+        model = image
     }
 
     func image(data: Data, orientation: CGImagePropertyOrientation) throws -> [Float] {

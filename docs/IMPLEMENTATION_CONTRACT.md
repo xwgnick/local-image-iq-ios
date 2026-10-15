@@ -232,6 +232,26 @@ desktop database or video assets. CI is workflow_dispatch only. Model-free CI
 checks compilation/tests, **not** semantic-search readiness. Model-enabled CI
 must compare exported Core ML predictions with the pinned PyTorch pair, test
 Swift tokenizer/preprocessing fixtures, and report the distinction.
+## Interactive launch and initial Photos request
+
+The app root mounts the home UI immediately, without a tappable launch/entry
+screen or a permission button required to enter the app. Its view task starts
+model preparation and automatically requests read/write Photos access only
+when the system status is `notDetermined`, in the foreground with protected
+data available. An in-flight guard prevents duplicate requests. Denial,
+restricted access and limited selection remain valid user choices; persisted
+decisions never trigger repeated prompts. Library retains limited-selection
+management and the system-settings recovery link.
+
+Primary image/text model preparation uses Core ML's asynchronous loading API
+on the existing independent model actors. Preparation runs at utility priority;
+the home/navigation UI is never replaced by a model-wait screen. Search/index
+readiness gates, real progress and explicit preparation failures remain.
+Existing indexing worker models still load lazily, not at startup. UI tests
+deny the real system request before navigation tests; synthetic authorization
+tests never request actual Photos access. These changes do not by themselves
+prove a real-device latency or responsiveness threshold.
+
 # Optional FP16 experiment
 
 The default export remains FP32. An explicit `--precision float16` export

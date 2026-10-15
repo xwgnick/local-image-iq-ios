@@ -17,11 +17,13 @@ final class AppState: ObservableObject {
     }
 
     @Published private(set) var launchPhase: LaunchPhase = .pending
-    @Published private(set) var homePresented = false
+    @Published private(set) var homePresented = true
     @Published private(set) var initialPreparation = true
     var showsHome: Bool { homePresented || launchPhase == .ready }
     @Published private(set) var launchIssue: String?
     private var launchWasRequested = false
+    private var requestingPhotoAccess = false
+    private let requestPhotoAuthorization: @MainActor () async -> PHAuthorizationStatus
     @Published private(set) var launchTimings: [LaunchTimingReport] = []
     private var launchTiming: LaunchTimingRecorder?
     @Published private(set) var startupProgress = StartupProgressSnapshot(completed: [])
@@ -202,6 +204,9 @@ final class AppState: ObservableObject {
 
     init(library: PhotoLibraryClient = PhotoLibraryClient(), worker: (any PhotoWorkServicing)? = nil,
          authorizationStatus: @escaping () -> PHAuthorizationStatus = { PhotoLibraryClient.authorization },
+         requestPhotoAuthorization: @escaping @MainActor () async -> PHAuthorizationStatus = {
+             await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+         },
          queryTranslator: (any QueryTranslating)? = nil, translationPreferences: UserDefaults? = nil,
          startupHistory: (any StartupHistoryStoring)? = nil,
          startupContext: @escaping () -> StartupContext? = { nil },
@@ -215,6 +220,7 @@ final class AppState: ObservableObject {
          workPreferences: UserDefaults? = nil,
          backgroundLease: (any BackgroundWorkLeasing)? = nil) {
         self.library = library
+        self.requestPhotoAuthorization = requestPhotoAuthorization
         self.workPreferences = workPreferences
         self.backgroundLease = backgroundLease
         imageResumeRequested = workPreferences?.bool(forKey: Self.imageResumeKey) ?? false
@@ -437,12 +443,13 @@ final class AppState: ObservableObject {
         launchPhase = launchStage == .checkingLibrary ? .checkingLibrary : .preparingSearch
     }
 
-    func authorize() {
-        // Deliberately independent of model availability and index state.
-        Task { @MainActor [weak self] in
-            _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-            self?.libraryChanged()
-        }
+    func requestInitialPhotoAccess() async {
+        guard isForeground, protectedDataAvailable, !requestingPhotoAccess,
+              authorizationStatus() == .notDetermined else { return }
+        requestingPhotoAccess = true
+        defer { requestingPhotoAccess = false }
+        _ = await requestPhotoAuthorization()
+        libraryChanged()
     }
 
     func refresh() {

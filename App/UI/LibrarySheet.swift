@@ -191,9 +191,9 @@ struct LibraryPhotoAccessView: View {
             .padding(.vertical, 4)
 
             if state.authorization == .notDetermined {
-                Button("选择照片", systemImage: "photo.badge.plus") { state.authorize() }
-                    .accessibilityIdentifier("authorize-photos")
-                    .frame(minHeight: 44)
+                Text("请在系统提示中选择可访问的照片；你也可以暂不允许。")
+                    .font(.subheadline)
+                    .foregroundStyle(IQStyle.secondary)
             } else {
                 if state.authorization == .limited {
                     Button("管理已选照片", systemImage: "photo.stack") { showLimitedPicker = true }

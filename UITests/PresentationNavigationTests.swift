@@ -1,11 +1,45 @@
 import XCTest
 
 /// Real-app navigation only. Use a disposable simulator: each launch resets this
-/// app's Photos permission to undetermined, but never requests/grants access,
-/// imports assets, indexes photos, or substitutes models/services in the app.
+/// app's Photos permission to undetermined, then denies the automatic system
+/// request. Never grants access, imports assets, indexes, or substitutes models.
 /// UIReview attachments are native screenshots for later xcresult export/review.
 @MainActor
 final class PresentationNavigationTests: XCTestCase {
+    func testFirstLaunchRequestsPhotosWithoutAnEntryButtonAndDenialKeepsNavigationUsable() throws {
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.resetAuthorizationStatus(for: .photos)
+        app.launch()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 15),
+                      "The system request must appear without tapping a launch or authorization button.")
+        let deny = alert.buttons.matching(NSPredicate(format: "label IN %@", ["Don’t Allow", "Don't Allow"])).firstMatch
+        XCTAssertTrue(deny.waitForExistence(timeout: 5))
+        deny.tap()
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
+        let settings = app.buttons["open-settings"]
+        expectHittable(settings)
+        XCTAssertFalse(app.buttons["authorize-photos"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["startup-recovery-icon"].exists)
+        settings.tap()
+        let done = app.buttons["close-settings"]
+        expectHittable(done)
+        done.tap()
+        expectAbsent(done)
+        let field = app.textFields["photo-query"]
+        expectHittable(field)
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        field.typeText("cat")
+        XCTAssertEqual(field.value as? String, "cat")
+        XCTAssertFalse(app.buttons["search-photos"].isEnabled)
+        app.terminate()
+        app.launch()
+        expectHittable(settings)
+        XCTAssertFalse(springboard.alerts.firstMatch.exists, "A saved denial must not request permission again.")
+    }
+
     func testLocationEnhancementIntroductionSettingsAndRestartPersistence() throws {
         launch()
         let toggle = app.switches["location-search-enabled"]

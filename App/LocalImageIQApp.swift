@@ -17,16 +17,13 @@ struct LocalImageIQApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if state.showsHome {
-                    ContentView(state: state)
-                } else {
-                    StartupView(state: state)
-                }
-            }
-                .statusBarHidden(!state.showsHome)
+            ContentView(state: state)
                 .tint(IQStyle.accent)
-                .task { state.start() }
+                .task(id: scenePhase) {
+                    guard scenePhase == .active else { return }
+                    state.start()
+                    await state.requestInitialPhotoAccess()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .background { state.enterBackground() }
                     else if phase == .active { state.enterForeground() }
@@ -36,6 +33,7 @@ struct LocalImageIQApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
                     state.protectedDataBecameAvailable()
+                    Task { await state.requestInitialPhotoAccess() }
                 }
         }
     }

@@ -9,6 +9,84 @@ import ImageIQCore
 /// requests, image reads, translation sessions, network calls or timed sleeps.
 @MainActor
 final class LaunchStateTests: XCTestCase {
+    func testInitialPhotoAccessRunsWhileModelsAreHeldAndCoalescesRepeatedRequests() async {
+        let hold = heldLaunch("permission independent of models")
+        let worker = FakeLaunchWorker(plans: [.init(hold: hold)])
+        let permission = LaunchStateAuthorization(.notDetermined)
+        let requested = expectation(description: "System authorization requested without a button")
+        let answer = LaunchStateLatch()
+        var requests = 0
+        let state = makeState(worker, authorizationStatus: { permission.value },
+                              requestPhotoAuthorization: {
+            requests += 1
+            requested.fulfill()
+            await answer.wait()
+            permission.value = .limited
+            return .limited
+        })
+        XCTAssertTrue(state.showsHome, "Home is available before any model work starts.")
+        state.start()
+        await fulfillment(of: [hold.checking], timeout: 3)
+        let request = Task { await state.requestInitialPhotoAccess() }
+        await fulfillment(of: [requested], timeout: 3)
+        await state.requestInitialPhotoAccess()
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(state.activity, .starting)
+        XCTAssertTrue(state.showsHome)
+        XCTAssertFalse(state.canSearch)
+        XCTAssertFalse(state.canIndex)
+        state.query = "Can type while preparing"
+        state.locationSearchEnabled = true
+        XCTAssertEqual(state.query, "Can type while preparing")
+        XCTAssertTrue(state.locationSearchEnabled)
+        await answer.open()
+        await request.value
+        XCTAssertEqual(state.authorization, .limited)
+        XCTAssertTrue(state.canRead)
+        XCTAssertEqual(state.activity, .starting, "Authorization must not restart or cancel model preparation.")
+        await state.requestInitialPhotoAccess()
+        XCTAssertEqual(requests, 1)
+        await assertCalls(worker, launches: 1)
+        await hold.prepare.open()
+        await hold.finish.open()
+        await state.waitUntilIdle()
+        XCTAssertTrue(state.canSearch)
+    }
+
+    func testInitialPhotoAccessRespectsExistingDecisionsAndDenialDoesNotReprompt() async {
+        for status in [PHAuthorizationStatus.authorized, .limited, .denied, .restricted, .notDetermined] {
+            let permission = LaunchStateAuthorization(status)
+            let worker = FakeLaunchWorker()
+            var requests = 0
+            let state = makeState(worker, authorizationStatus: { permission.value },
+                                  requestPhotoAuthorization: {
+                requests += 1
+                permission.value = .denied
+                return .denied
+            })
+            state.start()
+            await state.requestInitialPhotoAccess()
+            await state.requestInitialPhotoAccess()
+            await state.waitUntilIdle()
+            XCTAssertEqual(requests, status == .notDetermined ? 1 : 0)
+            XCTAssertEqual(state.authorization, status == .notDetermined ? .denied : status)
+            XCTAssertTrue(state.showsHome)
+            XCTAssertEqual(state.canRead, status == .authorized || status == .limited)
+        }
+    }
+
+    func testInitialPhotoAccessDoesNotRequestInBackground() async {
+        let worker = FakeLaunchWorker()
+        var requests = 0
+        let state = makeState(worker, authorization: .notDetermined, requestPhotoAuthorization: {
+            requests += 1
+            return .denied
+        })
+        state.enterBackground()
+        await state.requestInitialPhotoAccess()
+        XCTAssertEqual(requests, 0)
+    }
+
     func testHeldLaunchPublishesActualStagesAndCannotBecomeReadyBeforeCompletion() async throws {
         let hold = heldLaunch("cold launch")
         let worker = FakeLaunchWorker(plans: [.init(hold: hold)])
@@ -661,13 +739,18 @@ final class LaunchStateTests: XCTestCase {
 
     private func makeState(_ worker: FakeLaunchWorker,
                            authorization: PHAuthorizationStatus = .authorized,
-                           authorizationStatus: (() -> PHAuthorizationStatus)? = nil) -> AppState {
+                           authorizationStatus: (() -> PHAuthorizationStatus)? = nil,
+                           requestPhotoAuthorization: @escaping @MainActor () async -> PHAuthorizationStatus = {
+                               XCTFail("This state test must not request system Photos access.")
+                               return .denied
+                           }) -> AppState {
         // AppState still needs its concrete client to register the change handler.
         // Injected authorization does not grant real Photos access. On the
         // unauthorized simulator synchronizeObservation() never registers with
         // PHPhotoLibrary; all actual work below is handled by the actor fake.
         let state = AppState(library: PhotoLibraryClient(), worker: worker,
-                             authorizationStatus: authorizationStatus ?? { authorization })
+                             authorizationStatus: authorizationStatus ?? { authorization },
+                             requestPhotoAuthorization: requestPhotoAuthorization)
         addTeardownBlock {
             await state.enterBackground()
             await worker.releaseAll()
