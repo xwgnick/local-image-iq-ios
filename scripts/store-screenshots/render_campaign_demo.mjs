@@ -8,9 +8,9 @@ import { pngDimensions } from './package_captures.mjs';
 
 export const campaignDemoScenes = [
   { id: '01-memory', title: '心中重要的一刻<br>凭记忆找回', subtitle: '记得那个瞬间，就从记忆里的画面找。',
-    query: '那只跳起来扑玩具的小猫', capture: 'memory', theme: 'sand' },
+    query: '猫猫跳起来扑玩具', capture: 'memory', theme: 'sand' },
   { id: '02-cleanup', title: '同一画面拍多了<br>留下最满意的一张', subtitle: '相似照片放一起，清掉多余的，少占相册。', capture: 'cleanup', theme: 'peach' },
-  { id: '03-identity', title: '想找重要证件？<br>直接搜索就行', subtitle: '不用翻遍相册，输入关键词开始找。', query: '证件', capture: 'identity', theme: 'sand' },
+  { id: '03-identity', title: '想找重要证件？<br>直接搜索就行', subtitle: '不用翻遍相册，输入关键词开始找。', query: '身份证', capture: 'identity', theme: 'sand' },
   { id: '04-text', title: '照片里的文字<br>也能成为线索', subtitle: '记住一句备注，找回那张照片。', query: '北门值班室', capture: 'text', theme: 'peach' },
   { id: '05-location', title: '去过的地方<br>都替你记着', subtitle: '说出地名，那天的照片就回来了。',
     detail: '输入「三亚的海」，那年的日落就回来了。', query: '三亚的海', capture: 'location', theme: 'sand' },
@@ -18,7 +18,7 @@ export const campaignDemoScenes = [
   { id: '07-selection', title: '挑一张留下<br>其余自己选删', subtitle: '放大对比、滑动选择，删前由你确认。', capture: 'selection', theme: 'sand' },
   { id: '08-brand', title: '找到想看的<br>留下值得的', subtitle: '找回记忆里的照片，多拍的只留想要的。', theme: 'sand' },
 ];
-export const campaignDemoDisclaimer = '当前 App 原生界面营销演示：底图由当前生产视图在模拟器原生渲染，元数据、查询结果和清理分组为演示，不是新的真机运行截图，不代表真实模型、OCR 或 GPS 检索验收；最终商店素材另行确认。';
+export const campaignDemoDisclaimer = '当前 App 原生界面营销演示：底图由当前生产视图在模拟器原生渲染，元数据、查询文字、照片结果和清理分组为演示，不是新的真机运行截图，不代表真实模型、OCR 或 GPS 检索验收；最终商店素材另行确认。';
 
 export function verifyCurrentCaptureSource(source, appUITree) {
   assert.equal(source.modelFree, true);
@@ -113,7 +113,12 @@ export function renderCampaignDemo() {
   const searchCompositions = [];
   function searchScreen(scene, files) {
     const capture = captures.get(scene.capture);
-    assert.equal(capture.query, scene.query, 'Query must be rendered by the current native view');
+    const queryOverride = capture.query !== scene.query;
+    if (queryOverride) {
+      assert.equal(source.run, '38727436009', 'Query artwork coordinates require the verified native capture');
+      assert.equal(capture.query, { memory: '那只跳起来扑玩具的小猫', identity: '证件' }[scene.capture],
+        'Only the two approved query-value revisions may be composed');
+    }
     assert.equal(capture.resultCount, files.length);
     assert.equal(capture.gridColumns, 3);
     assert.equal(capture.gridGap, 9);
@@ -122,8 +127,12 @@ export function renderCampaignDemo() {
     const side = (capture.gridWidth - capture.gridGap * 2) / 3;
     const cropBottom = Math.min(2680, capture.gridY + Math.ceil(files.length / 3) * (side + capture.gridGap) + 55);
     searchCompositions.push({ scene: scene.id, capture: scene.capture, query: scene.query, files,
-      gridColumns: 3, gridGap: 9, tileAspectRatio: 1, controlsAltered: false, queryOverride: false,
+      gridColumns: 3, gridGap: 9, tileAspectRatio: 1, controlsAltered: false, queryOverride,
+      nativeQuery: capture.query,
       gridX: capture.gridX, gridY: capture.gridY, side });
+    // These bounds cover only text inside the verified capture's white field.
+    const queryValue = queryOverride
+      ? `<g data-composed-query="${escape(scene.query)}"><rect x="226" y="400" width="730" height="90" fill="#fff"/><text x="235" y="461" font-size="51" fill="#1c232b">${escape(scene.query)}</text></g>` : '';
     const tiles = files.map((file, offset) => {
       assert.ok(assets.has(file), file);
       const x = capture.gridX + (offset % 3) * (side + capture.gridGap);
@@ -131,7 +140,7 @@ export function renderCampaignDemo() {
       const clip = `${scene.id}-tile-${offset}`;
       return `<defs><clipPath id="${clip}"><rect x="${x}" y="${y}" width="${side}" height="${side}" rx="18"/></clipPath></defs><image href="${assets.get(file)}" x="${x}" y="${y}" width="${side}" height="${side}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clip})"/><rect x="${x}" y="${y}" width="${side}" height="${side}" rx="18" fill="none" stroke="#dfe3e9" stroke-width="3"/>`;
     }).join('');
-    return `<div class="native-window"><svg role="img" aria-label="当前 App 原生界面，照片结果为演示合成" data-scene="${scene.id}" viewBox="0 100 1320 ${cropBottom - 100}" xmlns="http://www.w3.org/2000/svg"><image href="${capture.uri}" width="1320" height="2868"/>${tiles}</svg></div>`;
+    return `<div class="native-window"><svg role="img" aria-label="当前 App 原生界面，查询文字与照片结果为演示合成" data-scene="${scene.id}" viewBox="0 100 1320 ${cropBottom - 100}" xmlns="http://www.w3.org/2000/svg"><image href="${capture.uri}" width="1320" height="2868"/>${queryValue}${tiles}</svg></div>`;
   }
   function cleanupCrop(name, box) {
     return `<svg role="img" aria-label="当前原生清理界面，演示分组与公开素材" viewBox="${box}" xmlns="http://www.w3.org/2000/svg"><image href="${captures.get(name).uri}" width="1320" height="2868"/></svg>`;

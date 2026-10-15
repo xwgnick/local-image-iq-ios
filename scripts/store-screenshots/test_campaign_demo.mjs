@@ -11,10 +11,10 @@ test('eight frames follow the owner order and exact revised copy', () => {
     '05-location', '06-private', '07-selection', '08-brand',
   ]);
   assert.equal(campaignDemoScenes[0].title, '心中重要的一刻<br>凭记忆找回');
-  assert.match(campaignDemoScenes[0].query, /小猫/);
+  assert.equal(campaignDemoScenes[0].query, '猫猫跳起来扑玩具');
   assert.match(campaignDemoScenes[1].title, /同一画面拍多了.*留下最满意的一张/);
   assert.equal(campaignDemoScenes[2].title, '想找重要证件？<br>直接搜索就行');
-  assert.equal(campaignDemoScenes[2].query, '证件');
+  assert.equal(campaignDemoScenes[2].query, '身份证');
   assert.doesNotMatch(campaignDemoScenes[2].title, /身份证/);
   assert.equal(campaignDemoScenes[3].query, '北门值班室');
   assert.equal(campaignDemoScenes[4].title, '去过的地方<br>都替你记着');
@@ -60,12 +60,19 @@ test('current native workflow is model-free and never signs or exports an IPA', 
   assert.ok(workflow.includes("IMAGEIQ_REQUIRE_MODELS: '0'"));
   assert.ok(workflow.includes('project.store-ui.yml'));
   assert.ok(workflow.includes('LocalImageIQTests/CurrentCampaignCaptureTests'));
+  assert.ok(workflow.includes('CAPTURE_DEVICE: ${{ inputs.device }}'));
+  assert.ok(workflow.includes("d.name.includes('13-inch')"));
   assert.doesNotMatch(workflow, /export_models|exportArchive|upload-app|testflight\.yml|\.p12/);
   const capture = fs.readFileSync(new URL('./CurrentCampaignCaptureTests.swift', import.meta.url), 'utf8');
   assert.ok(capture.includes('"photoTextSearchEnabled.v1"'));
   assert.ok(capture.includes('"三亚的海", 6, false, true'));
-  assert.ok(capture.includes('"那只跳起来扑玩具的小猫", 6, false, false'));
+  assert.ok(capture.includes('"猫猫跳起来扑玩具", 6, false, false'));
+  assert.ok(capture.includes('"身份证", 9, false, false'));
   assert.ok(capture.includes('ContentView(state: state'));
+  assert.ok(capture.includes('UIDevice.current.userInterfaceIdiom == .pad'));
+  assert.ok(capture.includes('CGSize(width: 1032, height: 1376)'));
+  assert.ok(capture.includes('let width = isPad ? 2064 : 1320'));
+  assert.ok(capture.includes('let height = isPad ? 2752 : 2868'));
   assert.ok(capture.includes('let cleanup = try await controlsFixture(in: self, sizes: [6, 6])'));
   assert.ok(capture.includes('SimilarPhotoCleanupSheet(state: cleanup.cleanup'));
   assert.doesNotMatch(capture, /requestAuthorization|PHAssetChangeRequest|CoreMLEncoders\(/);
@@ -95,7 +102,13 @@ test('exported campaign contains eight RGB frames with matching current native g
       assert.equal(composition.gridGap, 9);
       assert.equal(composition.tileAspectRatio, 1);
       assert.equal(composition.controlsAltered, false);
-      assert.equal(composition.queryOverride, false);
+      assert.equal(composition.queryOverride, index < 2);
+      if (composition.queryOverride) {
+        assert.ok(html.includes(`data-composed-query="${composition.query}"`));
+        assert.notEqual(composition.nativeQuery, composition.query);
+      } else {
+        assert.equal(composition.nativeQuery, composition.query);
+      }
       assert.ok(html.includes(`data-scene="${composition.scene}"`));
       assert.equal(new Set(composition.files).size, composition.files.length);
     }

@@ -9,11 +9,15 @@ import ImageIQCore
 @MainActor
 final class CurrentCampaignCaptureTests: XCTestCase {
     func testCaptureCurrentCampaignViews() async throws {
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        let size = isPad ? CGSize(width: 1032, height: 1376) : CGSize(width: 440, height: 956)
+        let width = isPad ? 2064 : 1320
+        let height = isPad ? 2752 : 2868
         let fixture = try await controlsFixture(in: self, sizes: [6, 6])
         var records: [[String: Any]] = []
         for (name, query, count, ocr, location) in [
-            ("memory", "那只跳起来扑玩具的小猫", 6, false, false),
-            ("identity", "证件", 9, false, false),
+            ("memory", "猫猫跳起来扑玩具", 6, false, false),
+            ("identity", "身份证", 9, false, false),
             ("text", "北门值班室", 1, true, false),
             ("location", "三亚的海", 6, false, true),
         ] {
@@ -42,25 +46,26 @@ final class CurrentCampaignCaptureTests: XCTestCase {
                 .onPreferenceChange(MinimalSearchFrames.self) { measurements.frames = $0 }
                 .onPreferenceChange(SearchPhotoTextFrames.self) { measurements.tools = $0 }
             let host = try ControlsNativeHost(content: AnyView(content),
-                size: CGSize(width: 440, height: 956), appearance: .light)
+                size: size, appearance: .light)
             try await host.wait {
                 measurements.frames[.resultsHeading] != nil
                     && measurements.tools[.locationToggle] != nil && host.tabs.count == 2
             }
             let heading = host.controller.view.convert(
                 try XCTUnwrap(measurements.frames[.resultsHeading]), from: host.window)
-            XCTAssertEqual(heading.minX, 20, accuracy: host.pixel)
-            XCTAssertEqual(heading.width, 400, accuracy: host.pixel)
+            let contentWidth = min(size.width, 800)
+            XCTAssertEqual(heading.minX, (size.width - contentWidth) / 2 + 20, accuracy: host.pixel)
+            XCTAssertEqual(heading.width, contentWidth - 40, accuracy: host.pixel)
             let image = try host.capture()
-            XCTAssertEqual(image.cgImage?.width, 1320)
-            XCTAssertEqual(image.cgImage?.height, 2868)
+            XCTAssertEqual(image.cgImage?.width, width)
+            XCTAssertEqual(image.cgImage?.height, height)
             let attachment = XCTAttachment(image: image)
             attachment.name = "Current-\(name)"
             attachment.lifetime = .keepAlways
             add(attachment)
             records.append([
-                "name": name, "query": query, "width": 1320, "height": 2868,
-                "gridColumns": 3, "gridGap": 9, "gridX": heading.minX * image.scale,
+                "name": name, "query": query, "width": width, "height": height,
+                "gridColumns": 3, "gridGap": 3 * image.scale, "gridX": heading.minX * image.scale,
                 "gridY": (heading.maxY + 18) * image.scale, "gridWidth": heading.width * image.scale,
                 "resultCount": count, "ocr": ocr, "location": location,
             ])
@@ -87,18 +92,18 @@ final class CurrentCampaignCaptureTests: XCTestCase {
                     .resizable().scaledToFill())
             })
         let host = try ControlsNativeHost(content: AnyView(content),
-            size: CGSize(width: 440, height: 956), appearance: .light)
+            size: size, appearance: .light)
         defer { host.close() }
         try await host.wait { cleanup.cleanup.groups.count == 2 && host.controls[.disclosure] != nil }
         try host.attach(to: self, name: "Current-cleanup")
-        records.append(["name": "cleanup", "width": 1320, "height": 2868])
+        records.append(["name": "cleanup", "width": width, "height": height])
         let group = try XCTUnwrap(cleanup.cleanup.groups.first)
         let session = try XCTUnwrap(cleanup.cleanup.selectionSessionID)
         cleanup.browser.open(group: group, photoID: group.photos[0].id, sessionID: session)
         for photo in group.photos.dropFirst() { cleanup.cleanup.toggleSelection(photo.id) }
         try await host.wait { cleanup.browser.detailRoute != nil && cleanup.cleanup.selectedCount == 5 }
         try host.attach(to: self, name: "Current-selection")
-        records.append(["name": "selection", "width": 1320, "height": 2868])
+        records.append(["name": "selection", "width": width, "height": height])
         let metadata = XCTAttachment(data: try JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted]),
             uniformTypeIdentifier: "public.json")
         metadata.name = "Current-layout"

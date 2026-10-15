@@ -2,6 +2,15 @@ name: Capture current native UI for marketing compositions
 
 on:
   workflow_dispatch:
+    inputs:
+      device:
+        description: Native simulator device family
+        type: choice
+        options:
+          - iphone
+          - ipad
+        default: iphone
+        required: true
 
 permissions:
   contents: read
@@ -16,6 +25,7 @@ jobs:
       IMAGEIQ_REQUIRE_MODELS: '0'
       IMAGEIQ_TEST_ALL_COMPUTE_UNITS: '0'
       IMAGEIQ_DEV_TESTS: LocalImageIQTests/CurrentCampaignCaptureTests
+      CAPTURE_DEVICE: ${{ inputs.device }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,7 +46,22 @@ jobs:
           command -v xcodegen >/dev/null || brew install xcodegen
           xcodegen generate --spec project.store-ui.yml
           xcrun simctl list devices available --json > "$RUNNER_TEMP/available-devices.json"
-          node scripts/check_release.mjs --simulator "$RUNNER_TEMP/available-devices.json"
+          if [ "$CAPTURE_DEVICE" = ipad ]; then
+            node --input-type=module -e "
+              import fs from 'node:fs';
+              import assert from 'node:assert/strict';
+              import {sdkVersion} from './scripts/check_release.mjs';
+              const devices = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/available-devices.json'));
+              const runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-' + sdkVersion.replaceAll('.', '-');
+              const device = devices.devices[runtime]?.find(d =>
+                d.isAvailable && d.name.includes('iPad Pro') && d.name.includes('13-inch'));
+              assert.ok(device && /^[a-f0-9-]{36}$/i.test(device.udid), 'No available 13-inch iPad Pro simulator');
+              fs.appendFileSync(process.env.GITHUB_ENV, 'SIMULATOR_ID=' + device.udid + '\n');
+              console.log('Selected native iPad simulator: ' + device.name + ' ' + device.udid);
+            "
+          else
+            node scripts/check_release.mjs --simulator "$RUNNER_TEMP/available-devices.json"
+          fi
           xcodebuild -resolvePackageDependencies -project LocalImageIQ.xcodeproj -scheme LocalImageIQ \
             -clonedSourcePackagesDirPath build/SourcePackages
           node scripts/prepare_legal_notices.mjs build/SourcePackages/checkouts --check
@@ -53,6 +78,7 @@ jobs:
             if (validation.status !== 'passed' || !validation.testsValidated) throw Error('Capture test did not pass');
             fs.writeFileSync('build/current-store-ui/source.json', JSON.stringify({
               sha: process.env.GITHUB_SHA, run: process.env.GITHUB_RUN_ID,
+              device: process.env.CAPTURE_DEVICE,
               appUITree: execFileSync('git',['rev-parse','HEAD:App/UI'],{encoding:'utf8'}).trim(),
               modelFree: true, testPassed: true,
               boundary: 'Current production SwiftUI views with synthetic search metadata and licensed cleanup pixels. Not real model/GPS/OCR search evidence.'
