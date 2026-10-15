@@ -259,6 +259,9 @@ one test-harness failure: the new held-model permission test did not await its
 declared preparing-stage expectation. The test now explicitly observes that
 stage before releasing completion; no production behavior or assertions were
 weakened. A corrected native rerun is required before declaring validation done.
+Corrected run `38680220532` from `ee5d109` passed native compilation and all 19
+`LaunchStateTests`, with zero failures or skips. Together these runs validate
+the state and model-free UI behavior above, not real-device model-load latency.
 
 # Optional FP16 experiment
 
