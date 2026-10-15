@@ -1,10 +1,10 @@
 # TestFlight: signed builds and FP16 experiment
 
 Approved identity: `app.piankexun.ios`, marketing version `1.0`.
-Delivered builds: FP32 baseline `46` and FP16 experiment `47`.
+Delivered builds: FP32 baseline `46`, FP16 experiment `47`, and interactive-startup FP16 `48`.
 The existing unsigned `0.16.5/45` development delivery is unchanged.
 
-## Interactive startup: build 48 (delivery pending)
+## Interactive startup: build 48 (Apple VALID)
 
 The user approved a new TestFlight `1.0 (48)` with the interactive-startup
 changes: show home immediately, automatically request initially undetermined
@@ -24,8 +24,43 @@ and passed the first-launch Photos/denial/navigation UI test and keyboard tests
 (one existing model-only skip). After correcting a test expectation lifecycle,
 run `38680220532` passed all 19 launch-state tests with no failures or skips.
 These checks do not establish real-device responsiveness during model loading.
-Signing, upload and Apple `VALID` processing for 48 are still pending.
+Signing, upload and Apple `VALID` processing for 48 are confirmed below.
 No public release, external beta review or tester invitation is requested.
+
+### Confirmed build48 delivery
+
+Run [`38695627065`](https://github.com/xwgnick/local-image-iq-ios/actions/runs/38695627065),
+source `edaa2e9d57ce428c8b8e0e4f6b425ef2407977d4`, job `116291419270`,
+completed archive/export verification, signing, Apple validation, one accepted
+upload and processing with state **`VALID`** on October 15, 2026, by 16:49 CST.
+
+- Core: 79 tests, zero failures.
+- Targeted OCR/location switch persistence: 2 tests, zero failures, no skips.
+- Full App: 2154 tests, zero failures, 1 existing skip.
+- Full UI: 24 tests, zero failures, 1 existing skip.
+- All 48 approved real-photo query outcomes reproduced on CPU/all compute units.
+- Signed IPA: **723,318,857 bytes** (723.32 MB / 689.81 MiB), below 900 MiB.
+- IPA SHA-256:
+  `7acf392c85f0b4e6d6f233a55902dcf29c84275f9648f7d23820e2d64ba91653`.
+- Apple app ID: `6822662787`; build ID:
+  `6568635e-59ef-4296-b148-d6b752d1f3b0`.
+
+Delivery artifact `11959461838` ZIP SHA-256 was verified as
+`68785c1a118a4dec7ed17fb4a60fd754a50ae404d1906e45aa82896164d7767e`.
+Current real-photo artifact `11959197369` ZIP SHA-256 was verified as
+`8479587da2eca0ef454a12c11ee9883caced09f944ab0732fec59cdafa0ae081`.
+The downloaded receipt confirms build48, signing, native validation, accepted
+upload and `VALID`. The current native report independently passed local
+per-query acceptance replay; its SHA-256
+`e5885e05b7a1da07d453c1cb63b88a6d8a541ac6254f2d884c531b44ceaa56b8`
+matches the receipt, and metadata bytes match the pinned approval.
+
+Processing does not confirm internal-group assignment or resolve build-specific
+export compliance automatically. Add 48 to the existing internal test group if
+needed, resolve its compliance prompt, then update through TestFlight without
+uninstalling. Build47's FP16 index identity is unchanged. Real-device startup
+responsiveness still requires the user's trial; CI success is not a latency
+measurement.
 
 ### Build48 validation attempts
 
