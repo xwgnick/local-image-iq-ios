@@ -194,6 +194,7 @@ final class CleanupBackNavigationAnchor: UIView, UIGestureRecognizerDelegate {
 @MainActor
 struct CleanupNavigationUITestHost: View {
     @ObservedObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     let isPageActive: Bool
     let accessibilityActive: Bool
     let onPresentedSurfaceChanged: (Bool) -> Void
@@ -208,6 +209,10 @@ struct CleanupNavigationUITestHost: View {
         // to give an automated test access to a user's photos.
         if PhotoLibraryClient.canRead {
             Text("TEST requires an unreadable Photos library")
+        } else if appState.authorization == .notDetermined {
+            // Mount synthetic browsing only after the real initial decision;
+            // its authorization transition must still invalidate real sessions.
+            Text("TEST waiting for the initial Photos decision")
         } else {
             SimilarPhotoCleanupSheet(state: cleanup, appState: appState, browser: browser,
                 thumbnailContent: { photo in AnyView(
@@ -217,8 +222,8 @@ struct CleanupNavigationUITestHost: View {
                 accessibilityActive: accessibilityActive && isPageActive,
                 onPresentedSurfaceChanged: onPresentedSurfaceChanged,
                 onPrimarySwipeAvailabilityChanged: onPrimarySwipeAvailabilityChanged)
-                .task {
-                    guard !started else { return }
+                .task(id: scenePhase) {
+                    guard scenePhase == .active, appState.isForeground, !started else { return }
                     started = true
                     cleanup.scan()
                 }

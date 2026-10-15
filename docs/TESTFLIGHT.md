@@ -38,6 +38,15 @@ All related navigation checks now assert the saved denial, system Settings
 recovery action, absence of the removed button/limited picker, and no new
 permission prompt. The corrected full delivery must still pass every gate.
 
+Run `38683596040`, source `c3ca869`, passed both switch smoke tests and all 2154
+App tests (one existing skip), plus CPU/all real-photo acceptance with the same
+approved outcomes and report SHA-256 as build47. Three of 24 UI tests failed
+(one existing skip): the debug-only synthetic cleanup navigation host mounted
+before the new initial permission decision, which invalidated its one-shot
+browsing session. The fixture now waits for that real decision and an active
+scene before scanning; readable real libraries remain forbidden, and production
+authorization invalidation remains unchanged. No signing or upload occurred.
+
 ## FP16 experiment: build 47
 
 The completed manual workflow delivered `app.piankexun.ios`, `1.0 (47)`, with the
