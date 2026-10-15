@@ -252,6 +252,14 @@ deny the real system request before navigation tests; synthetic authorization
 tests never request actual Photos access. These changes do not by themselves
 prove a real-device latency or responsiveness threshold.
 
+Validation run `38678725925` from `66679c3` compiled the native app and tests.
+The real first-launch automatic-request/denial/navigation UI test passed, as
+did keyboard tests (one existing model-only skip). Unit tests executed 69 with
+one test-harness failure: the new held-model permission test did not await its
+declared preparing-stage expectation. The test now explicitly observes that
+stage before releasing completion; no production behavior or assertions were
+weakened. A corrected native rerun is required before declaring validation done.
+
 # Optional FP16 experiment
 
 The default export remains FP32. An explicit `--precision float16` export

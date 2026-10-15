@@ -48,6 +48,7 @@ final class LaunchStateTests: XCTestCase {
         XCTAssertEqual(requests, 1)
         await assertCalls(worker, launches: 1)
         await hold.prepare.open()
+        await fulfillment(of: [hold.preparing], timeout: 3)
         await hold.finish.open()
         await state.waitUntilIdle()
         XCTAssertTrue(state.canSearch)
