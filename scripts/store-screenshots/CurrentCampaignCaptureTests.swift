@@ -75,24 +75,28 @@ final class CurrentCampaignCaptureTests: XCTestCase {
             bundle.url(forResource: "chelsea", withExtension: "png", subdirectory: "store-source-photos")).path))
         let coffee = try XCTUnwrap(UIImage(contentsOfFile: try XCTUnwrap(
             bundle.url(forResource: "coffee", withExtension: "png", subdirectory: "store-source-photos")).path))
-        let content = SimilarPhotoCleanupSheet(state: fixture.cleanup, appState: fixture.app,
-            browser: fixture.browser, thumbnailContent: { photo in
+        // Retained search pages deliberately attach real, unreadable browsing
+        // access to their cleanup controller. Do not reuse it for pixel fixtures.
+        let cleanup = try await controlsFixture(in: self, sizes: [6, 6])
+        cleanup.cleanup.scan()
+        await cleanup.cleanup.waitUntilIdle()
+        XCTAssertEqual(cleanup.cleanup.groups.count, 2)
+        let content = SimilarPhotoCleanupSheet(state: cleanup.cleanup, appState: cleanup.app,
+            browser: cleanup.browser, thumbnailContent: { photo in
                 AnyView(Image(uiImage: photo.id.hasPrefix("TEST-controls-0-") ? cat : coffee)
                     .resizable().scaledToFill())
             })
         let host = try ControlsNativeHost(content: AnyView(content),
             size: CGSize(width: 440, height: 956), appearance: .light)
         defer { host.close() }
-        fixture.cleanup.scan()
-        await fixture.cleanup.waitUntilIdle()
-        try await host.wait { fixture.cleanup.groups.count == 2 && !host.controls.isEmpty }
+        try await host.wait { cleanup.cleanup.groups.count == 2 && host.controls[.disclosure] != nil }
         try host.attach(to: self, name: "Current-cleanup")
         records.append(["name": "cleanup", "width": 1320, "height": 2868])
-        let group = try XCTUnwrap(fixture.cleanup.groups.first)
-        let session = try XCTUnwrap(fixture.cleanup.selectionSessionID)
-        fixture.browser.open(group: group, photoID: group.photos[0].id, sessionID: session)
-        for photo in group.photos.dropFirst() { fixture.cleanup.toggleSelection(photo.id) }
-        try await host.wait { fixture.browser.detailRoute != nil && fixture.cleanup.selectedCount == 5 }
+        let group = try XCTUnwrap(cleanup.cleanup.groups.first)
+        let session = try XCTUnwrap(cleanup.cleanup.selectionSessionID)
+        cleanup.browser.open(group: group, photoID: group.photos[0].id, sessionID: session)
+        for photo in group.photos.dropFirst() { cleanup.cleanup.toggleSelection(photo.id) }
+        try await host.wait { cleanup.browser.detailRoute != nil && cleanup.cleanup.selectedCount == 5 }
         try host.attach(to: self, name: "Current-selection")
         records.append(["name": "selection", "width": 1320, "height": 2868])
         let metadata = XCTAttachment(data: try JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted]),

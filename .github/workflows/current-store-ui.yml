@@ -43,6 +43,7 @@ jobs:
       - name: Render current production views without models or Photos permission
         run: node scripts/native_dev.mjs
       - name: Export native images and record source identity
+        if: always()
         run: |
           xcrun xcresulttool export attachments --path build/DevTests.xcresult --output-path build/current-store-ui
           node --input-type=module -e "
