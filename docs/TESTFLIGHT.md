@@ -47,6 +47,12 @@ browsing session. The fixture now waits for that real decision and an active
 scene before scanning; readable real libraries remain forbidden, and production
 authorization invalidation remains unchanged. No signing or upload occurred.
 
+Targeted run `38691677424`, source `1bda5f6`, passed native compilation and all
+four requested UI tests with zero failures or skips: the three physical cleanup
+navigation regressions and the first-launch automatic Photos request/denial
+test. This model-free smoke confirms the fixture lifecycle fix; full real-model
+delivery gates remain mandatory before signing/upload.
+
 ## FP16 experiment: build 47
 
 The completed manual workflow delivered `app.piankexun.ios`, `1.0 (47)`, with the
